@@ -31,6 +31,7 @@ export function PartnerStatusBadge({ status }: { status: string }) {
             "requested_review",
             "review",
             "under_review",
+            "partially_scheduled",
           ].includes(normalized)
         ? "bg-amber-50 text-amber-900 ring-amber-200"
         : [

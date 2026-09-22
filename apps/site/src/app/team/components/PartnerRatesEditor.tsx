@@ -77,134 +77,6 @@ function fromInitial(items: RateItemRow[]): EditableRateRow[] {
     }));
 }
 
-function buildStonegateDefaultRows(): EditableRateRow[] {
-  return [
-    {
-      id: "seed_quarter",
-      serviceKey: "junk-removal",
-      tierKey: "quarter",
-      label: "Quarter load",
-      amount: "150.00",
-    },
-    {
-      id: "seed_half",
-      serviceKey: "junk-removal",
-      tierKey: "half",
-      label: "Half load",
-      amount: "300.00",
-    },
-    {
-      id: "seed_three_quarter",
-      serviceKey: "junk-removal",
-      tierKey: "three_quarter",
-      label: "3/4 load",
-      amount: "450.00",
-    },
-    {
-      id: "seed_full",
-      serviceKey: "junk-removal",
-      tierKey: "full",
-      label: "Full load",
-      amount: "600.00",
-    },
-    {
-      id: "seed_mattress_fee",
-      serviceKey: "junk-removal",
-      tierKey: "mattress_fee",
-      label: "Mattress fee (each)",
-      amount: "30.00",
-    },
-    {
-      id: "seed_paint_fee",
-      serviceKey: "junk-removal",
-      tierKey: "paint_fee",
-      label: "Paint cans (each)",
-      amount: "10.00",
-    },
-    {
-      id: "seed_tire_fee",
-      serviceKey: "junk-removal",
-      tierKey: "tire_fee",
-      label: "Tires (each)",
-      amount: "10.00",
-    },
-
-    {
-      id: "seed_demo_small",
-      serviceKey: "demo-hauloff",
-      tierKey: "small",
-      label: "Small demo",
-      amount: "650.00",
-    },
-    {
-      id: "seed_demo_medium",
-      serviceKey: "demo-hauloff",
-      tierKey: "medium",
-      label: "Medium demo",
-      amount: "1250.00",
-    },
-    {
-      id: "seed_demo_large",
-      serviceKey: "demo-hauloff",
-      tierKey: "large",
-      label: "Large demo",
-      amount: "2400.00",
-    },
-
-    {
-      id: "seed_land_small_patch",
-      serviceKey: "land-clearing",
-      tierKey: "small_patch",
-      label: "Small patch",
-      amount: "850.00",
-    },
-    {
-      id: "seed_land_yard_section",
-      serviceKey: "land-clearing",
-      tierKey: "yard_section",
-      label: "Yard section",
-      amount: "1650.00",
-    },
-    {
-      id: "seed_land_most_of_yard",
-      serviceKey: "land-clearing",
-      tierKey: "most_of_yard",
-      label: "Most of a yard",
-      amount: "3200.00",
-    },
-    {
-      id: "seed_land_full_lot",
-      serviceKey: "land-clearing",
-      tierKey: "full_lot",
-      label: "Full lot (starting)",
-      amount: "5500.00",
-    },
-    {
-      id: "seed_land_not_sure",
-      serviceKey: "land-clearing",
-      tierKey: "not_sure",
-      label: "Not sure",
-      amount: "1650.00",
-    },
-  ];
-}
-
-function mergePresetRows(
-  existing: EditableRateRow[],
-  preset: EditableRateRow[],
-): EditableRateRow[] {
-  const keyOf = (row: EditableRateRow) =>
-    `${row.serviceKey.trim().toLowerCase()}:${row.tierKey.trim()}`;
-  const existingKeys = new Set(existing.map(keyOf));
-  const missing = preset.filter(
-    (row) =>
-      row.serviceKey.trim().length &&
-      row.tierKey.trim().length &&
-      !existingKeys.has(keyOf(row)),
-  );
-  return missing.length ? [...existing, ...missing] : existing;
-}
-
 export function PartnerRatesEditor({
   currency,
   initialItems,
@@ -213,9 +85,7 @@ export function PartnerRatesEditor({
   initialItems: RateItemRow[];
 }) {
   const [rows, setRowsState] = React.useState<EditableRateRow[]>(
-    initialItems.length
-      ? fromInitial(initialItems)
-      : buildStonegateDefaultRows(),
+    initialItems.length ? fromInitial(initialItems) : [],
   );
   const [rawDraft, setRawDraft] = React.useState<string | null>(null);
   const setRows = React.useCallback<
@@ -238,17 +108,6 @@ export function PartnerRatesEditor({
             Negotiated tiers ({currency})
           </div>
           <div className="flex items-center gap-2">
-            <button
-              type="button"
-              className="min-h-[44px] rounded-full border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-700 hover:border-primary-300 hover:text-primary-700"
-              onClick={() =>
-                setRows((prev) =>
-                  mergePresetRows(prev, buildStonegateDefaultRows()),
-                )
-              }
-            >
-              Insert Stonegate defaults
-            </button>
             <button
               type="button"
               className="min-h-[44px] rounded-full border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-700 hover:border-primary-300 hover:text-primary-700"

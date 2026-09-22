@@ -1,3 +1,5 @@
+import { partnerRequestTotalSql } from "@/lib/partner-request-financials";
+import { partnerServiceCommercialSeed } from "@/lib/partner-quote-v2-staff-context";
 import { NextResponse, type NextRequest } from "next/server";
 import { and, asc, eq, gt, inArray, sql } from "drizzle-orm";
 import { z } from "zod";
@@ -6,6 +8,7 @@ import {
   appointments,
   partnerAccounts,
   partnerBookings,
+  partnerBookingServiceLines,
   partnerInvoices,
   partnerInvoiceLines,
   partnerPaymentAllocations,
@@ -71,6 +74,7 @@ export async function GET(
           .select({
             id: partnerInvoices.id,
             jobId: partnerInvoices.partnerBookingId,
+            requestModelVersion: partnerBookings.modelVersion,
             number: partnerInvoices.invoiceNumber,
             currency: partnerInvoices.currency,
             status: effectivePartnerInvoiceStatusSql(),
@@ -92,6 +96,16 @@ export async function GET(
             issuedAt: partnerInvoices.issuedAt,
           })
           .from(partnerInvoices)
+          .leftJoin(
+            partnerBookings,
+            and(
+              eq(partnerBookings.id, partnerInvoices.partnerBookingId),
+              eq(
+                partnerBookings.partnerAccountId,
+                partnerInvoices.partnerAccountId,
+              ),
+            ),
+          )
           .where(
             and(
               eq(partnerInvoices.partnerAccountId, account.data),
@@ -143,15 +157,16 @@ export async function GET(
           .select({
             id: partnerBookings.id,
             service: partnerBookings.serviceKey,
+            modelVersion: partnerBookings.modelVersion,
+            pricedAt: partnerBookings.pricedAt,
+            scopeSnapshot: partnerBookings.scopeSnapshot,
             status: partnerBookings.publicStatus,
             arrivalAt: partnerBookings.arrivalWindowStartAt,
             reference: partnerBookings.projectReference,
-            totalCents: sql<
-              number | null
-            >`coalesce(${appointments.finalTotalCents}, ${appointments.quotedTotalCents})`,
+            totalCents: partnerRequestTotalSql,
           })
           .from(partnerBookings)
-          .innerJoin(
+          .leftJoin(
             appointments,
             eq(appointments.id, partnerBookings.appointmentId),
           )
@@ -165,6 +180,25 @@ export async function GET(
           )
           .orderBy(asc(partnerBookings.id))
           .limit(101);
+        const visibleJobs = jobs.slice(0, 100);
+        const combinedJobIds = visibleJobs
+          .filter((job) => job.modelVersion === 2)
+          .map((job) => job.id);
+        const serviceLines = combinedJobIds.length
+          ? await tx
+              .select()
+              .from(partnerBookingServiceLines)
+              .where(
+                and(
+                  eq(partnerBookingServiceLines.partnerAccountId, account.data),
+                  inArray(
+                    partnerBookingServiceLines.partnerBookingId,
+                    combinedJobIds,
+                  ),
+                ),
+              )
+              .orderBy(asc(partnerBookingServiceLines.position))
+          : [];
         const statements = await tx
           .select({
             id: partnerStatements.id,
@@ -175,7 +209,14 @@ export async function GET(
             closingBalanceCents: partnerStatements.closingBalanceCents,
           })
           .from(partnerStatements)
-          .where(and(eq(partnerStatements.partnerAccountId, account.data), query.data.statementCursor ? gt(partnerStatements.id, query.data.statementCursor) : undefined))
+          .where(
+            and(
+              eq(partnerStatements.partnerAccountId, account.data),
+              query.data.statementCursor
+                ? gt(partnerStatements.id, query.data.statementCursor)
+                : undefined,
+            ),
+          )
           .orderBy(asc(partnerStatements.id))
           .limit(26);
         return {
@@ -204,9 +245,21 @@ export async function GET(
             documents: [],
             refunds: [],
           })),
-          jobs: jobs.slice(0, 100),
+          jobs: visibleJobs.map(({ scopeSnapshot, pricedAt, ...job }) => ({
+            ...job,
+            service:
+              typeof scopeSnapshot?.["serviceLabel"] === "string"
+                ? scopeSnapshot["serviceLabel"]
+                : job.service,
+            serviceLines: serviceLines
+              .filter((line) => line.partnerBookingId === job.id)
+              .map((line) =>
+                partnerServiceCommercialSeed(line, Boolean(pricedAt)),
+              ),
+          })),
           statements: statements.slice(0, 25),
-          nextStatementCursor: statements.length > 25 ? statements[24]!.id : null,
+          nextStatementCursor:
+            statements.length > 25 ? statements[24]!.id : null,
           nextCursor: invoiceRows.length > 25 ? invoices.at(-1)!.id : null,
           nextJobCursor: jobs.length > 100 ? jobs[99]!.id : null,
         };
@@ -265,6 +318,10 @@ export async function POST(
           ),
         },
       );
+    if (parsed.data.action === "record_manual_payment") {
+      const denied = await requirePermission(request, "payments.collect");
+      if (denied) return denied;
+    }
     const claimed = await claimTeamMutationIdempotency(db, mutation, {
       route:
         "POST /api/admin/partner-management/v1/accounts/:accountId/billing",

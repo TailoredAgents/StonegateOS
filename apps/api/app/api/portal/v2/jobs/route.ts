@@ -1,3 +1,8 @@
+import {
+  partnerRequestNextArrivalStartSql,
+  partnerRequestNextArrivalEndSql,
+  partnerRequestCompletedAtSql,
+} from "@/lib/partner-request-schedule";
 import { createHash } from "node:crypto";
 import { parsePartnerJobDateBoundary } from "@/lib/partner-job-date-filter";
 import { readPartnerJobLocationSnapshot } from "@/lib/partner-job-location";
@@ -67,6 +72,7 @@ const JOB_STATUSES = new Set([
   "approval_needed",
   "under_review",
   "confirmed",
+  "partially_scheduled",
   "en_route",
   "in_progress",
   "completed",
@@ -291,13 +297,16 @@ export async function GET(request: NextRequest): Promise<Response> {
     const rows = await db
       .select({
         id: partnerBookings.id,
+        modelVersion: partnerBookings.modelVersion,
         status: partnerBookings.publicStatus,
         confirmationMode: partnerBookings.confirmationMode,
         serviceKey: partnerBookings.serviceKey,
         scopeSnapshot: partnerBookings.scopeSnapshot,
         tierKey: partnerBookings.tierKey,
         addOns: partnerBookings.addOnsSnapshot,
-        amountCents: partnerBookings.amountCents,
+        amountCents: sql<
+          number | null
+        >`case when ${partnerBookings.modelVersion}=2 then coalesce(${partnerBookings.finalTotalCents},${partnerBookings.quotedTotalCents}) else ${partnerBookings.amountCents} end`,
         currency: partnerBookings.currency,
         poNumber: partnerBookings.poNumber,
         costCenter: partnerBookings.costCenter,
@@ -312,8 +321,8 @@ export async function GET(request: NextRequest): Promise<Response> {
           partnerAccountCancellationPolicies.automaticFeeMinor,
         cancellationPolicyRevision: partnerAccountCancellationPolicies.revision,
         appointmentStatus: appointments.status,
-        arrivalStartAt: partnerBookings.arrivalWindowStartAt,
-        arrivalEndAt: partnerBookings.arrivalWindowEndAt,
+        arrivalStartAt: partnerRequestNextArrivalStartSql,
+        arrivalEndAt: partnerRequestNextArrivalEndSql,
         createdAt: partnerBookings.createdAt,
         updatedAt: partnerBookings.updatedAt,
         locationId: partnerAccountLocations.id,
@@ -323,7 +332,7 @@ export async function GET(request: NextRequest): Promise<Response> {
         city: properties.city,
         state: properties.state,
         postalCode: properties.postalCode,
-        completedAt: appointments.completedAt,
+        completedAt: partnerRequestCompletedAtSql,
         pendingRescheduleRequestId: partnerRescheduleRequests.id,
         pendingChangeRequestId: partnerJobChangeRequests.id,
         pendingChangeRequestReason: partnerJobChangeRequests.reason,
@@ -345,7 +354,7 @@ export async function GET(request: NextRequest): Promise<Response> {
         )`,
       })
       .from(partnerBookings)
-      .innerJoin(
+      .leftJoin(
         appointments,
         eq(partnerBookings.appointmentId, appointments.id),
       )
@@ -507,7 +516,7 @@ export async function GET(request: NextRequest): Promise<Response> {
       });
       const actionAvailability = resolvePartnerJobActionAvailability({
         status: row.status,
-        appointmentStatus: row.appointmentStatus,
+        appointmentStatus: row.appointmentStatus ?? "requested",
         hasPromisedWindow: Boolean(row.arrivalStartAt && row.arrivalEndAt),
         proofAvailable: row.proofAvailable,
         revisionAvailable: true,
@@ -521,8 +530,13 @@ export async function GET(request: NextRequest): Promise<Response> {
         id: row.id,
         status: row.status,
         confirmationMode: row.confirmationMode,
+        modelVersion: row.modelVersion,
         service: {
           key: row.serviceKey,
+          label:
+            typeof row.scopeSnapshot?.["serviceLabel"] === "string"
+              ? row.scopeSnapshot["serviceLabel"]
+              : undefined,
           tierKey: row.tierKey,
           addOns: projectPartnerAddOnSnapshots(row.addOns).map((addOn) => ({
             key: addOn.key,

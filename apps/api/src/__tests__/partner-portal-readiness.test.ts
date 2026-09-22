@@ -12,6 +12,40 @@ const ready = {
 };
 
 describe("Partner Portal release readiness", () => {
+  it("requires manual confirmation before the new request flow can be enabled", () => {
+    const environment = {
+      ...ready,
+      PARTNER_MULTI_SERVICE_REQUESTS_ENABLED: "true",
+    };
+    expect(inspectPartnerPortalReadiness(environment).issues).toContain(
+      "PARTNER_PORTAL_INSTANT_CONFIRMATION_ENABLED",
+    );
+    expect(
+      inspectPartnerPortalReadiness({
+        ...environment,
+        PARTNER_PORTAL_INSTANT_CONFIRMATION_ENABLED: "false",
+      }).ok,
+    ).toBe(true);
+  });
+  it("rejects misspelled rollout switches and invalid account cohorts", () => {
+    const result = inspectPartnerPortalReadiness({
+      ...ready,
+      PARTNER_MULTI_SERVICE_REQUESTS_ENABLED: "treu",
+      PARTNER_MULTI_SERVICE_ACCOUNT_IDS: "not-an-account",
+    });
+    expect(result.issues).toEqual([
+      "PARTNER_MULTI_SERVICE_REQUESTS_ENABLED",
+      "PARTNER_MULTI_SERVICE_ACCOUNT_IDS",
+    ]);
+    expect(
+      inspectPartnerPortalReadiness({
+        ...ready,
+        PARTNER_MULTI_SERVICE_REQUESTS_ENABLED: "false",
+        PARTNER_MULTI_SERVICE_ACCOUNT_IDS:
+          "74ce0567-c59e-4f57-a121-569918ae27f6",
+      }).ok,
+    ).toBe(true);
+  });
   it("detects the activation-only production outage", () => {
     const result = inspectPartnerPortalReadiness({
       NODE_ENV: "production",

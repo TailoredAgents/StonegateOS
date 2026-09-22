@@ -1,3 +1,5 @@
+import type { PartnerServiceLineInput } from "@myst-os/pricing";
+
 export type PortalV2Error = {
   ok: false;
   error: string;
@@ -9,6 +11,8 @@ export type PortalV2Error = {
 };
 
 export type PartnerDraft = {
+  modelVersion?: 1 | 2;
+  serviceLines?: PartnerRequestServiceLine[];
   id: string;
   rescheduleFromJobId: string | null;
   additionalServiceFromJobId: string | null;
@@ -35,6 +39,8 @@ export type PartnerDraft = {
   updatedAt: string;
   etag: string;
 };
+
+export type PartnerRequestServiceLine = PartnerServiceLineInput;
 
 export type PartnerLocationImportRowResult = {
   rowNumber: number;
@@ -67,7 +73,11 @@ export type PartnerRescheduleResult = {
   publicStatus: string;
   arrivalWindowStartAt: string | null;
   arrivalWindowEndAt: string | null;
-  preferredWindows: Array<{ localDate: string; timeOfDay: string; timezone: string }>;
+  preferredWindows: Array<{
+    localDate: string;
+    timeOfDay: string;
+    timezone: string;
+  }>;
   reviewReasons: string[];
   version: number;
   updatedAt: string;
@@ -374,9 +384,11 @@ export type PartnerReportSummary = {
 
 export type PartnerJobSummary = {
   id: string;
+  modelVersion?: 1 | 2;
   status: string;
   confirmationMode: string;
   service: {
+    label?: string;
     key: string | null;
     tierKey: string | null;
     addOns: Array<{
@@ -479,7 +491,13 @@ export type PartnerProof = {
   }>;
   outstanding: string[];
   media: PartnerProofMedia[];
-  deletedMedia?: Array<{ id: string; filename: string | null; category: string; deletedAt: string; recoverableUntil: string }>;
+  deletedMedia?: Array<{
+    id: string;
+    filename: string | null;
+    category: string;
+    deletedAt: string;
+    recoverableUntil: string;
+  }>;
   packages: Array<{
     id: string;
     version: number;

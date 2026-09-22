@@ -33,7 +33,12 @@ type JobReader = Pick<DatabaseClient, "select">;
 
 /** A boolean only: neither pending payment attempts nor legacy paid scalars qualify. */
 export function partnerAdditionalServiceEligibilitySql(): SQL<boolean> {
-  return sql<boolean>`(COALESCE(${appointments.partnerAccountId} = ${partnerBookings.partnerAccountId}, false) AND (
+  return sql<boolean>`((${partnerBookings.modelVersion}=2 AND (
+    ${partnerBookings.publicStatus}='completed' OR ${partnerBookings.finalTotalCents} IS NOT NULL OR EXISTS (
+      SELECT 1 FROM ${payments} WHERE ${payments.partnerBookingId}=${partnerBookings.id}
+      AND ${payments.partnerAccountId}=${partnerBookings.partnerAccountId} AND ${payments.canonicalStatus}='completed'
+    )
+  )) OR (${partnerBookings.modelVersion}=1 AND COALESCE(${appointments.partnerAccountId} = ${partnerBookings.partnerAccountId}, false) AND (
     ${partnerBookings.publicStatus} = 'completed'
     OR ${appointments.status} = 'completed'
     OR ${appointments.finalTotalCents} IS NOT NULL
@@ -42,7 +47,7 @@ export function partnerAdditionalServiceEligibilitySql(): SQL<boolean> {
       WHERE ${payments.appointmentId} = ${appointments.id}
         AND ${payments.canonicalStatus} = 'completed'
     )
-  ))`;
+  )))`;
 }
 
 /** Read inside the caller's transaction when creating or submitting a linked draft. */
@@ -61,7 +66,7 @@ export async function loadPartnerAdditionalServiceSource(
       eligible: partnerAdditionalServiceEligibilitySql(),
     })
     .from(partnerBookings)
-    .innerJoin(
+    .leftJoin(
       appointments,
       and(
         eq(appointments.id, partnerBookings.appointmentId),

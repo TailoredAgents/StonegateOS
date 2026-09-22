@@ -823,6 +823,35 @@ export const TEAM_SERVER_ACTION_POLICIES = {
     true,
     "team_action.partnerPortalSaveRatesAction",
   ),
+  loadPartnerServiceRates: humanAction(
+    ["partners.accounts.read", "partners.commercial.read"],
+    "normal",
+    false,
+    "team_action.loadPartnerServiceRates",
+  ),
+  savePartnerServiceRates: humanAction(
+    ["partners.rates", "partners.accounts.manage"],
+    "financial",
+    true,
+    "team_action.savePartnerServiceRates",
+  ),
+  loadPartnerVisitResources: humanAction(
+    ["partners.accounts.read", "appointments.read"],
+    "normal",
+    false,
+    "team_action.loadPartnerVisitResources",
+  ),
+  changePartnerServiceRequest: humanAction(
+    [
+      "partners.accounts.read",
+      "appointments.read",
+      "appointments.update",
+      "partners.commercial.manage",
+    ],
+    "financial",
+    true,
+    "team_action.changePartnerServiceRequest",
+  ),
   addApptTaskAction: humanAction(
     ["appointments.update"],
     "normal",

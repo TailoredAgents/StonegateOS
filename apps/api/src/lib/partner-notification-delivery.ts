@@ -19,8 +19,14 @@ import {
 } from "@/db";
 import { sendEmailMessage, sendSmsMessage } from "@/lib/messaging";
 import { arePartnerPortalOutboundNotificationsEnabled } from "@/lib/partner-portal-feature-flags";
-import { loadActiveMembershipAccesses, type PartnerCapability } from "@/lib/partner-account-authorization";
-import { createPartnerJobAccessCondition, createPartnerJobLocationJoinCondition } from "@/lib/partner-portal-v2-resource-authorization";
+import {
+  loadActiveMembershipAccesses,
+  type PartnerCapability,
+} from "@/lib/partner-account-authorization";
+import {
+  createPartnerJobAccessCondition,
+  createPartnerJobLocationJoinCondition,
+} from "@/lib/partner-portal-v2-resource-authorization";
 import type { PartnerNotificationEventKey } from "@/lib/partner-notification-preferences";
 
 export const PARTNER_NOTIFICATION_DELIVERY_EVENT =
@@ -39,6 +45,8 @@ type TransactionExecutor = Parameters<
   : never;
 
 export type QueuePartnerBookingNotificationInput = {
+  /** A confirmed date for one visit does not confirm the rest of the project. */
+  visitNotification?: boolean;
   tx: TransactionExecutor;
   accountId: string;
   membershipId: string;
@@ -68,6 +76,7 @@ export type QueuePartnerBillingDisputeNotificationInput = {
 };
 
 type QueuePartnerNotificationInput = {
+  visitNotification?: boolean;
   tx: TransactionExecutor;
   accountId: string;
   membershipId: string;
@@ -145,18 +154,78 @@ const COPY: Record<PartnerNotificationDeliveryEventType, NotificationCopy> = {
     title: "Billing request updated",
     body: "Stonegate updated your billing request. Review the private billing history for the outcome.",
   },
-  "booking.en_route": { preferenceEventKey: "crew_en_route", inAppEventKey: "job.en_route", title: "Stonegate is on the way", body: "Your crew is on the way. Open the job for the latest service update." },
-  "booking.completed": { preferenceEventKey: "job_completed", inAppEventKey: "job.completed", title: "Service completed", body: "Your Stonegate job is complete. Open the job to see its details and available photos." },
-  "proof.ready": { preferenceEventKey: "proof_ready", inAppEventKey: "proof.ready", title: "Completion record ready", body: "Your job’s completion record and photos are ready to view and download." },
-  "message.received": { preferenceEventKey: "message_received", inAppEventKey: "message.received", title: "New job message", body: "There is a new message in your Stonegate job conversation." },
-  "approval.requested": { preferenceEventKey: "approval_requested", inAppEventKey: "approval.requested", title: "Approval needed", body: "A service request needs your review before it can proceed." },
-  "approval.decided": { preferenceEventKey: "approval_requested", inAppEventKey: "approval.decided", title: "Approval updated", body: "An approval decision was recorded. Open the job for the outcome and scheduling status." },
-  "billing.invoice_issued": { preferenceEventKey: "invoice_issued", inAppEventKey: "invoice.issued", title: "Invoice ready", body: "Your Stonegate invoice is ready. View its details and payment options in Billing." },
-  "billing.invoice_credited": { preferenceEventKey: "invoice_issued", inAppEventKey: "invoice.credited", title: "Invoice credit recorded", body: "Stonegate recorded a credit. View the invoice for the updated balance and credit record." },
-  "billing.payment_processing": { preferenceEventKey: "payment_received", inAppEventKey: "payment.processing", title: "Payment processing", body: "Your payment is processing. It is not yet settled; please do not submit it again." },
-  "billing.payment_settled": { preferenceEventKey: "payment_received", inAppEventKey: "payment.settled", title: "Payment received", body: "Your payment has settled. View the updated balance and available receipt in Billing." },
-  "billing.payment_failed": { preferenceEventKey: "payment_received", inAppEventKey: "payment.failed", title: "Payment needs attention", body: "A payment could not be completed. Open Billing for its current status before trying again." },
-  "billing.payment_refunded": { preferenceEventKey: "payment_received", inAppEventKey: "payment.refunded", title: "Refund recorded", body: "A refund was recorded. Open Billing for its status and updated payment record." },
+  "booking.en_route": {
+    preferenceEventKey: "crew_en_route",
+    inAppEventKey: "job.en_route",
+    title: "Stonegate is on the way",
+    body: "Your crew is on the way. Open the job for the latest service update.",
+  },
+  "booking.completed": {
+    preferenceEventKey: "job_completed",
+    inAppEventKey: "job.completed",
+    title: "Service completed",
+    body: "Your Stonegate job is complete. Open the job to see its details and available photos.",
+  },
+  "proof.ready": {
+    preferenceEventKey: "proof_ready",
+    inAppEventKey: "proof.ready",
+    title: "Completion record ready",
+    body: "Your job’s completion record and photos are ready to view and download.",
+  },
+  "message.received": {
+    preferenceEventKey: "message_received",
+    inAppEventKey: "message.received",
+    title: "New job message",
+    body: "There is a new message in your Stonegate job conversation.",
+  },
+  "approval.requested": {
+    preferenceEventKey: "approval_requested",
+    inAppEventKey: "approval.requested",
+    title: "Approval needed",
+    body: "A service request needs your review before it can proceed.",
+  },
+  "approval.decided": {
+    preferenceEventKey: "approval_requested",
+    inAppEventKey: "approval.decided",
+    title: "Approval updated",
+    body: "An approval decision was recorded. Open the job for the outcome and scheduling status.",
+  },
+  "billing.invoice_issued": {
+    preferenceEventKey: "invoice_issued",
+    inAppEventKey: "invoice.issued",
+    title: "Invoice ready",
+    body: "Your Stonegate invoice is ready. View its details and payment options in Billing.",
+  },
+  "billing.invoice_credited": {
+    preferenceEventKey: "invoice_issued",
+    inAppEventKey: "invoice.credited",
+    title: "Invoice credit recorded",
+    body: "Stonegate recorded a credit. View the invoice for the updated balance and credit record.",
+  },
+  "billing.payment_processing": {
+    preferenceEventKey: "payment_received",
+    inAppEventKey: "payment.processing",
+    title: "Payment processing",
+    body: "Your payment is processing. It is not yet settled; please do not submit it again.",
+  },
+  "billing.payment_settled": {
+    preferenceEventKey: "payment_received",
+    inAppEventKey: "payment.settled",
+    title: "Payment received",
+    body: "Your payment has settled. View the updated balance and available receipt in Billing.",
+  },
+  "billing.payment_failed": {
+    preferenceEventKey: "payment_received",
+    inAppEventKey: "payment.failed",
+    title: "Payment needs attention",
+    body: "A payment could not be completed. Open Billing for its current status before trying again.",
+  },
+  "billing.payment_refunded": {
+    preferenceEventKey: "payment_received",
+    inAppEventKey: "payment.refunded",
+    title: "Refund recorded",
+    body: "A refund was recorded. Open Billing for its status and updated payment record.",
+  },
 };
 
 function validTimezone(value: string | null | undefined): string {
@@ -253,7 +322,11 @@ function dedupeHash(
 function eventMayBypassQuietHours(
   eventType: PartnerNotificationDeliveryEventType,
 ): boolean {
-  return ["booking.rescheduled", "booking.canceled", "booking.en_route"].includes(eventType);
+  return [
+    "booking.rescheduled",
+    "booking.canceled",
+    "booking.en_route",
+  ].includes(eventType);
 }
 
 function exactDate(left: Date | null, right: Date | null): boolean {
@@ -320,23 +393,41 @@ export async function queuePartnerBookingNotification(
 }
 
 /** Fan out only to canonical, currently authorized people; an optional audience narrows job conversations. */
-export async function queuePartnerJobAudienceNotification(input: Omit<QueuePartnerBookingNotificationInput, "membershipId" | "fallbackMembershipId"> & {
-  audienceMembershipIds?: readonly string[];
-  excludeMembershipId?: string;
-}): Promise<void> {
+export async function queuePartnerJobAudienceNotification(
+  input: Omit<
+    QueuePartnerBookingNotificationInput,
+    "membershipId" | "fallbackMembershipId"
+  > & {
+    audienceMembershipIds?: readonly string[];
+    excludeMembershipId?: string;
+  },
+): Promise<void> {
   if (input.audienceMembershipIds?.length === 0) return;
   let cursor: string | null = null;
   for (;;) {
-    const members = await input.tx.select({ id: partnerAccountMemberships.id })
-      .from(partnerAccountMemberships).where(and(
-        eq(partnerAccountMemberships.partnerAccountId, input.accountId),
-        eq(partnerAccountMemberships.status, "active"),
-        cursor ? gt(partnerAccountMemberships.id, cursor) : undefined,
-        input.audienceMembershipIds ? inArray(partnerAccountMemberships.id, [...input.audienceMembershipIds]) : undefined,
-      )).orderBy(asc(partnerAccountMemberships.id)).limit(100);
+    const members = await input.tx
+      .select({ id: partnerAccountMemberships.id })
+      .from(partnerAccountMemberships)
+      .where(
+        and(
+          eq(partnerAccountMemberships.partnerAccountId, input.accountId),
+          eq(partnerAccountMemberships.status, "active"),
+          cursor ? gt(partnerAccountMemberships.id, cursor) : undefined,
+          input.audienceMembershipIds
+            ? inArray(partnerAccountMemberships.id, [
+                ...input.audienceMembershipIds,
+              ])
+            : undefined,
+        ),
+      )
+      .orderBy(asc(partnerAccountMemberships.id))
+      .limit(100);
     for (const member of members) {
       if (member.id === input.excludeMembershipId) continue;
-      await queuePartnerBookingNotification({ ...input, membershipId: member.id });
+      await queuePartnerBookingNotification({
+        ...input,
+        membershipId: member.id,
+      });
     }
     if (members.length < 100) return;
     cursor = members[members.length - 1]!.id;
@@ -366,26 +457,55 @@ export async function queuePartnerBillingDisputeNotification(
 
 /** Recheck role and relational location/cost-center access both at queue time and delivery time. */
 async function recipientHasSubjectAccess(input: {
-  tx: TransactionExecutor; accountId: string; membershipId: string; partnerUserId: string;
-  partnerBookingId: string | null; eventType: PartnerNotificationDeliveryEventType;
+  tx: TransactionExecutor;
+  accountId: string;
+  membershipId: string;
+  partnerUserId: string;
+  partnerBookingId: string | null;
+  eventType: PartnerNotificationDeliveryEventType;
 }): Promise<boolean> {
-  const access = (await loadActiveMembershipAccesses(input.partnerUserId, input.tx))
-    .find((row) => row.accountId === input.accountId && row.membershipId === input.membershipId);
-  const required: PartnerCapability = input.eventType.startsWith("billing.") ? "invoices.read"
-    : input.eventType === "approval.requested" ? "approvals.decide"
-    : input.eventType.startsWith("message.") ? "messages.read" : "jobs.read";
+  const access = (
+    await loadActiveMembershipAccesses(input.partnerUserId, input.tx)
+  ).find(
+    (row) =>
+      row.accountId === input.accountId &&
+      row.membershipId === input.membershipId,
+  );
+  const required: PartnerCapability = input.eventType.startsWith("billing.")
+    ? "invoices.read"
+    : input.eventType === "approval.requested"
+      ? "approvals.decide"
+      : input.eventType.startsWith("message.")
+        ? "messages.read"
+        : "jobs.read";
   if (!access || !access.capabilities.includes(required)) return false;
   if (!input.partnerBookingId) return true;
-  const [job] = await input.tx.select({ id: partnerBookings.id }).from(partnerBookings)
+  const [job] = await input.tx
+    .select({ id: partnerBookings.id })
+    .from(partnerBookings)
     .leftJoin(partnerAccountLocations, createPartnerJobLocationJoinCondition())
-    .where(createPartnerJobAccessCondition(access, input.partnerBookingId)).limit(1);
+    .where(createPartnerJobAccessCondition(access, input.partnerBookingId))
+    .limit(1);
   return Boolean(job);
 }
 
 async function queuePartnerNotification(
   input: QueuePartnerNotificationInput,
 ): Promise<void> {
-  const copy = partnerNotificationCopy(input.eventType);
+  const baseCopy = partnerNotificationCopy(input.eventType);
+  const copy =
+    input.visitNotification &&
+    (input.eventType === "booking.created" ||
+      input.eventType === "booking.rescheduled")
+      ? {
+          ...baseCopy,
+          title:
+            input.eventType === "booking.rescheduled"
+              ? "Visit time updated"
+              : "Service visit confirmed",
+          body: "A service visit is confirmed. Open your request for its date, services, and any remaining scheduling.",
+        }
+      : baseCopy;
   const actionPath = input.actionPath;
   if (
     !UUID_PATTERN.test(input.subjectId) ||
@@ -508,10 +628,15 @@ async function queuePartnerNotification(
     recipient.membershipStatus === "active" &&
     recipient.userActive &&
     recipient.identityStatus === "active" &&
-    recipient.portalAccessEnabled && await recipientHasSubjectAccess({
-      tx: input.tx, accountId: input.accountId, membershipId: recipientMembershipId,
-      partnerUserId: recipient.partnerUserId, partnerBookingId: input.partnerBookingId, eventType: input.eventType,
-    });
+    recipient.portalAccessEnabled &&
+    (await recipientHasSubjectAccess({
+      tx: input.tx,
+      accountId: input.accountId,
+      membershipId: recipientMembershipId,
+      partnerUserId: recipient.partnerUserId,
+      partnerBookingId: input.partnerBookingId,
+      eventType: input.eventType,
+    }));
   const timezone = validTimezone(preference.timezone || input.accountTimezone);
   const urgentSameDay = Boolean(
     eventMayBypassQuietHours(input.eventType) &&
@@ -855,11 +980,15 @@ export async function processPartnerNotificationDelivery(input: {
         recipient.membershipStatus === "active" &&
         recipient.userActive &&
         recipient.identityStatus === "active" &&
-        recipient.portalAccessEnabled && await recipientHasSubjectAccess({
-          tx, accountId: delivery.accountId, membershipId: delivery.membershipId,
-          partnerUserId: recipient.partnerUserId, partnerBookingId: delivery.bookingId,
+        recipient.portalAccessEnabled &&
+        (await recipientHasSubjectAccess({
+          tx,
+          accountId: delivery.accountId,
+          membershipId: delivery.membershipId,
+          partnerUserId: recipient.partnerUserId,
+          partnerBookingId: delivery.bookingId,
           eventType: delivery.eventType,
-        }),
+        })),
     );
     const channelAllowed =
       recipientAvailable &&

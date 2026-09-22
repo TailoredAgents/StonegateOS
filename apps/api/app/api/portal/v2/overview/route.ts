@@ -1,3 +1,7 @@
+import {
+  partnerRequestNextArrivalStartSql as nextStart,
+  partnerRequestNextArrivalEndSql as nextEnd,
+} from "@/lib/partner-request-schedule";
 import type { NextRequest } from "next/server";
 import { and, asc, desc, eq, gte, inArray, or, sql } from "drizzle-orm";
 import {
@@ -64,13 +68,13 @@ export async function GET(request: NextRequest): Promise<Response> {
               id: partnerBookings.id,
               status: partnerBookings.publicStatus,
               locationName: partnerAccountLocations.siteName,
-              startAt: partnerBookings.arrivalWindowStartAt,
-              endAt: partnerBookings.arrivalWindowEndAt,
+              startAt: nextStart,
+              endAt: nextEnd,
               timezone: partnerAccountLocations.timezone,
               scopeSnapshot: partnerBookings.scopeSnapshot,
             })
             .from(partnerBookings)
-            .innerJoin(
+            .leftJoin(
               appointments,
               eq(appointments.id, partnerBookings.appointmentId),
             )
@@ -83,28 +87,33 @@ export async function GET(request: NextRequest): Promise<Response> {
                 createPartnerJobAccessCondition(principal),
                 inArray(partnerBookings.publicStatus, [
                   "confirmed",
+                  "partially_scheduled",
                   "en_route",
                   "in_progress",
                   "requested",
                   "under_review",
                   "approval_needed",
                 ]),
-                inArray(appointments.status, ["requested", "confirmed"]),
                 or(
-                  gte(partnerBookings.arrivalWindowEndAt, now),
+                  eq(partnerBookings.modelVersion, 2),
+                  inArray(appointments.status, ["requested", "confirmed"]),
+                ),
+                or(
+                  sql`${nextEnd} >= ${now.toISOString()}::timestamptz`,
                   inArray(partnerBookings.publicStatus, [
                     "en_route",
                     "in_progress",
                     "requested",
                     "under_review",
                     "approval_needed",
+                    "partially_scheduled",
                   ]),
                 ),
               ),
             )
             .orderBy(
-              sql`CASE WHEN ${partnerBookings.publicStatus} IN ('en_route', 'in_progress', 'confirmed') THEN 0 ELSE 1 END`,
-              asc(partnerBookings.arrivalWindowStartAt),
+              sql`CASE WHEN ${partnerBookings.publicStatus} IN ('en_route', 'in_progress', 'confirmed','partially_scheduled') THEN 0 ELSE 1 END`,
+              asc(nextStart),
               desc(partnerBookings.createdAt),
               asc(partnerBookings.id),
             )

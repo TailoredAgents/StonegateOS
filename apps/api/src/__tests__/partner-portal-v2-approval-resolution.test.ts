@@ -571,6 +571,54 @@ function lifecycleInput(
 }
 
 describe("partner approval final-decision lifecycle planning", () => {
+  it("returns multi-service parent approval to Stonegate without requiring or reserving an appointment", () => {
+    const target = lifecycleTarget({
+      bookingModelVersion: 2,
+      appointmentId: null,
+      appointmentAccountId: null,
+      appointmentStatus: null,
+      bookingConfirmationMode: "review",
+      bookingArrivalWindowStartAt: null,
+      bookingArrivalWindowEndAt: null,
+    });
+    expect(
+      planPartnerApprovalLifecycle(
+        lifecycleInput({ target, hold: null, approvalHoldId: null }),
+      ),
+    ).toEqual({
+      kind: "approved_needs_reschedule",
+      approvalState: "approved_needs_reschedule",
+      releaseApprovalHold: false,
+    });
+    expect(
+      planPartnerApprovalLifecycle(
+        lifecycleInput({
+          target,
+          hold: null,
+          approvalHoldId: null,
+          declined: true,
+          approved: false,
+        }),
+      ),
+    ).toEqual({
+      kind: "decline",
+      approvalState: "declined",
+      releaseApprovalHold: false,
+    });
+    for (const bad of [
+      lifecycleTarget({ ...target, bookingAccountId: OTHER_ACCOUNT_ID }),
+      lifecycleTarget({ ...target, appointmentId: APPOINTMENT_ID }),
+      lifecycleTarget({
+        ...target,
+        bookingRequestedByMembershipId: OTHER_ACCOUNT_ID,
+      }),
+    ])
+      expect(
+        planPartnerApprovalLifecycle(
+          lifecycleInput({ target: bad, hold: null, approvalHoldId: null }),
+        ).kind,
+      ).toBe("conflict");
+  });
   it("records approval and releases an old held window when current confirmation is disabled", () => {
     expect(
       planPartnerApprovalLifecycle(

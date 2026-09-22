@@ -1,6 +1,7 @@
 "use client";
 
 import * as React from "react";
+import { PartnerServiceRatesEditor } from "./PartnerServiceRatesEditor";
 import {
   loadPartnerRelationshipContext,
   savePartnerRelationship,
@@ -54,6 +55,9 @@ export function PartnerRelationshipSetup({
   canInvite,
   canConfigure,
   canConfigureBilling = false,
+  canViewRates = false,
+  canConfigureRates = false,
+  canCompleteSetup = false,
   openCreate = false,
   initialAccountId,
   openExisting = false,
@@ -62,6 +66,9 @@ export function PartnerRelationshipSetup({
   canInvite: boolean;
   canConfigure: boolean;
   canConfigureBilling?: boolean;
+  canViewRates?: boolean;
+  canConfigureRates?: boolean;
+  canCompleteSetup?: boolean;
   openCreate?: boolean;
   initialAccountId?: string;
   openExisting?: boolean;
@@ -77,6 +84,8 @@ export function PartnerRelationshipSetup({
   const [feedback, setFeedback] = React.useState<RelationshipFeedback | null>(
     null,
   );
+  const [ratesDirty, setRatesDirty] = React.useState(false);
+  const [ratesReady, setRatesReady] = React.useState(false);
   const [role, setRole] = React.useState("");
   const [scoped, setScoped] = React.useState(false);
   const [locationIds, setLocationIds] = React.useState<string[]>([]);
@@ -125,8 +134,16 @@ export function PartnerRelationshipSetup({
     };
   }, [initialAccountId]);
   async function chooseCompany(id: string) {
+    if (
+      ratesDirty &&
+      id !== selectedAccount &&
+      !window.confirm("Leave these unsaved rate changes?")
+    )
+      return;
+    setRatesDirty(false);
     const generation = ++contextGeneration.current;
     setSelectedAccount(id);
+    setRatesReady(false);
     setContext(null);
     setRole("");
     setScoped(false);
@@ -189,6 +206,10 @@ export function PartnerRelationshipSetup({
                 account: {
                   ...current.account,
                   enabled: kind === "enable" ? true : current.account.enabled,
+                  setupStatus:
+                    kind === "enable"
+                      ? "complete"
+                      : current.account.setupStatus,
                 },
               }
             : current,
@@ -249,7 +270,7 @@ export function PartnerRelationshipSetup({
           className="border-t border-slate-200 pt-3"
         >
           <summary className="min-h-11 cursor-pointer content-center py-2 font-semibold text-slate-900 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2">
-            Create a company and invite its Administrator
+            Company details
           </summary>
           <form
             method="post"
@@ -266,7 +287,14 @@ export function PartnerRelationshipSetup({
                 persona: data.get("persona"),
                 reason: data.get("reason"),
               }).then((result) => {
-                if (result.ok) form.reset();
+                if (
+                  result.ok &&
+                  "accountId" in result &&
+                  typeof result.accountId === "string"
+                ) {
+                  form.reset();
+                  void chooseCompany(result.accountId);
+                }
               });
             }}
           >
@@ -323,21 +351,24 @@ export function PartnerRelationshipSetup({
               />
             </label>
             <p className="text-sm leading-6 text-slate-600 sm:col-span-2">
-              This contact becomes the company Administrator after choosing a
-              password. One invitation email is queued; no service is booked and
-              no negotiated rates are invented.
+              Save the company details, enter its service rates, then activate
+              access and send the Administrator invitation. No email is sent in
+              this first step.
             </p>
             <button type="submit" disabled={busy !== null} className={BUTTON}>
-              {busy === "create"
-                ? "Creating…"
-                : "Create company & invite Administrator"}
+              {busy === "create" ? "Creating…" : "Create company and continue"}
             </button>
           </form>
         </details>
       ) : null}
-      {!openCreate ? (
+      {!openCreate || context ? (
         <details
-          open={Boolean(initialAccountId) || openExisting || undefined}
+          open={
+            Boolean(initialAccountId) ||
+            openExisting ||
+            context?.account.setupStatus === "rates_required" ||
+            undefined
+          }
           className="border-t border-slate-200 pt-3"
         >
           <summary className="flex min-h-11 cursor-pointer items-center font-semibold text-slate-900">
@@ -345,7 +376,7 @@ export function PartnerRelationshipSetup({
               ? context?.account.name || "Selected company"
               : "Invite coworkers or configure an existing company"}
           </summary>
-          {!initialAccountId ? (
+          {!initialAccountId && !openCreate ? (
             <>
               <form
                 method="post"
@@ -416,6 +447,68 @@ export function PartnerRelationshipSetup({
             </button>
           ) : null}
           {context &&
+          canViewRates &&
+          (canConfigure || context.account.setupStatus === "rates_required") ? (
+            <div className="mt-5 border-t border-slate-200 pt-5">
+              {context.account.setupStatus === "rates_required" ? (
+                <ol
+                  aria-label="Partner setup progress"
+                  className="mb-4 flex flex-wrap gap-x-5 gap-y-2 text-sm"
+                >
+                  <li>1. Company details saved</li>
+                  <li aria-current="step" className="font-semibold">
+                    2. Service rates
+                  </li>
+                  <li>3. Activate and invite</li>
+                </ol>
+              ) : null}
+              <PartnerServiceRatesEditor
+                key={context.account.id}
+                accountId={context.account.id}
+                canManage={canConfigureRates}
+                onDirtyChange={setRatesDirty}
+                onPublished={setRatesReady}
+              />
+            </div>
+          ) : null}
+          {context?.account.setupStatus === "rates_required" ? (
+            <div className="mt-5 space-y-3 border-t border-slate-200 pt-5">
+              <h3 className="font-semibold">Activate and invite</h3>
+              <p className="text-sm text-slate-600">
+                The company is not active yet. Publish current rates for all
+                eight services, including each required variant, before sending
+                the invitation.
+              </p>
+              <p className="break-words text-sm">
+                Administrator: {context.account.contactName} ·{" "}
+                {context.account.contactEmail}
+              </p>
+              {canCompleteSetup ? (
+                <button
+                  type="button"
+                  className={BUTTON}
+                  disabled={busy !== null || !ratesReady || ratesDirty}
+                  onClick={() =>
+                    void save("enable", {
+                      reason:
+                        "Company details and all required service rates reviewed for activation.",
+                    })
+                  }
+                >
+                  {busy === "enable"
+                    ? "Activating…"
+                    : "Activate portal & invite Administrator"}
+                </button>
+              ) : (
+                <p className="text-sm text-slate-600">
+                  A staff member with company, rate and invitation permissions
+                  must complete activation.
+                </p>
+              )}
+            </div>
+          ) : null}
+          {context &&
+          context.account.setupStatus !== "rates_required" &&
           (!context.account.enabled ||
             context.account.lifecycle !== "active") ? (
             <p className="mt-4 text-sm leading-6 text-amber-900">
@@ -424,6 +517,7 @@ export function PartnerRelationshipSetup({
             </p>
           ) : null}
           {context &&
+          context.account.setupStatus !== "rates_required" &&
           !context.account.enabled &&
           context.account.lifecycle === "active" &&
           canConfigure ? (

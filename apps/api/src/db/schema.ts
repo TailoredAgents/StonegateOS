@@ -1,4 +1,4 @@
-import type { LineItem } from "@myst-os/pricing";
+import type { LineItem, PartnerServiceLineInput } from "@myst-os/pricing";
 
 // existing tables...
 import {
@@ -285,11 +285,23 @@ export const partnerAccounts = pgTable(
     portalAccessEnabled: boolean("portal_access_enabled")
       .default(false)
       .notNull(),
+    portalSetupStatus: text("portal_setup_status")
+      .$type<"complete" | "rates_required">()
+      .default("complete")
+      .notNull(),
+    portalRateRevision: integer("portal_rate_revision").default(1).notNull(),
+    portalRateDraft: jsonb("portal_rate_draft").$type<Record<
+      string,
+      unknown
+    > | null>(),
+    portalRatesVisible: boolean("portal_rates_visible").default(true).notNull(),
     portalWorkflowConfig: jsonb("portal_workflow_config")
       .$type<Record<string, unknown>>()
       .default({})
       .notNull(),
-    portalWorkflowRevision: integer("portal_workflow_revision").default(1).notNull(),
+    portalWorkflowRevision: integer("portal_workflow_revision")
+      .default(1)
+      .notNull(),
     portalLifecycleStatus: text("portal_lifecycle_status")
       .$type<"active" | "suspended" | "closed" | "merged">()
       .default("active")
@@ -6295,7 +6307,9 @@ export const partnerBookings = pgTable(
     ),
     bookingDraftId: uuid("booking_draft_id"),
     // Migration 0172 installs an immutable, account-bound source-job link.
-    additionalServiceFromPartnerBookingId: uuid("additional_service_from_partner_booking_id"),
+    additionalServiceFromPartnerBookingId: uuid(
+      "additional_service_from_partner_booking_id",
+    ),
     requestedByMembershipId: uuid("requested_by_membership_id"),
     partnerUserId: uuid("partner_user_id").references(() => partnerUsers.id, {
       onDelete: "set null",
@@ -6303,9 +6317,18 @@ export const partnerBookings = pgTable(
     propertyId: uuid("property_id").references(() => properties.id, {
       onDelete: "set null",
     }),
-    appointmentId: uuid("appointment_id")
-      .notNull()
-      .references(() => appointments.id, { onDelete: "cascade" }),
+    appointmentId: uuid("appointment_id").references(() => appointments.id, {
+      onDelete: "cascade",
+    }),
+    modelVersion: integer("model_version").default(1).notNull(),
+    quotedTotalCents: integer("quoted_total_cents"),
+    finalTotalCents: integer("final_total_cents"),
+    pricingVersion: integer("pricing_version").default(1).notNull(),
+    pricedAt: timestamp("priced_at", { withTimezone: true }),
+    pricedByTeamMemberId: uuid("priced_by_team_member_id").references(
+      () => teamMembers.id,
+      { onDelete: "set null" },
+    ),
     serviceKey: text("service_key"),
     tierKey: text("tier_key"),
     amountCents: integer("amount_cents"),
@@ -6396,7 +6419,12 @@ export const partnerBookings = pgTable(
       table.id,
     ),
     additionalSourceIdx: index("partner_additional_jobs_source_idx")
-      .on(table.partnerAccountId, table.additionalServiceFromPartnerBookingId, table.createdAt, table.id)
+      .on(
+        table.partnerAccountId,
+        table.additionalServiceFromPartnerBookingId,
+        table.createdAt,
+        table.id,
+      )
       .where(sql`${table.additionalServiceFromPartnerBookingId} IS NOT NULL`),
     accountLocationIdx: index("partner_bookings_account_location_idx").on(
       table.partnerAccountId,
@@ -6468,7 +6496,7 @@ export const partnerBookings = pgTable(
     ),
     publicStatusCheck: check(
       "partner_bookings_public_status_check",
-      sql`${table.publicStatus} IN ('requested', 'approval_needed', 'under_review', 'confirmed', 'en_route', 'in_progress', 'completed', 'canceled', 'declined')`,
+      sql`${table.publicStatus} IN ('requested', 'approval_needed', 'under_review', 'partially_scheduled', 'confirmed', 'en_route', 'in_progress', 'completed', 'canceled', 'declined')`,
     ),
     confirmationModeCheck: check(
       "partner_bookings_confirmation_mode_check",
@@ -6549,9 +6577,24 @@ export const staffNotificationOperations = pgTable(
     providerRequestKeyIdx: uniqueIndex(
       "staff_notification_operations_provider_request_key_key",
     ).on(table.providerRequestKey),
-    subjectRecipientKey: uniqueIndex("staff_notification_subject_recipient_key").on(table.subjectType, table.subjectId, table.kind, table.recipientTeamMemberId),
-    subjectAddressKey: uniqueIndex("staff_notification_subject_address_key").on(table.subjectType, table.subjectId, table.kind, table.recipientAddress),
-    subjectCheck: check("staff_notification_subject_check", sql`(${table.appointmentId} IS NOT NULL AND ${table.subjectType} IS NULL AND ${table.subjectId} IS NULL) OR (${table.appointmentId} IS NULL AND ${table.subjectType} IN ('partner_owner_group', 'partner_owner_test') AND ${table.subjectId} IS NOT NULL)`),
+    subjectRecipientKey: uniqueIndex(
+      "staff_notification_subject_recipient_key",
+    ).on(
+      table.subjectType,
+      table.subjectId,
+      table.kind,
+      table.recipientTeamMemberId,
+    ),
+    subjectAddressKey: uniqueIndex("staff_notification_subject_address_key").on(
+      table.subjectType,
+      table.subjectId,
+      table.kind,
+      table.recipientAddress,
+    ),
+    subjectCheck: check(
+      "staff_notification_subject_check",
+      sql`(${table.appointmentId} IS NOT NULL AND ${table.subjectType} IS NULL AND ${table.subjectId} IS NULL) OR (${table.appointmentId} IS NULL AND ${table.subjectType} IN ('partner_owner_group', 'partner_owner_test') AND ${table.subjectId} IS NOT NULL)`,
+    ),
     stateIdx: index("staff_notification_operations_state_idx").on(
       table.state,
       table.createdAt,
@@ -8600,6 +8643,8 @@ export const paymentAttempts = pgTable(
   "payment_attempts",
   {
     id: uuid("id").defaultRandom().primaryKey(),
+    partnerBookingId: uuid("partner_booking_id"),
+    partnerAccountId: uuid("partner_account_id"),
     // Quote-deposit linkage is optional so every existing appointment payment
     // remains valid while Quote V2 rolls out.
     quoteId: uuid("quote_id"),
@@ -8644,6 +8689,19 @@ export const paymentAttempts = pgTable(
       .$onUpdate(() => new Date()),
   },
   (table) => ({
+    partnerBookingIdx: index("payment_attempts_partner_booking_idx").on(
+      table.partnerAccountId,
+      table.partnerBookingId,
+    ),
+    partnerBookingFk: foreignKey({
+      columns: [table.partnerAccountId, table.partnerBookingId],
+      foreignColumns: [partnerBookings.partnerAccountId, partnerBookings.id],
+      name: "payment_attempts_partner_booking_fk",
+    }).onDelete("restrict"),
+    partnerSubjectCheck: check(
+      "payment_attempts_partner_subject_check",
+      sql`(${table.partnerBookingId} IS NULL AND ${table.partnerAccountId} IS NULL) OR (${table.partnerBookingId} IS NOT NULL AND ${table.partnerAccountId} IS NOT NULL AND ${table.appointmentId} IS NULL)`,
+    ),
     quoteVersionIdx: index("payment_attempts_quote_version_idx").on(
       table.quoteVersionId,
       table.quotePaymentKind,
@@ -8697,7 +8755,7 @@ export const paymentAttempts = pgTable(
     ),
     subjectCheck: check(
       "payment_attempts_subject_check",
-      sql`${table.appointmentId} IS NOT NULL OR ${table.quoteResponseId} IS NOT NULL`,
+      sql`${table.appointmentId} IS NOT NULL OR ${table.quoteResponseId} IS NOT NULL OR ${table.partnerBookingId} IS NOT NULL`,
     ),
   }),
 );
@@ -8706,6 +8764,8 @@ export const payments = pgTable(
   "payments",
   {
     id: uuid("id").defaultRandom().primaryKey(),
+    partnerBookingId: uuid("partner_booking_id"),
+    partnerAccountId: uuid("partner_account_id"),
     quoteId: uuid("quote_id"),
     quoteVersionId: uuid("quote_version_id"),
     // Installed as an FK after Quote V2 response evidence exists.
@@ -8758,6 +8818,19 @@ export const payments = pgTable(
     capturedAt: timestamp("captured_at", { withTimezone: true }),
   },
   (table) => ({
+    partnerBookingIdx: index("payments_partner_booking_idx").on(
+      table.partnerAccountId,
+      table.partnerBookingId,
+    ),
+    partnerBookingFk: foreignKey({
+      columns: [table.partnerAccountId, table.partnerBookingId],
+      foreignColumns: [partnerBookings.partnerAccountId, partnerBookings.id],
+      name: "payments_partner_booking_fk",
+    }).onDelete("restrict"),
+    partnerSubjectCheck: check(
+      "payments_partner_subject_check",
+      sql`(${table.partnerBookingId} IS NULL AND ${table.partnerAccountId} IS NULL) OR (${table.partnerBookingId} IS NOT NULL AND ${table.partnerAccountId} IS NOT NULL AND ${table.appointmentId} IS NULL)`,
+    ),
     quoteVersionIdx: index("payments_quote_version_idx").on(
       table.quoteVersionId,
       table.quotePaymentKind,
@@ -10371,10 +10444,163 @@ export const scheduleBlocks = pgTable(
   }),
 );
 
+// V2 commercial requests have no appointment. Only visits reserve capacity.
+export const partnerBookingServiceLines = pgTable(
+  "partner_booking_service_lines",
+  {
+    id: uuid("id").notNull(),
+    partnerBookingId: uuid("partner_booking_id").notNull(),
+    partnerAccountId: uuid("partner_account_id").notNull(),
+    position: integer("position").notNull(),
+    serviceLabel: text("service_label").notNull(),
+    status: text("status")
+      .$type<"pending" | "in_progress" | "completed" | "canceled">()
+      .default("pending")
+      .notNull(),
+    completedAt: timestamp("completed_at", { withTimezone: true }),
+    serviceKey: varchar("service_key", { length: 80 })
+      .notNull()
+      .references(() => partnerServiceCatalog.key, { onDelete: "restrict" }),
+    description: text("description").notNull(),
+    scope: jsonb("scope")
+      .$type<Record<string, unknown>>()
+      .default({})
+      .notNull(),
+    selectedAddOns: jsonb("selected_add_ons")
+      .$type<PartnerServiceLineInput["selectedAddOns"]>()
+      .default([])
+      .notNull(),
+    proofRequirements: jsonb("proof_requirements")
+      .$type<PartnerServiceLineInput["proofRequirements"]>()
+      .notNull(),
+    rateSnapshot: jsonb("rate_snapshot").$type<Record<
+      string,
+      unknown
+    > | null>(),
+    quotedAmountCents: integer("quoted_amount_cents"),
+    priceDescription: text("price_description"),
+    pricingSnapshot: jsonb("pricing_snapshot").$type<Record<
+      string,
+      unknown
+    > | null>(),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => ({
+    pk: primaryKey({ columns: [table.partnerBookingId, table.id] }),
+    accountKey: uniqueIndex("partner_service_lines_account_booking_id_key").on(
+      table.partnerAccountId,
+      table.partnerBookingId,
+      table.id,
+    ),
+    accountBookingFk: foreignKey({
+      columns: [table.partnerAccountId, table.partnerBookingId],
+      foreignColumns: [partnerBookings.partnerAccountId, partnerBookings.id],
+      name: "partner_service_lines_account_booking_fk",
+    }).onDelete("cascade"),
+    amountCheck: check(
+      "partner_service_lines_amount_check",
+      sql`${table.quotedAmountCents} IS NULL OR ${table.quotedAmountCents} >= 0`,
+    ),
+  }),
+);
+
+export const partnerBookingVisits = pgTable(
+  "partner_booking_visits",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    partnerAccountId: uuid("partner_account_id").notNull(),
+    partnerBookingId: uuid("partner_booking_id").notNull(),
+    appointmentId: uuid("appointment_id")
+      .notNull()
+      .references(() => appointments.id, { onDelete: "restrict" }),
+    status: text("status")
+      .$type<"scheduled" | "in_progress" | "completed" | "canceled">()
+      .default("scheduled")
+      .notNull(),
+    minimumAmountCents: integer("minimum_amount_cents").default(0).notNull(),
+    rateSnapshot: jsonb("rate_snapshot")
+      .$type<Record<string, unknown>>()
+      .default({})
+      .notNull(),
+    version: integer("version").default(1).notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => ({
+    appointmentKey: uniqueIndex("partner_booking_visits_appointment_key").on(
+      table.appointmentId,
+    ),
+    accountKey: uniqueIndex("partner_booking_visits_account_booking_id_key").on(
+      table.partnerAccountId,
+      table.partnerBookingId,
+      table.id,
+    ),
+    accountBookingFk: foreignKey({
+      columns: [table.partnerAccountId, table.partnerBookingId],
+      foreignColumns: [partnerBookings.partnerAccountId, partnerBookings.id],
+      name: "partner_booking_visits_account_booking_fk",
+    }).onDelete("cascade"),
+    minimumCheck: check(
+      "partner_booking_visits_minimum_check",
+      sql`${table.minimumAmountCents} >= 0`,
+    ),
+    statusCheck: check(
+      "partner_booking_visits_status_check",
+      sql`${table.status} IN ('scheduled', 'in_progress', 'completed', 'canceled')`,
+    ),
+  }),
+);
+
+export const partnerBookingVisitLines = pgTable(
+  "partner_booking_visit_lines",
+  {
+    partnerAccountId: uuid("partner_account_id").notNull(),
+    partnerBookingId: uuid("partner_booking_id").notNull(),
+    visitId: uuid("visit_id").notNull(),
+    serviceLineId: uuid("service_line_id").notNull(),
+  },
+  (table) => ({
+    pk: primaryKey({ columns: [table.visitId, table.serviceLineId] }),
+    visitFk: foreignKey({
+      columns: [table.partnerAccountId, table.partnerBookingId, table.visitId],
+      foreignColumns: [
+        partnerBookingVisits.partnerAccountId,
+        partnerBookingVisits.partnerBookingId,
+        partnerBookingVisits.id,
+      ],
+      name: "partner_visit_lines_visit_fk",
+    }).onDelete("cascade"),
+    lineFk: foreignKey({
+      columns: [
+        table.partnerAccountId,
+        table.partnerBookingId,
+        table.serviceLineId,
+      ],
+      foreignColumns: [
+        partnerBookingServiceLines.partnerAccountId,
+        partnerBookingServiceLines.partnerBookingId,
+        partnerBookingServiceLines.id,
+      ],
+      name: "partner_visit_lines_service_line_fk",
+    }).onDelete("restrict"),
+  }),
+);
+
 export const partnerBookingDrafts = pgTable(
   "partner_booking_drafts",
   {
     id: uuid("id").defaultRandom().primaryKey(),
+    modelVersion: integer("model_version").default(1).notNull(),
+    serviceLines: jsonb("service_lines")
+      .$type<PartnerServiceLineInput[]>()
+      .default([])
+      .notNull(),
     partnerAccountId: uuid("partner_account_id")
       .notNull()
       .references(() => partnerAccounts.id, { onDelete: "cascade" }),
@@ -10386,7 +10612,9 @@ export const partnerBookingDrafts = pgTable(
     // The migration installs an account-bound composite FK after both account
     // uniqueness keys exist, preventing cross-tenant reschedule references.
     rescheduleFromPartnerBookingId: uuid("reschedule_from_partner_booking_id"),
-    additionalServiceFromPartnerBookingId: uuid("additional_service_from_partner_booking_id"),
+    additionalServiceFromPartnerBookingId: uuid(
+      "additional_service_from_partner_booking_id",
+    ),
     locationId: uuid("location_id").references(
       () => partnerAccountLocations.id,
       { onDelete: "restrict" },
@@ -10603,10 +10831,17 @@ export const partnerRescheduleRequests = pgTable(
     // Composite account/resource FKs are installed by migration 0116.
     partnerBookingId: uuid("partner_booking_id").notNull(),
     bookingDraftId: uuid("booking_draft_id").notNull(),
+    // Composite account/parent/visit ownership is enforced by migration 0179.
+    partnerBookingVisitId: uuid("partner_booking_visit_id"),
     state: text("state").default("pending").notNull(),
     requestKind: text("request_kind").default("held_window").notNull(),
-    preferredWindows: jsonb("preferred_windows").$type<Record<string, unknown>[]>().default([]).notNull(),
-    withdrawalOperationKeyHash: varchar("withdrawal_operation_key_hash", { length: 64 }),
+    preferredWindows: jsonb("preferred_windows")
+      .$type<Record<string, unknown>[]>()
+      .default([])
+      .notNull(),
+    withdrawalOperationKeyHash: varchar("withdrawal_operation_key_hash", {
+      length: 64,
+    }),
     withdrawalRequestHash: varchar("withdrawal_request_hash", { length: 64 }),
     proposedStartAt: timestamp("proposed_start_at", {
       withTimezone: true,
@@ -10652,7 +10887,11 @@ export const partnerRescheduleRequests = pgTable(
     accountRequestKey: uniqueIndex(
       "partner_reschedule_requests_account_request_key",
     ).on(table.partnerAccountId, table.id),
-    withdrawalOperationKey: uniqueIndex("partner_reschedule_requests_withdrawal_operation_key").on(table.withdrawalOperationKeyHash).where(sql`${table.withdrawalOperationKeyHash} IS NOT NULL`),
+    withdrawalOperationKey: uniqueIndex(
+      "partner_reschedule_requests_withdrawal_operation_key",
+    )
+      .on(table.withdrawalOperationKeyHash)
+      .where(sql`${table.withdrawalOperationKeyHash} IS NOT NULL`),
     operationKey: uniqueIndex(
       "partner_reschedule_requests_operation_key_hash_key",
     ).on(table.operationKeyHash),
@@ -10675,7 +10914,10 @@ export const partnerRescheduleRequests = pgTable(
       "partner_reschedule_requests_window_check",
       sql`${table.requestedArrivalEndAt} > ${table.requestedArrivalStartAt}`,
     ),
-    requestShapeCheck: check("partner_reschedule_requests_shape_check", sql`(${table.requestKind} = 'held_window' AND ${table.proposedStartAt} IS NOT NULL AND ${table.requestedArrivalStartAt} IS NOT NULL AND ${table.requestedArrivalEndAt} IS NOT NULL AND ${table.preferredWindows} = '[]'::jsonb) OR (${table.requestKind} = 'preferred_dates' AND ${table.proposedStartAt} IS NULL AND ${table.requestedArrivalStartAt} IS NULL AND ${table.requestedArrivalEndAt} IS NULL AND jsonb_typeof(${table.preferredWindows}) = 'array' AND jsonb_array_length(${table.preferredWindows}) BETWEEN 1 AND 3)`),
+    requestShapeCheck: check(
+      "partner_reschedule_requests_shape_check",
+      sql`(${table.requestKind} = 'held_window' AND ${table.proposedStartAt} IS NOT NULL AND ${table.requestedArrivalStartAt} IS NOT NULL AND ${table.requestedArrivalEndAt} IS NOT NULL AND ${table.preferredWindows} = '[]'::jsonb) OR (${table.requestKind} = 'preferred_dates' AND ${table.proposedStartAt} IS NULL AND ${table.requestedArrivalStartAt} IS NULL AND ${table.requestedArrivalEndAt} IS NULL AND jsonb_typeof(${table.preferredWindows}) = 'array' AND jsonb_array_length(${table.preferredWindows}) BETWEEN 1 AND 3)`,
+    ),
     previousWindowCheck: check(
       "partner_reschedule_requests_previous_window_check",
       sql`(${table.previousArrivalStartAt} IS NULL AND ${table.previousArrivalEndAt} IS NULL) OR (${table.previousArrivalStartAt} IS NOT NULL AND ${table.previousArrivalEndAt} > ${table.previousArrivalStartAt})`,
@@ -11965,9 +12207,10 @@ export const partnerServiceTemplates = pgTable(
       .notNull()
       .references(() => partnerAccounts.id, { onDelete: "cascade" }),
     name: text("name").notNull(),
-    serviceKey: varchar("service_key", { length: 80 })
-      .notNull()
-      .references(() => partnerServiceCatalog.key, { onDelete: "restrict" }),
+    serviceKey: varchar("service_key", { length: 80 }).references(
+      () => partnerServiceCatalog.key,
+      { onDelete: "restrict" },
+    ),
     locationId: uuid("location_id").references(
       () => partnerAccountLocations.id,
       { onDelete: "set null" },
@@ -12029,11 +12272,19 @@ export const partnerRecurringSeries = pgTable(
       () => partnerServiceTemplates.id,
       { onDelete: "restrict" },
     ),
-    locationId: uuid("location_id").references(() => partnerAccountLocations.id, { onDelete: "restrict" }),
+    locationId: uuid("location_id").references(
+      () => partnerAccountLocations.id,
+      { onDelete: "restrict" },
+    ),
     name: text("name").notNull(),
     recurrenceRule: text("recurrence_rule").notNull(),
-    templateSnapshot: jsonb("template_snapshot").$type<Record<string, unknown> | null>(),
-    occurrencesExpandedAt: timestamp("occurrences_expanded_at", { withTimezone: true }),
+    templateSnapshot: jsonb("template_snapshot").$type<Record<
+      string,
+      unknown
+    > | null>(),
+    occurrencesExpandedAt: timestamp("occurrences_expanded_at", {
+      withTimezone: true,
+    }),
     timezone: text("timezone").default("America/New_York").notNull(),
     preferredWindowStart: varchar("preferred_window_start", { length: 5 }),
     startsOn: date("starts_on").notNull(),
@@ -12211,8 +12462,13 @@ export const partnerBulkImportRows = pgTable(
       string,
       unknown
     > | null>(),
-    rawData: jsonb("raw_data").$type<Record<string, string>>().notNull().default({}),
-    processingStartedAt: timestamp("processing_started_at", { withTimezone: true }),
+    rawData: jsonb("raw_data")
+      .$type<Record<string, string>>()
+      .notNull()
+      .default({}),
+    processingStartedAt: timestamp("processing_started_at", {
+      withTimezone: true,
+    }),
     processingAttempts: integer("processing_attempts").notNull().default(0),
     errors: jsonb("errors")
       .$type<Array<Record<string, unknown>>>()
@@ -12458,6 +12714,9 @@ export const partnerRateCardVersions = pgTable(
       .references(() => partnerAccounts.id, { onDelete: "restrict" }),
     version: integer("version").notNull(),
     currency: varchar("currency", { length: 3 }).default("USD").notNull(),
+    visitMinimumAmount: text("visit_minimum_amount"),
+    pricingModelVersion: integer("pricing_model_version").default(1).notNull(),
+    portalVisible: boolean("portal_visible").default(true).notNull(),
     status: text("status").default("draft").notNull(),
     effectiveFrom: timestamp("effective_from", {
       withTimezone: true,
@@ -12950,65 +13209,140 @@ export const partnerInvoices = pgTable(
 );
 
 /** Immutable credits reduce an invoice; refunds separately reverse a payment. */
-export const partnerInvoiceCredits = pgTable("partner_invoice_credits", {
-  id: uuid("id").defaultRandom().primaryKey(),
-  partnerAccountId: uuid("partner_account_id").notNull().references(() => partnerAccounts.id, { onDelete: "restrict" }),
-  partnerInvoiceId: uuid("partner_invoice_id").notNull().references(() => partnerInvoices.id, { onDelete: "restrict" }),
-  amountCents: integer("amount_cents").notNull(),
-  reason: text("reason").notNull(),
-  kind: text("kind").default("credit").notNull(),
-  createdBy: uuid("created_by").notNull().references(() => teamMembers.id, { onDelete: "restrict" }),
-  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
-}, (table) => ({
-  accountInvoiceFk: foreignKey({ name: "partner_invoice_credits_account_invoice_fk",
-    columns: [table.partnerAccountId, table.partnerInvoiceId],
-    foreignColumns: [partnerInvoices.partnerAccountId, partnerInvoices.id] }).onDelete("restrict"),
-  amountCheck: check("partner_invoice_credits_amount_check", sql`${table.amountCents} > 0`),
-}));
+export const partnerInvoiceCredits = pgTable(
+  "partner_invoice_credits",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    partnerAccountId: uuid("partner_account_id")
+      .notNull()
+      .references(() => partnerAccounts.id, { onDelete: "restrict" }),
+    partnerInvoiceId: uuid("partner_invoice_id")
+      .notNull()
+      .references(() => partnerInvoices.id, { onDelete: "restrict" }),
+    amountCents: integer("amount_cents").notNull(),
+    reason: text("reason").notNull(),
+    kind: text("kind").default("credit").notNull(),
+    createdBy: uuid("created_by")
+      .notNull()
+      .references(() => teamMembers.id, { onDelete: "restrict" }),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => ({
+    accountInvoiceFk: foreignKey({
+      name: "partner_invoice_credits_account_invoice_fk",
+      columns: [table.partnerAccountId, table.partnerInvoiceId],
+      foreignColumns: [partnerInvoices.partnerAccountId, partnerInvoices.id],
+    }).onDelete("restrict"),
+    amountCheck: check(
+      "partner_invoice_credits_amount_check",
+      sql`${table.amountCents} > 0`,
+    ),
+  }),
+);
 
-export const partnerBillingDocumentOperations = pgTable("partner_billing_document_operations", {
-  id: uuid("id").defaultRandom().primaryKey(),
-  partnerAccountId: uuid("partner_account_id").notNull().references(() => partnerAccounts.id, { onDelete: "restrict" }),
-  partnerBookingId: uuid("partner_booking_id").references(() => partnerBookings.id, { onDelete: "restrict" }),
-  partnerInvoiceId: uuid("partner_invoice_id").references(() => partnerInvoices.id, { onDelete: "restrict" }),
-  sourceKey: text("source_key").notNull(),
-  documentType: text("document_type").notNull(),
-  version: integer("version").notNull(),
-  snapshot: jsonb("snapshot").$type<Record<string, unknown>>().notNull(),
-  snapshotHash: varchar("snapshot_hash", { length: 64 }).notNull(),
-  status: text("status").default("pending").notNull(),
-  documentId: uuid("document_id").references(() => partnerDocuments.id, { onDelete: "restrict" }),
-  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
-  completedAt: timestamp("completed_at", { withTimezone: true }),
-}, (table) => ({
-  sourceSnapshotKey: uniqueIndex("partner_billing_documents_source_snapshot_key")
-    .on(table.partnerAccountId, table.documentType, table.sourceKey, table.snapshotHash),
-  invoiceAccountFk: foreignKey({ name: "partner_billing_documents_invoice_account_fk",
-    columns: [table.partnerAccountId, table.partnerInvoiceId], foreignColumns: [partnerInvoices.partnerAccountId, partnerInvoices.id] }).onDelete("restrict"),
-  jobAccountFk: foreignKey({ name: "partner_billing_documents_job_account_fk",
-    columns: [table.partnerAccountId, table.partnerBookingId], foreignColumns: [partnerBookings.partnerAccountId, partnerBookings.id] }).onDelete("restrict"),
-  statusCheck: check("partner_billing_documents_status_check", sql`${table.status} IN ('pending', 'ready')`),
-}));
+export const partnerBillingDocumentOperations = pgTable(
+  "partner_billing_document_operations",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    partnerAccountId: uuid("partner_account_id")
+      .notNull()
+      .references(() => partnerAccounts.id, { onDelete: "restrict" }),
+    partnerBookingId: uuid("partner_booking_id").references(
+      () => partnerBookings.id,
+      { onDelete: "restrict" },
+    ),
+    partnerInvoiceId: uuid("partner_invoice_id").references(
+      () => partnerInvoices.id,
+      { onDelete: "restrict" },
+    ),
+    sourceKey: text("source_key").notNull(),
+    documentType: text("document_type").notNull(),
+    version: integer("version").notNull(),
+    snapshot: jsonb("snapshot").$type<Record<string, unknown>>().notNull(),
+    snapshotHash: varchar("snapshot_hash", { length: 64 }).notNull(),
+    status: text("status").default("pending").notNull(),
+    documentId: uuid("document_id").references(() => partnerDocuments.id, {
+      onDelete: "restrict",
+    }),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+    completedAt: timestamp("completed_at", { withTimezone: true }),
+  },
+  (table) => ({
+    sourceSnapshotKey: uniqueIndex(
+      "partner_billing_documents_source_snapshot_key",
+    ).on(
+      table.partnerAccountId,
+      table.documentType,
+      table.sourceKey,
+      table.snapshotHash,
+    ),
+    invoiceAccountFk: foreignKey({
+      name: "partner_billing_documents_invoice_account_fk",
+      columns: [table.partnerAccountId, table.partnerInvoiceId],
+      foreignColumns: [partnerInvoices.partnerAccountId, partnerInvoices.id],
+    }).onDelete("restrict"),
+    jobAccountFk: foreignKey({
+      name: "partner_billing_documents_job_account_fk",
+      columns: [table.partnerAccountId, table.partnerBookingId],
+      foreignColumns: [partnerBookings.partnerAccountId, partnerBookings.id],
+    }).onDelete("restrict"),
+    statusCheck: check(
+      "partner_billing_documents_status_check",
+      sql`${table.status} IN ('pending', 'ready')`,
+    ),
+  }),
+);
 
-export const partnerBillingRefundRequests = pgTable("partner_billing_refund_requests", {
-  id: uuid("id").defaultRandom().primaryKey(),
-  partnerAccountId: uuid("partner_account_id").notNull().references(() => partnerAccounts.id, { onDelete: "restrict" }),
-  partnerInvoiceId: uuid("partner_invoice_id").notNull().references(() => partnerInvoices.id, { onDelete: "restrict" }),
-  paymentId: uuid("payment_id").notNull().references(() => payments.id, { onDelete: "restrict" }),
-  amountCents: integer("amount_cents").notNull(),
-  reason: text("reason").notNull(),
-  status: text("status").default("queued").notNull(),
-  providerRefundId: text("provider_refund_id"),
-  requestedBy: uuid("requested_by").notNull().references(() => teamMembers.id, { onDelete: "restrict" }),
-  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
-  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
-}, (table) => ({
-  providerRefundKey: uniqueIndex("partner_billing_refunds_provider_key").on(table.providerRefundId),
-  invoiceAccountFk: foreignKey({ name: "partner_billing_refunds_invoice_account_fk",
-    columns: [table.partnerAccountId, table.partnerInvoiceId], foreignColumns: [partnerInvoices.partnerAccountId, partnerInvoices.id] }).onDelete("restrict"),
-  amountCheck: check("partner_billing_refunds_amount_check", sql`${table.amountCents} > 0`),
-  statusCheck: check("partner_billing_refunds_status_check", sql`${table.status} IN ('queued', 'submitted', 'settled', 'failed', 'needs_review')`),
-}));
+export const partnerBillingRefundRequests = pgTable(
+  "partner_billing_refund_requests",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    partnerAccountId: uuid("partner_account_id")
+      .notNull()
+      .references(() => partnerAccounts.id, { onDelete: "restrict" }),
+    partnerInvoiceId: uuid("partner_invoice_id")
+      .notNull()
+      .references(() => partnerInvoices.id, { onDelete: "restrict" }),
+    paymentId: uuid("payment_id")
+      .notNull()
+      .references(() => payments.id, { onDelete: "restrict" }),
+    amountCents: integer("amount_cents").notNull(),
+    reason: text("reason").notNull(),
+    status: text("status").default("queued").notNull(),
+    providerRefundId: text("provider_refund_id"),
+    requestedBy: uuid("requested_by")
+      .notNull()
+      .references(() => teamMembers.id, { onDelete: "restrict" }),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => ({
+    providerRefundKey: uniqueIndex("partner_billing_refunds_provider_key").on(
+      table.providerRefundId,
+    ),
+    invoiceAccountFk: foreignKey({
+      name: "partner_billing_refunds_invoice_account_fk",
+      columns: [table.partnerAccountId, table.partnerInvoiceId],
+      foreignColumns: [partnerInvoices.partnerAccountId, partnerInvoices.id],
+    }).onDelete("restrict"),
+    amountCheck: check(
+      "partner_billing_refunds_amount_check",
+      sql`${table.amountCents} > 0`,
+    ),
+    statusCheck: check(
+      "partner_billing_refunds_status_check",
+      sql`${table.status} IN ('queued', 'submitted', 'settled', 'failed', 'needs_review')`,
+    ),
+  }),
+);
 
 export type PartnerBillingDisputeCategory =
   | "invoice_amount"
@@ -13290,37 +13624,92 @@ export const partnerPaymentAllocations = pgTable(
   }),
 );
 
-export const partnerAllocationReconciliations = pgTable("partner_allocation_reconciliations", {
-  id: uuid("id").defaultRandom().primaryKey(),
-  partnerAccountId: uuid("partner_account_id").notNull().references(() => partnerAccounts.id, { onDelete: "restrict" }),
-  partnerBookingId: uuid("partner_booking_id").notNull().references(() => partnerBookings.id, { onDelete: "restrict" }),
-  paymentId: uuid("payment_id").notNull().references(() => payments.id, { onDelete: "restrict" }),
-  actorId: uuid("actor_id").notNull().references(() => teamMembers.id, { onDelete: "restrict" }),
-  reason: text("reason").notNull(),
-  evidenceReference: text("evidence_reference").notNull(),
-  beforeSnapshot: jsonb("before_snapshot").$type<Record<string, unknown>>().notNull(),
-  afterSnapshot: jsonb("after_snapshot").$type<Record<string, unknown>>().notNull(),
-  correlationId: text("correlation_id").notNull(),
-  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
-}, (table) => ({
-  jobIdx: index("partner_allocation_reconciliations_job_idx").on(table.partnerAccountId, table.partnerBookingId, table.createdAt, table.id),
-  reasonCheck: check("partner_allocation_reconciliations_reason_check", sql`length(btrim(${table.reason})) BETWEEN 12 AND 2000`),
-  evidenceCheck: check("partner_allocation_reconciliations_evidence_check", sql`length(btrim(${table.evidenceReference})) BETWEEN 3 AND 500`),
-  beforeCheck: check("partner_allocation_reconciliations_before_check", sql`jsonb_typeof(${table.beforeSnapshot}) = 'object'`),
-  afterCheck: check("partner_allocation_reconciliations_after_check", sql`jsonb_typeof(${table.afterSnapshot}) = 'object'`),
-}));
+export const partnerAllocationReconciliations = pgTable(
+  "partner_allocation_reconciliations",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    partnerAccountId: uuid("partner_account_id")
+      .notNull()
+      .references(() => partnerAccounts.id, { onDelete: "restrict" }),
+    partnerBookingId: uuid("partner_booking_id")
+      .notNull()
+      .references(() => partnerBookings.id, { onDelete: "restrict" }),
+    paymentId: uuid("payment_id")
+      .notNull()
+      .references(() => payments.id, { onDelete: "restrict" }),
+    actorId: uuid("actor_id")
+      .notNull()
+      .references(() => teamMembers.id, { onDelete: "restrict" }),
+    reason: text("reason").notNull(),
+    evidenceReference: text("evidence_reference").notNull(),
+    beforeSnapshot: jsonb("before_snapshot")
+      .$type<Record<string, unknown>>()
+      .notNull(),
+    afterSnapshot: jsonb("after_snapshot")
+      .$type<Record<string, unknown>>()
+      .notNull(),
+    correlationId: text("correlation_id").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => ({
+    jobIdx: index("partner_allocation_reconciliations_job_idx").on(
+      table.partnerAccountId,
+      table.partnerBookingId,
+      table.createdAt,
+      table.id,
+    ),
+    reasonCheck: check(
+      "partner_allocation_reconciliations_reason_check",
+      sql`length(btrim(${table.reason})) BETWEEN 12 AND 2000`,
+    ),
+    evidenceCheck: check(
+      "partner_allocation_reconciliations_evidence_check",
+      sql`length(btrim(${table.evidenceReference})) BETWEEN 3 AND 500`,
+    ),
+    beforeCheck: check(
+      "partner_allocation_reconciliations_before_check",
+      sql`jsonb_typeof(${table.beforeSnapshot}) = 'object'`,
+    ),
+    afterCheck: check(
+      "partner_allocation_reconciliations_after_check",
+      sql`jsonb_typeof(${table.afterSnapshot}) = 'object'`,
+    ),
+  }),
+);
 
-export const partnerRefundAllocations = pgTable("partner_refund_allocations", {
-  id: uuid("id").defaultRandom().primaryKey(),
-  partnerAccountId: uuid("partner_account_id").notNull().references(() => partnerAccounts.id, { onDelete: "restrict" }),
-  partnerInvoiceId: uuid("partner_invoice_id").notNull().references(() => partnerInvoices.id, { onDelete: "restrict" }),
-  refundId: uuid("refund_id").notNull().references(() => paymentRefunds.id, { onDelete: "restrict" }),
-  jobAmountCents: integer("job_amount_cents").notNull(),
-  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
-}, (table) => ({ invoiceRefundKey: uniqueIndex("partner_refund_allocations_invoice_refund_key").on(table.partnerInvoiceId, table.refundId),
-  amountCheck: check("partner_refund_allocations_amount_check", sql`${table.jobAmountCents} >= 0`),
-  refundIdx: index("partner_refund_allocations_refund_idx").on(table.refundId),
-}));
+export const partnerRefundAllocations = pgTable(
+  "partner_refund_allocations",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    partnerAccountId: uuid("partner_account_id")
+      .notNull()
+      .references(() => partnerAccounts.id, { onDelete: "restrict" }),
+    partnerInvoiceId: uuid("partner_invoice_id")
+      .notNull()
+      .references(() => partnerInvoices.id, { onDelete: "restrict" }),
+    refundId: uuid("refund_id")
+      .notNull()
+      .references(() => paymentRefunds.id, { onDelete: "restrict" }),
+    jobAmountCents: integer("job_amount_cents").notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => ({
+    invoiceRefundKey: uniqueIndex(
+      "partner_refund_allocations_invoice_refund_key",
+    ).on(table.partnerInvoiceId, table.refundId),
+    amountCheck: check(
+      "partner_refund_allocations_amount_check",
+      sql`${table.jobAmountCents} >= 0`,
+    ),
+    refundIdx: index("partner_refund_allocations_refund_idx").on(
+      table.refundId,
+    ),
+  }),
+);
 
 export const partnerStatements = pgTable(
   "partner_statements",
@@ -14803,6 +15192,10 @@ export const partnerOwnerAlertSettings = pgTable(
 export const partnerOwnerAlertGroups = pgTable(
   "partner_owner_alert_groups",
   {
+    stage: text("stage")
+      .$type<"pricing_review" | "ready_to_schedule">()
+      .default("ready_to_schedule")
+      .notNull(),
     id: uuid("id").primaryKey().defaultRandom(),
     partnerAccountId: uuid("partner_account_id")
       .notNull()
@@ -14831,6 +15224,12 @@ export const partnerOwnerAlertGroups = pgTable(
       t.ownerTeamMemberId,
       t.createdAt,
     ),
+    stageKey: uniqueIndex("partner_owner_alert_groups_stage_key").on(
+      t.partnerAccountId,
+      t.id,
+      t.ownerTeamMemberId,
+      t.stage,
+    ),
     countCheck: check(
       "partner_owner_alert_groups_count",
       sql`${t.memberCount} > 0`,
@@ -14841,6 +15240,10 @@ export const partnerOwnerAlertGroups = pgTable(
 export const partnerOwnerAlertMembers = pgTable(
   "partner_owner_alert_members",
   {
+    stage: text("stage")
+      .$type<"pricing_review" | "ready_to_schedule">()
+      .default("ready_to_schedule")
+      .notNull(),
     groupId: uuid("group_id").notNull(),
     partnerAccountId: uuid("partner_account_id").notNull(),
     partnerBookingId: uuid("partner_booking_id").notNull(),
@@ -14852,7 +15255,18 @@ export const partnerOwnerAlertMembers = pgTable(
     ownerJobKey: uniqueIndex("partner_owner_alert_members_job_owner_key").on(
       t.partnerBookingId,
       t.ownerTeamMemberId,
+      t.stage,
     ),
+    stageFk: foreignKey({
+      name: "partner_owner_alert_members_stage_fk",
+      columns: [t.partnerAccountId, t.groupId, t.ownerTeamMemberId, t.stage],
+      foreignColumns: [
+        partnerOwnerAlertGroups.partnerAccountId,
+        partnerOwnerAlertGroups.id,
+        partnerOwnerAlertGroups.ownerTeamMemberId,
+        partnerOwnerAlertGroups.stage,
+      ],
+    }).onDelete("cascade"),
     groupFk: foreignKey({
       name: "partner_owner_alert_members_group_fk",
       columns: [t.partnerAccountId, t.groupId, t.ownerTeamMemberId],
@@ -14873,6 +15287,10 @@ export const partnerOwnerAlertMembers = pgTable(
 export const partnerOwnerRequestOpens = pgTable(
   "partner_owner_request_opens",
   {
+    stage: text("stage")
+      .$type<"pricing_review" | "ready_to_schedule">()
+      .default("ready_to_schedule")
+      .notNull(),
     partnerAccountId: uuid("partner_account_id").notNull(),
     partnerBookingId: uuid("partner_booking_id").notNull(),
     ownerTeamMemberId: uuid("owner_team_member_id")
@@ -14884,7 +15302,7 @@ export const partnerOwnerRequestOpens = pgTable(
   },
   (table) => ({
     key: primaryKey({
-      columns: [table.partnerBookingId, table.ownerTeamMemberId],
+      columns: [table.partnerBookingId, table.ownerTeamMemberId, table.stage],
     }),
     bookingFk: foreignKey({
       name: "partner_owner_request_opens_booking_fk",

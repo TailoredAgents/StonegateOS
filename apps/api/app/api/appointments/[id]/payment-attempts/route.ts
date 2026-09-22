@@ -1,3 +1,4 @@
+import { assertAppointmentHasIndependentFinancials } from "@/lib/partner-request-financials";
 import crypto from "node:crypto";
 import type { ActionPolicy, MutationResult } from "@myst-os/sdk";
 import type { NextRequest } from "next/server";
@@ -239,6 +240,7 @@ export async function POST(
     claim = claimed.claim;
 
     const outcome = await database.transaction(async (tx) => {
+      await assertAppointmentHasIndependentFinancials(tx, appointmentId);
       await tx.execute(
         sql`select pg_advisory_xact_lock(hashtext('appointment_payment_collection'), hashtext(${appointmentId}))`,
       );
@@ -293,10 +295,25 @@ export async function POST(
         );
       }
       const currentVersion = appointment.updatedAt.toISOString();
-      if (appointment.partnerAccountId && await hasUnretiredPartnerHostedInvoice(tx, appointmentId)) {
-        return completeAppointmentPaymentFailure(tx, mutation, claimed.claim, appointmentId, {
-          ok: false, code: "conflict", message: "This partner invoice has an older online collection channel. Verify its retirement and reconcile any payments before collecting another payment.", retryable: false,
-        }, 409, { reason: "partner_hosted_collection_unretired" });
+      if (
+        appointment.partnerAccountId &&
+        (await hasUnretiredPartnerHostedInvoice(tx, appointmentId))
+      ) {
+        return completeAppointmentPaymentFailure(
+          tx,
+          mutation,
+          claimed.claim,
+          appointmentId,
+          {
+            ok: false,
+            code: "conflict",
+            message:
+              "This partner invoice has an older online collection channel. Verify its retirement and reconcile any payments before collecting another payment.",
+            retryable: false,
+          },
+          409,
+          { reason: "partner_hosted_collection_unretired" },
+        );
       }
       if (currentVersion !== expectedVersion) {
         return completeAppointmentPaymentFailure(

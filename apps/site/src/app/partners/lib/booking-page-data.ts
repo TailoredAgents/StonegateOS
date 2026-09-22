@@ -4,6 +4,10 @@ import type {
   PartnerLocation,
 } from "./portal-v2";
 import { z } from "zod";
+import {
+  PartnerServiceLinesInputSchema,
+  PartnerServiceRateSchema,
+} from "@myst-os/pricing";
 import { isPartnerLocation, toBookingLocation } from "./booking-location";
 import type {
   BookingWizardAddOn,
@@ -38,6 +42,8 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 const nullableText = z.string().nullable();
 const date = z.string().refine((value) => Number.isFinite(Date.parse(value)));
 const draftSchema = z.object({
+  modelVersion: z.union([z.literal(1), z.literal(2)]).optional(),
+  serviceLines: PartnerServiceLinesInputSchema.optional(),
   id: z.string().min(1),
   rescheduleFromJobId: nullableText,
   additionalServiceFromJobId: nullableText,
@@ -69,9 +75,31 @@ const draftSchema = z.object({
 
 export function parseBookingDraft(payload: unknown): PartnerDraft | null {
   if (!isRecord(payload) || payload["ok"] !== true) return null;
-  return draftSchema.safeParse(payload["draft"]).success
-    ? (payload["draft"] as PartnerDraft)
-    : null;
+  const parsed = draftSchema.safeParse(payload["draft"]);
+  if (!parsed.success) return null;
+  const draft = parsed.data;
+  if (draft.modelVersion === 2) {
+    if (
+      !draft.serviceLines ||
+      draft.serviceKey !== null ||
+      draft.tierKey !== null ||
+      draft.selectedAddOns.length
+    )
+      return null;
+    if (
+      new Set(draft.serviceLines.map((line) => line.id)).size !==
+        draft.serviceLines.length ||
+      new Set(draft.serviceLines.map((line) => line.serviceKey)).size !==
+        draft.serviceLines.length
+    )
+      return null;
+  } else if (draft.serviceLines?.length) return null;
+  return draft.modelVersion === 2
+    ? {
+        ...(payload["draft"] as PartnerDraft),
+        serviceLines: draft.serviceLines,
+      }
+    : (payload["draft"] as PartnerDraft);
 }
 
 export function parseBookingDrafts(
@@ -161,7 +189,17 @@ export function parseBookingAvailability(
 ): PartnerAvailability | null {
   if (!isRecord(payload) || payload["ok"] !== true) return null;
   const result = availabilitySchema.safeParse(payload["availability"]);
-  return result.success ? result.data : null;
+  if (!result.success) return null;
+  const availability = result.data;
+  if (!parseBookingDraft({ ok: true, draft: availability.draft })) return null;
+  if (
+    availability.draft.modelVersion === 2 &&
+    (availability.instantConfirmationEligible ||
+      availability.windows.length ||
+      availability.pricing.total !== null)
+  )
+    return null;
+  return availability;
 }
 
 export function parseBookingValidation(payload: unknown): {
@@ -431,6 +469,61 @@ export function parseCatalogServices(
   return [...services.values()].sort((left, right) =>
     left.label.localeCompare(right.label),
   );
+}
+
+const structuredRatesSchema = z.object({
+  versionId: z.string().uuid(),
+  currency: z.string().regex(/^[A-Z]{3}$/u),
+  visitMinimum: z
+    .string()
+    .regex(/^(?:0|[1-9]\d{0,7})(?:\.\d{1,4})?$/u)
+    .nullable(),
+  rates: z.array(PartnerServiceRateSchema).max(100),
+  legacyItems: z
+    .array(
+      z.object({
+        id: z.string().uuid(),
+        serviceKey: z.string(),
+        tierKey: z.string(),
+        label: z.string().nullable(),
+        amountCents: z.number().int().nonnegative(),
+      }),
+    )
+    .max(100)
+    .optional(),
+});
+export type BookingStructuredRates = z.infer<typeof structuredRatesSchema>;
+export type BookingStructuredRatesStatus = "published" | "missing" | "hidden";
+
+/** A missing capability keeps existing clients on the original draft contract. */
+export function parseBookingCatalog(payload: unknown): {
+  services: BookingWizardService[];
+  multiServiceRequestsEnabled: boolean;
+  structuredRates: BookingStructuredRates | null;
+  structuredRatesStatus: BookingStructuredRatesStatus;
+} | null {
+  const services = parseCatalogServices(payload);
+  if (!services || !isRecord(payload)) return null;
+  if (
+    payload["requestModelVersion"] !== undefined &&
+    payload["requestModelVersion"] !== 1 &&
+    payload["requestModelVersion"] !== 2
+  )
+    return null;
+  const status = payload["structuredRatesStatus"] ?? "missing";
+  if (status !== "published" && status !== "missing" && status !== "hidden")
+    return null;
+  const rawRates = payload["structuredRates"];
+  const rates =
+    rawRates == null ? null : structuredRatesSchema.safeParse(rawRates);
+  if (rates && !rates.success) return null;
+  if ((status === "published") !== Boolean(rates?.success)) return null;
+  return {
+    services,
+    multiServiceRequestsEnabled: payload["requestModelVersion"] === 2,
+    structuredRates: rates?.success ? rates.data : null,
+    structuredRatesStatus: status,
+  };
 }
 
 export function parseProofDefaults(payload: unknown): {

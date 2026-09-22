@@ -698,7 +698,7 @@ function NotificationPreferences({
             </div>
 
             <div
-              className="relative mt-5 overflow-x-auto rounded-xl border border-slate-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-500 focus-visible:ring-offset-2"
+              className="relative mt-5 max-w-full overflow-x-auto rounded-xl border border-slate-200 [contain:paint] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-500 focus-visible:ring-offset-2"
               role="region"
               aria-label="Notification delivery channels"
               tabIndex={0}

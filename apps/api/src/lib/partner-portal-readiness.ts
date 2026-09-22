@@ -24,6 +24,34 @@ export function inspectPartnerPortalReadiness(
   const writeFlag = flag(environment, "PARTNER_PORTAL_V2_WRITES_ENABLED");
   const reads = readFlag ?? !production;
   const writes = reads && (writeFlag ?? !production);
+  const multiService = flag(
+    environment,
+    "PARTNER_MULTI_SERVICE_REQUESTS_ENABLED",
+  );
+  if (
+    environment["PARTNER_MULTI_SERVICE_REQUESTS_ENABLED"]?.trim() &&
+    multiService === null
+  )
+    issues.push("PARTNER_MULTI_SERVICE_REQUESTS_ENABLED");
+  const cohort = environment["PARTNER_MULTI_SERVICE_ACCOUNT_IDS"]?.trim();
+  if (
+    cohort &&
+    cohort
+      .split(",")
+      .some(
+        (id) =>
+          !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu.test(
+            id.trim(),
+          ),
+      )
+  )
+    issues.push("PARTNER_MULTI_SERVICE_ACCOUNT_IDS");
+  if (
+    production &&
+    multiService &&
+    flag(environment, "PARTNER_PORTAL_INSTANT_CONFIRMATION_ENABLED") !== false
+  )
+    issues.push("PARTNER_PORTAL_INSTANT_CONFIRMATION_ENABLED");
   if (production) {
     for (const name of [
       "PARTNER_PORTAL_V2_READS_ENABLED",

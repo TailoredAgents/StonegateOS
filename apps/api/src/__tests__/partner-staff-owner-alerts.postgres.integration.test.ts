@@ -117,6 +117,7 @@ async function job(
     createdAt?: Date;
     bulkId?: string;
     row?: number;
+    modelVersion?: 1 | 2;
   } = {},
 ) {
   const id = randomUUID(),
@@ -130,18 +131,20 @@ async function job(
       state: "submitted",
       submittedAt: NOW,
     });
-    await tx.insert(appointments).values({
-      id: appointmentId,
-      contactId: f.contactId,
-      propertyId: f.propertyId,
-      partnerAccountId: f.accountId,
-      type: "job",
-      status: "requested",
-      rescheduleToken: randomUUID(),
-    });
+    if (input.modelVersion !== 2)
+      await tx.insert(appointments).values({
+        id: appointmentId,
+        contactId: f.contactId,
+        propertyId: f.propertyId,
+        partnerAccountId: f.accountId,
+        type: "job",
+        status: "requested",
+        rescheduleToken: randomUUID(),
+      });
     await tx.insert(partnerBookings).values({
       id,
-      appointmentId,
+      appointmentId: input.modelVersion === 2 ? null : appointmentId,
+      modelVersion: input.modelVersion ?? 1,
       bookingDraftId: draftId,
       orgContactId: f.contactId,
       propertyId: f.propertyId,
@@ -422,19 +425,17 @@ suite("durable owner service-request alerts in PostgreSQL", () => {
     );
     expect(await groups(f)).toHaveLength(0);
     const alreadyApproved = await job(f, { createdAt: later(-60_000) });
-    await db
-      .insert(partnerApprovalRequests)
-      .values({
-        partnerAccountId: f.accountId,
-        partnerBookingId: alreadyApproved.id,
-        requestedByMembershipId: f.membershipId,
-        state: "approved_needs_reschedule",
-        ruleSnapshot: [],
-        requestSnapshot: {},
-        requiredDecisionCount: 1,
-        resolvedAt: later(-1000),
-        updatedAt: later(-1000),
-      });
+    await db.insert(partnerApprovalRequests).values({
+      partnerAccountId: f.accountId,
+      partnerBookingId: alreadyApproved.id,
+      requestedByMembershipId: f.membershipId,
+      state: "approved_needs_reschedule",
+      ruleSnapshot: [],
+      requestSnapshot: {},
+      requiredDecisionCount: 1,
+      resolvedAt: later(-1000),
+      updatedAt: later(-1000),
+    });
     await evaluateOwnerAlert(
       { accountId: f.accountId, bookingId: alreadyApproved.id },
       later(10),
@@ -493,6 +494,147 @@ suite("durable owner service-request alerts in PostgreSQL", () => {
         .from(staffNotificationOperations)
         .where(eq(staffNotificationOperations.subjectId, g!.id)),
     ).toHaveLength(1);
+  });
+  it("keeps pricing and approval-ready alerts separate, including opens and reminders", async () => {
+    const f = await fixture(),
+      j = await job(f, { modelVersion: 2, status: "approval_needed" });
+    await Promise.all(
+      Array.from({ length: 3 }, () =>
+        evaluateOwnerAlert(
+          { accountId: f.accountId, bookingId: j.id },
+          later(10),
+        ),
+      ),
+    );
+    const [pricing] = await groups(f);
+    expect(pricing?.stage).toBe("pricing_review");
+    const initial = await operation(pricing!.id);
+    expect(initial.body).toContain("needs pricing");
+    await accept(initial.id, later(20));
+    await db.transaction((tx) =>
+      markOwnerAlertOpened(tx, { ownerId, bookingId: j.id, now: later(30) }),
+    );
+    await db
+      .update(partnerBookings)
+      .set({ quotedTotalCents: 42000 })
+      .where(eq(partnerBookings.id, j.id));
+    await evaluateOwnerAlert(
+      { accountId: f.accountId, bookingId: j.id },
+      later(40),
+    );
+    expect(await groups(f)).toHaveLength(1);
+    await db.insert(partnerApprovalRequests).values({
+      partnerAccountId: f.accountId,
+      partnerBookingId: j.id,
+      requestedByMembershipId: f.membershipId,
+      state: "approved_needs_reschedule",
+      ruleSnapshot: [],
+      requestSnapshot: {},
+      requiredDecisionCount: 1,
+      resolvedAt: later(50),
+      updatedAt: later(50),
+    });
+    await db
+      .update(partnerBookings)
+      .set({ publicStatus: "under_review", confirmationMode: "review" })
+      .where(eq(partnerBookings.id, j.id));
+    await Promise.all(
+      Array.from({ length: 3 }, () =>
+        evaluateOwnerAlert(
+          { accountId: f.accountId, bookingId: j.id },
+          later(60),
+        ),
+      ),
+    );
+    const waves = await groups(f);
+    expect(waves).toHaveLength(2);
+    const ready = waves.find((group) => group.stage === "ready_to_schedule")!;
+    expect(ready.openedAt).toBeNull();
+    await expect(
+      db
+        .update(partnerOwnerAlertGroups)
+        .set({ stage: "pricing_review" })
+        .where(eq(partnerOwnerAlertGroups.id, ready.id)),
+    ).rejects.toThrow();
+    // Following the earlier pricing link does not acknowledge a later approval-ready alert.
+    await db.transaction((tx) =>
+      markOwnerAlertOpened(tx, {
+        ownerId,
+        groupId: pricing!.id,
+        now: later(70),
+      }),
+    );
+    expect(
+      (await groups(f)).find((group) => group.id === ready.id)?.openedAt,
+    ).toBeNull();
+    await accept((await operation(ready.id)).id, later(80));
+    await processOwnerAlertReminder(
+      { groupId: pricing!.id },
+      later(OWNER_ALERT_REMINDER_MS + 90),
+    );
+    expect(
+      await db
+        .select()
+        .from(staffNotificationOperations)
+        .where(eq(staffNotificationOperations.subjectId, pricing!.id)),
+    ).toHaveLength(1);
+    await Promise.all(
+      Array.from({ length: 3 }, () =>
+        processOwnerAlertReminder(
+          { groupId: ready.id },
+          later(OWNER_ALERT_REMINDER_MS + 90),
+        ),
+      ),
+    );
+    expect(
+      await db
+        .select()
+        .from(staffNotificationOperations)
+        .where(eq(staffNotificationOperations.subjectId, ready.id)),
+    ).toHaveLength(2);
+    await db.transaction((tx) =>
+      markOwnerAlertOpened(tx, {
+        ownerId,
+        bookingId: j.id,
+        now: later(OWNER_ALERT_REMINDER_MS + 100),
+      }),
+    );
+    const reminder = await operation(ready.id, "partner_request_reminder");
+    const decision = await db.transaction((tx) =>
+      prepareStaffNotificationDispatch(tx, {
+        operationId: reminder.id,
+        outboxEventId: randomUUID(),
+        now: later(OWNER_ALERT_REMINDER_MS + 110),
+      }),
+    );
+    expect(decision.kind).not.toBe("dispatch");
+  });
+  it("suppresses a queued pricing text once pricing is complete without sending an unnecessary second alert", async () => {
+    const f = await fixture(),
+      j = await job(f, { modelVersion: 2 });
+    await evaluateOwnerAlert(
+      { accountId: f.accountId, bookingId: j.id },
+      later(10),
+    );
+    const [pricing] = await groups(f);
+    const initial = await operation(pricing!.id);
+    await db
+      .update(partnerBookings)
+      .set({ quotedTotalCents: 25000 })
+      .where(eq(partnerBookings.id, j.id));
+    const decision = await db.transaction((tx) =>
+      prepareStaffNotificationDispatch(tx, {
+        operationId: initial.id,
+        outboxEventId: randomUUID(),
+        now: later(20),
+      }),
+    );
+    expect(decision.kind).not.toBe("dispatch");
+    await evaluateOwnerAlert(
+      { accountId: f.accountId, bookingId: j.id },
+      later(30),
+    );
+    expect(await groups(f)).toHaveLength(1);
   });
   it("creates a single group under duplicate concurrent wakeups, with a real generic subject", async () => {
     const f = await fixture(),

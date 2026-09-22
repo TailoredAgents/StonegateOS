@@ -1,3 +1,4 @@
+import { getPartnerServiceDefinition } from "@myst-os/pricing";
 import type { Metadata, Route } from "next";
 import Link from "next/link";
 import {
@@ -211,7 +212,15 @@ export default async function PartnerApprovalDetailPage({
   const approval = result.value;
   const etag = result.response.headers.get("etag") ?? approval.etag;
   const request = approval.request;
-  const service = request.serviceKey ?? request.serviceType ?? null;
+  const service = request.serviceKeys?.length
+    ? request.serviceKeys
+        .map(
+          (key) =>
+            getPartnerServiceDefinition(key)?.label ??
+            humanizeApprovalValue(key),
+        )
+        .join(", ")
+    : (request.serviceKey ?? request.serviceType ?? null);
   const address = addressLabel(approval);
   const approvedRemaining = Math.max(
     0,
@@ -575,6 +584,7 @@ export default async function PartnerApprovalDetailPage({
           initialCurrentMemberDecision={approval.currentMemberDecision}
           expiresAt={approval.expiresAt}
           rulesValid={approval.rulesValid && approval.rules.length > 0}
+          multiServiceRequest={request.modelVersion === 2}
         />
       ) : null}
     </div>

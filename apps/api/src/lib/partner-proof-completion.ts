@@ -64,7 +64,7 @@ function snapshotMinimum(
  */
 export async function evaluatePartnerProofCompletion(
   tx: TeamMutationTransaction,
-  appointmentId: string,
+  appointmentId: string | { accountId: string; bookingId: string },
 ): Promise<PartnerProofCompletionDecision> {
   const [booking] = await tx
     .select({
@@ -73,7 +73,14 @@ export async function evaluatePartnerProofCompletion(
       proofRequirementsSnapshot: partnerBookings.proofRequirementsSnapshot,
     })
     .from(partnerBookings)
-    .where(eq(partnerBookings.appointmentId, appointmentId))
+    .where(
+      typeof appointmentId === "string"
+        ? eq(partnerBookings.appointmentId, appointmentId)
+        : and(
+            eq(partnerBookings.id, appointmentId.bookingId),
+            eq(partnerBookings.partnerAccountId, appointmentId.accountId),
+          ),
+    )
     .for("update")
     .limit(1);
 
@@ -138,10 +145,7 @@ export async function evaluatePartnerProofCompletion(
   const evidence = await tx
     .select({ category: partnerJobEvidence.category })
     .from(partnerJobEvidence)
-    .innerJoin(
-      mediaAssets,
-      eq(partnerJobEvidence.mediaAssetId, mediaAssets.id),
-    )
+    .innerJoin(mediaAssets, eq(partnerJobEvidence.mediaAssetId, mediaAssets.id))
     .where(
       and(
         eq(partnerJobEvidence.partnerAccountId, booking.partnerAccountId),

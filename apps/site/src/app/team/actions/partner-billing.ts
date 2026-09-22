@@ -1,4 +1,8 @@
 "use server";
+import {
+  parsePartnerQuoteServiceSeeds,
+  type PartnerQuoteServiceSeed,
+} from "../lib/quote-v2-composer-model";
 import { revalidatePath } from "next/cache";
 import {
   hasTeamPermission,
@@ -19,6 +23,7 @@ export type BillingLine = {
 export type BillingInvoice = {
   id: string;
   jobId: string | null;
+  requestModelVersion?: number | null;
   number: string;
   currency: string;
   status: string;
@@ -66,7 +71,10 @@ export type BillingHistoryItem = {
   id: string;
   createdAt: string;
   status: string;
-} & ({ kind: string; documentId: string | null } | { paymentId: string; amountCents: number });
+} & (
+  | { kind: string; documentId: string | null }
+  | { paymentId: string; amountCents: number }
+);
 export type BillingHistoryPage = {
   accountId: string;
   invoiceId: string;
@@ -84,6 +92,7 @@ export type BillingAdministrationData = {
     arrivalAt: string | null;
     reference: string | null;
     totalCents: number | null;
+    serviceLines?: PartnerQuoteServiceSeed[];
   }[];
   statements: {
     id: string;
@@ -105,31 +114,61 @@ export async function loadPartnerBillingHistory(
   invoiceId: string,
   kind: BillingHistoryKind,
   cursor?: string,
-): Promise<{ ok: true; data: BillingHistoryPage } | { ok: false; message: string }> {
+): Promise<
+  { ok: true; data: BillingHistoryPage } | { ok: false; message: string }
+> {
   const principal = await requireCurrentTeamPrincipal();
-  if (!UUID.test(accountId) || !UUID.test(invoiceId) || !["documents", "refunds"].includes(kind) ||
-      !hasTeamPermission(principal, "partners.commercial.read") ||
-      (cursor !== undefined && (cursor.length > 2048 || !/^[A-Za-z0-9_-]+$/u.test(cursor))))
+  if (
+    !UUID.test(accountId) ||
+    !UUID.test(invoiceId) ||
+    !["documents", "refunds"].includes(kind) ||
+    !hasTeamPermission(principal, "partners.commercial.read") ||
+    (cursor !== undefined &&
+      (cursor.length > 2048 || !/^[A-Za-z0-9_-]+$/u.test(cursor)))
+  )
     return { ok: false, message: "Choose an invoice you can view." };
   try {
     const query = new URLSearchParams({ kind });
     if (cursor) query.set("cursor", cursor);
-    const response = await callAdminApiAs(principal,
+    const response = await callAdminApiAs(
+      principal,
       `/api/admin/partner-management/v1/accounts/${accountId}/billing/invoices/${invoiceId}/history?${query}`,
-      { timeoutMs: 15_000 });
-    const payload = response.ok ? await response.json() as BillingHistoryPage & { ok?: boolean } : null;
-    if (!payload?.ok || payload.accountId !== accountId || payload.invoiceId !== invoiceId || payload.kind !== kind ||
-        !Array.isArray(payload.items) || payload.items.length > 100 ||
-        !(payload.nextCursor === null || typeof payload.nextCursor === "string"))
-      return { ok: false, message: "History could not be loaded. Retry, or refresh the history to start again." };
+      { timeoutMs: 15_000 },
+    );
+    const payload = response.ok
+      ? ((await response.json()) as BillingHistoryPage & { ok?: boolean })
+      : null;
+    if (
+      !payload?.ok ||
+      payload.accountId !== accountId ||
+      payload.invoiceId !== invoiceId ||
+      payload.kind !== kind ||
+      !Array.isArray(payload.items) ||
+      payload.items.length > 100 ||
+      !(payload.nextCursor === null || typeof payload.nextCursor === "string")
+    )
+      return {
+        ok: false,
+        message:
+          "History could not be loaded. Retry, or refresh the history to start again.",
+      };
     return { ok: true, data: payload };
   } catch {
-    return { ok: false, message: "History could not be loaded. Your current records are unchanged; try again." };
+    return {
+      ok: false,
+      message:
+        "History could not be loaded. Your current records are unchanged; try again.",
+    };
   }
 }
 export async function loadPartnerBillingAdministration(
   accountId: string,
-  options: { cursor?: string; jobCursor?: string; statementCursor?: string; invoiceId?: string } = {},
+  options: {
+    cursor?: string;
+    jobCursor?: string;
+    statementCursor?: string;
+    invoiceId?: string;
+  } = {},
 ): Promise<
   { ok: true; data: BillingAdministrationData } | { ok: false; message: string }
 > {
@@ -158,7 +197,12 @@ export async function loadPartnerBillingAdministration(
       !payload?.ok ||
       payload.account?.id !== accountId ||
       !Array.isArray(payload.invoices) ||
-      !Array.isArray(payload.jobs)
+      !Array.isArray(payload.jobs) ||
+      payload.jobs.some(
+        (job) =>
+          job.serviceLines !== undefined &&
+          !parsePartnerQuoteServiceSeeds(job.serviceLines),
+      )
     )
       return { ok: false, message: "Billing could not be loaded. Try again." };
     return { ok: true, data: payload };
@@ -183,6 +227,14 @@ export async function savePartnerBillingCommand(
       ok: false,
       message: "Your role cannot change this company's billing.",
     };
+  if (
+    command &&
+    typeof command === "object" &&
+    "action" in command &&
+    command.action === "record_manual_payment" &&
+    !hasTeamPermission(principal, "payments.collect")
+  )
+    return { ok: false, message: "Your role cannot record received payments." };
   let body: string;
   try {
     body = JSON.stringify(command);

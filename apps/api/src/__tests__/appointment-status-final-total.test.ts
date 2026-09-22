@@ -45,6 +45,10 @@ const mockAppointmentCrewMembersTable = {
   fixedJobRateBps: "appointment_crew_members.fixed_job_rate_bps",
 };
 const mockLeadsTable = { id: "leads.id", status: "leads.status" };
+const mockPartnerBookingVisitsTable = {
+  appointmentId: "partner_booking_visits.appointment_id",
+  partnerBookingId: "partner_booking_visits.partner_booking_id",
+};
 const mockOutboxEventsTable = { name: "outbox_events" };
 const mockAuditLogsTable = { name: "audit_logs" };
 const mockTeamMembersTable = {
@@ -87,6 +91,7 @@ let getDbCount: number;
 let failIdempotencyCompletion: boolean;
 let transactionOrder: string[];
 let activeTeamMemberIds: Set<string>;
+let belongsToPartnerVisit: boolean;
 
 const mockRequirePermission = jest.fn();
 const mockClaim = jest.fn();
@@ -111,6 +116,16 @@ const mockInspectScheduleConflicts = jest.fn();
 function selectBuilder() {
   return {
     from: (table: unknown) => {
+      if (table === mockPartnerBookingVisitsTable) {
+        return {
+          where: () => ({
+            limit: () =>
+              Promise.resolve(
+                belongsToPartnerVisit ? [{ bookingId: "partner-parent" }] : [],
+              ),
+          }),
+        };
+      }
       if (table === mockAppointmentCrewMembersTable) {
         return {
           where: () => Promise.resolve(crewRows.map((row) => ({ ...row }))),
@@ -282,6 +297,7 @@ jest.mock("drizzle-orm", () => ({
 
 jest.mock("@/db", () => ({
   appointments: mockAppointmentsTable,
+  partnerBookingVisits: mockPartnerBookingVisitsTable,
   partnerBookings: {
     appointmentId: "partner_bookings.appointment_id",
     publicStatus: "partner_bookings.public_status",
@@ -472,6 +488,7 @@ describe("appointment status mutation integrity", () => {
     failIdempotencyCompletion = false;
     transactionOrder = [];
     activeTeamMemberIds = new Set([crewMemberId]);
+    belongsToPartnerVisit = false;
     jest.clearAllMocks();
     mockRequirePermission.mockResolvedValue(null);
     mockClaim.mockResolvedValue(executeClaim());
@@ -521,6 +538,36 @@ describe("appointment status mutation integrity", () => {
     });
     mockRecalculateCommissions.mockResolvedValue(undefined);
   });
+
+  it.each(["completed", "confirmed", "canceled"])(
+    "rejects generic %s changes for a partner visit before money, payroll, or status writes",
+    async (status) => {
+      belongsToPartnerVisit = true;
+      if (status === "confirmed")
+        resetAppointment({
+          status: "completed",
+          finalTotalCents: 10000,
+          completedAt: currentVersion,
+        });
+      const before = { ...appointment };
+      const response = await updateAppointmentStatus(
+        request({ status }),
+        context(),
+      );
+      expect(response.status).toBe(409);
+      const parentRequestMessage: unknown =
+        expect.stringContaining("Open that request");
+      expect(await response.json()).toMatchObject({
+        ok: false,
+        message: parentRequestMessage,
+      });
+      expect(appointment).toEqual(before);
+      expect(appointmentUpdateCount).toBe(0);
+      expect(leadUpdateCount).toBe(0);
+      expect(mockRecalculateCommissions).not.toHaveBeenCalled();
+      expect(mockComplete).not.toHaveBeenCalled();
+    },
+  );
 
   it.each([
     [1, 2000],

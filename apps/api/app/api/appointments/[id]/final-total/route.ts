@@ -1,3 +1,4 @@
+import { assertAppointmentHasIndependentFinancials } from "@/lib/partner-request-financials";
 import type { ActionPolicy, MutationResult } from "@myst-os/sdk";
 import type { NextRequest } from "next/server";
 import { and, eq, sql } from "drizzle-orm";
@@ -274,6 +275,7 @@ export async function PUT(
     claim = claimed.claim;
 
     const outcome = await database.transaction(async (tx) => {
+      await assertAppointmentHasIndependentFinancials(tx, appointmentId);
       await tx.execute(
         sql`select pg_advisory_xact_lock(hashtext('appointment_final_total'), hashtext(${appointmentId}))`,
       );

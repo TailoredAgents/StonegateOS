@@ -162,6 +162,8 @@ const EXTERNAL_ACTIONS = new Set([
 ]);
 
 const FINANCIAL_ACTIONS = new Set([
+  "changePartnerServiceRequest",
+  "savePartnerServiceRates",
   "attachPaymentAction",
   "convertAppointmentToJobAction",
   "detachPaymentAction",

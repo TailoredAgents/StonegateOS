@@ -549,3 +549,78 @@ export function formatQuoteV2Money(cents: number): string {
     currency: "USD",
   }).format(cents / 100);
 }
+
+/** Read-only account-bound service seeds; only explicit reviewed amounts populate prices. */
+export type PartnerQuoteServiceSeed = {
+  id: string;
+  serviceKey: string;
+  title: string;
+  description: string;
+  amountCents: number | null;
+  rateReferences: string[];
+};
+export function parsePartnerQuoteServiceSeeds(
+  value: unknown,
+): PartnerQuoteServiceSeed[] | null {
+  if (!Array.isArray(value) || value.length > 8) return null;
+  const ids = new Set<string>();
+  for (const candidate of value) {
+    if (!candidate || typeof candidate !== "object" || Array.isArray(candidate))
+      return null;
+    const line = candidate as Record<string, unknown>;
+    if (
+      typeof line["id"] !== "string" ||
+      !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu.test(
+        line["id"],
+      ) ||
+      ids.has(line["id"]) ||
+      typeof line["serviceKey"] !== "string" ||
+      !line["serviceKey"].trim() ||
+      typeof line["title"] !== "string" ||
+      !line["title"].trim() ||
+      line["title"].length > 240 ||
+      typeof line["description"] !== "string" ||
+      line["description"].length > 10000 ||
+      !(
+        line["amountCents"] === null ||
+        (Number.isSafeInteger(line["amountCents"]) &&
+          Number(line["amountCents"]) >= 0 &&
+          Number(line["amountCents"]) <= 2147483647)
+      ) ||
+      !Array.isArray(line["rateReferences"]) ||
+      line["rateReferences"].length > 200 ||
+      line["rateReferences"].some(
+        (text) => typeof text !== "string" || text.length > 2400,
+      )
+    )
+      return null;
+    ids.add(line["id"]);
+  }
+  return value as PartnerQuoteServiceSeed[];
+}
+
+export function newPartnerQuoteComposerDraft(
+  id: string,
+  seeds: readonly PartnerQuoteServiceSeed[],
+): QuoteV2ComposerDraft {
+  const draft = newQuoteV2ComposerDraft(id, "commercial");
+  if (!seeds.length) return draft;
+  return {
+    ...draft,
+    inclusions: "",
+    exclusions: "",
+    durationMinutes: "",
+    scope: seeds
+      .map((line) => `${line.title}\n${line.description}`)
+      .join("\n\n"),
+    lines: seeds.map((line) => ({
+      ...newQuoteV2LineDraft(line.id),
+      name: line.title,
+      description: line.description,
+      unitPriceMin:
+        line.amountCents === null ? "" : (line.amountCents / 100).toFixed(2),
+      unitPriceMax:
+        line.amountCents === null ? "" : (line.amountCents / 100).toFixed(2),
+    })),
+  };
+}

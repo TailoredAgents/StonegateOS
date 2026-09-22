@@ -295,7 +295,7 @@ describe("partner V2 base service and quantity add-ons", () => {
     ]);
   });
 
-  it("seeds/backfills established fees and keeps the staff rate editor dual-writing", () => {
+  it("preserves established fee adapters without inventing prices in the staff rate editor", () => {
     const migration = readFileSync(
       resolve(
         process.cwd(),
@@ -336,11 +336,14 @@ describe("partner V2 base service and quantity add-ons", () => {
     expect(staffRoute).toContain("getPartnerAddOnKeyForLegacyTier");
     expect(staffRoute).toContain("partnerRateAddOnItems");
     expect(staffRoute).toContain("partnerAccountId:");
-    expect(staffEditor).toContain('tierKey: "mattress_fee"');
-    expect(staffEditor).toContain('tierKey: "paint_fee"');
-    expect(staffEditor).toContain('tierKey: "tire_fee"');
-    expect(staffEditor).toContain('amount: "30.00"');
-    expect(staffEditor).toContain('amount: "10.00"');
+    expect(staffEditor).toContain(
+      "initialItems.length ? fromInitial(initialItems) : []",
+    );
+    expect(staffEditor).toContain('tierKey: item.tierKey ?? ""');
+    expect(staffEditor).not.toContain("STONEGATE_DEFAULT_RATES");
+    expect(staffEditor).not.toContain("Insert Stonegate defaults");
+    expect(staffEditor).not.toContain('amount: "30.00"');
+    expect(staffEditor).not.toContain('amount: "10.00"');
     expect(schedulingService).toContain("tierKey: draft.tierKey");
     expect(schedulingService).toContain("addOnsSnapshot: pricing.addOns.map");
   });

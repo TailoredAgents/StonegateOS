@@ -1,3 +1,4 @@
+import { partnerMultiServiceRequestSchema } from "@myst-os/sdk";
 import { z } from "zod";
 
 const InstantSchema = z.string().datetime({ offset: true });
@@ -39,6 +40,7 @@ const JobSummarySchema = z
       .object({
         key: z.string().max(120).nullable(),
         tierKey: z.string().max(120).nullable(),
+        label: z.string().max(800).nullable().optional(),
       })
       .strict(),
     schedule: ScheduleSchema,
@@ -67,6 +69,7 @@ const DetailAddressSchema = SummaryAddressSchema.extend({
 }).strict();
 const JobDetailSchema = z
   .object({
+    multiService: partnerMultiServiceRequestSchema.optional(),
     id: z.string().uuid(),
     status: z.string().min(1).max(80),
     confirmationMode: z.string().min(1).max(80),
@@ -74,6 +77,7 @@ const JobDetailSchema = z
       .object({
         key: z.string().max(120).nullable(),
         tierKey: z.string().max(120).nullable(),
+        label: z.string().max(800).nullable().optional(),
       })
       .strict(),
     schedule: ScheduleSchema,
@@ -157,7 +161,10 @@ const JobDetailSchema = z
             total: MoneySchema,
             paid: MoneySchema,
             balance: MoneySchema,
-            dueDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/u).nullable(),
+            dueDate: z
+              .string()
+              .regex(/^\d{4}-\d{2}-\d{2}$/u)
+              .nullable(),
             issuedAt: InstantSchema.nullable(),
             paidAt: InstantSchema.nullable(),
           })

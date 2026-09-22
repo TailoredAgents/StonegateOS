@@ -1,5 +1,6 @@
+import { isLocalPartnerRehearsalDatabase } from "../../../scripts/lib/partner-local-rehearsal";
 import { randomUUID } from "node:crypto";
-import { and, desc, eq } from "drizzle-orm";
+import { and, desc, eq, gt, isNull, lte, or, sql } from "drizzle-orm";
 import { NextRequest } from "next/server";
 import { TEAM_PERMISSION_CATALOG } from "@myst-os/sdk";
 import {
@@ -8,6 +9,7 @@ import {
   teamMembers,
   teamRoles,
   partnerAccounts,
+  partnerApprovalRules,
   partnerAccountInvitations,
   partnerUsers,
   partnerAccountMemberships,
@@ -15,6 +17,10 @@ import {
   partnerAccountLocations,
   teamAuthRateLimits,
   partnerAuthChallenges,
+  partnerSchedulingProfiles,
+  partnerSchedulingProfileResourceRequirements,
+  scheduleResourcePools,
+  scheduleResources,
 } from "../src/db";
 import { hashPassword, loginWithPassword } from "../src/lib/team-auth";
 
@@ -22,11 +28,10 @@ async function main() {
   const endpoint = new URL(process.env["DATABASE_URL"] ?? "http://invalid");
   if (
     process.env["NODE_ENV"] !== "test" ||
-    !["127.0.0.1", "localhost"].includes(endpoint.hostname) ||
-    endpoint.pathname !== "/portal_access_browser"
+    !isLocalPartnerRehearsalDatabase(endpoint)
   )
     throw Error(
-      "Only the disposable local portal_access_browser database is allowed",
+      "Only an allowlisted disposable local partner rehearsal database is allowed",
     );
   const chunks: Buffer[] = [];
   for await (const chunk of process.stdin) {
@@ -40,6 +45,7 @@ async function main() {
     email?: string;
     accountId?: string;
     invitationId?: string;
+    staffId?: string;
   };
   const db = getDb();
   try {
@@ -91,6 +97,195 @@ async function main() {
       );
       if (!session) throw Error("Canonical local staff login failed");
       output = { id, sessionToken: session.sessionToken };
+    } else if (input.action === "approval-rule") {
+      if (!input.accountId || !input.staffId)
+        throw Error("Explicit synthetic account and staff IDs required");
+      output = await db.transaction(async (tx) => {
+        const [account] = await tx
+          .select()
+          .from(partnerAccounts)
+          .where(eq(partnerAccounts.id, input.accountId!))
+          .for("update")
+          .limit(1);
+        const [staff] = await tx
+          .select()
+          .from(teamMembers)
+          .where(eq(teamMembers.id, input.staffId!))
+          .limit(1);
+        if (
+          !account?.serviceContactEmail?.endsWith("@example.test") ||
+          !staff?.active ||
+          !staff.email?.endsWith("@example.test")
+        )
+          throw Error(
+            "Only a synthetic company and synthetic staff member may receive this fixture",
+          );
+        const name = "Local browser painting review";
+        const [existing] = await tx
+          .select({ id: partnerApprovalRules.id })
+          .from(partnerApprovalRules)
+          .where(
+            and(
+              eq(partnerApprovalRules.partnerAccountId, account.id),
+              eq(partnerApprovalRules.name, name),
+            ),
+          )
+          .limit(1);
+        const [rule] = existing
+          ? [existing]
+          : await tx
+              .insert(partnerApprovalRules)
+              .values({
+                partnerAccountId: account.id,
+                name,
+                conditions: { serviceKeys: ["painting"] },
+                requiredApproverCapabilities: ["approvals.decide"],
+                requiredApproverRoleKeys: [],
+                requiredDecisionCount: 1,
+                createdByTeamMemberId: staff.id,
+              })
+              .returning({ id: partnerApprovalRules.id });
+        const configured = account.portalWorkflowConfig["tools"];
+        const tools =
+          configured &&
+          typeof configured === "object" &&
+          !Array.isArray(configured)
+            ? (configured as Record<string, unknown>)
+            : {};
+        await tx
+          .update(partnerAccounts)
+          .set({
+            portalWorkflowConfig: {
+              ...account.portalWorkflowConfig,
+              tools: { ...tools, approvals: true },
+            },
+            portalWorkflowRevision: sql`${partnerAccounts.portalWorkflowRevision} + 1`,
+          })
+          .where(eq(partnerAccounts.id, account.id));
+        const now = new Date();
+        const [junkProfile] = await tx
+          .select()
+          .from(partnerSchedulingProfiles)
+          .where(
+            and(
+              eq(partnerSchedulingProfiles.serviceKey, "junk-removal"),
+              eq(partnerSchedulingProfiles.active, true),
+              lte(partnerSchedulingProfiles.effectiveFrom, now),
+              or(
+                isNull(partnerSchedulingProfiles.effectiveTo),
+                gt(partnerSchedulingProfiles.effectiveTo, now),
+              ),
+            ),
+          )
+          .orderBy(desc(partnerSchedulingProfiles.version))
+          .limit(1);
+        const requirements = junkProfile
+          ? await tx
+              .select()
+              .from(partnerSchedulingProfileResourceRequirements)
+              .where(
+                eq(
+                  partnerSchedulingProfileResourceRequirements.schedulingProfileId,
+                  junkProfile.id,
+                ),
+              )
+          : [];
+        if (
+          (junkProfile &&
+            (junkProfile.capacityPoolKey !== "field_service" ||
+              requirements.length === 0)) ||
+          requirements.some(
+            (requirement) =>
+              requirement.resourceKind === "equipment" ||
+              requirement.quantity !== 1,
+          )
+        )
+          throw Error(
+            "The local journey needs a field-service profile with one crew and truck; preserve the configured profile and adapt the fixture.",
+          );
+        await tx
+          .insert(scheduleResourcePools)
+          .values({
+            key: "field_service",
+            label: "Field service",
+            capacityUnits: 8,
+            active: true,
+          })
+          .onConflictDoUpdate({
+            target: scheduleResourcePools.key,
+            set: {
+              capacityUnits: sql`greatest(${scheduleResourcePools.capacityUnits}, 8)`,
+              active: true,
+            },
+          });
+        const crews: Array<{ id: string; label: string }> = [];
+        let truck: { id: string; label: string } | undefined;
+        for (const definition of [
+          { kind: "crew", index: 1 },
+          { kind: "crew", index: 2 },
+          { kind: "truck", index: 1 },
+        ] as const) {
+          const label = `Local browser ${definition.kind} ${definition.index} ${account.id.slice(0, 8)}`;
+          const requirement = requirements.find(
+            (item) => item.resourceKind === definition.kind,
+          );
+          const values = {
+            capacityPoolKey: "field_service",
+            kind: definition.kind,
+            label,
+            source: "staff" as const,
+            capacityUnits: requirement?.capacityUnits ?? 1,
+            active: true,
+            skillKeys: requirement?.requiredSkillKeys ?? [],
+          };
+          const [existingResource] = await tx
+            .select()
+            .from(scheduleResources)
+            .where(eq(scheduleResources.label, label))
+            .limit(1);
+          if (
+            existingResource &&
+            (existingResource.source !== "staff" ||
+              existingResource.kind !== definition.kind)
+          )
+            throw Error(
+              "Synthetic resource label is bound to an unexpected resource",
+            );
+          const [resource] = existingResource
+            ? await tx
+                .update(scheduleResources)
+                .set(values)
+                .where(eq(scheduleResources.id, existingResource.id))
+                .returning({
+                  id: scheduleResources.id,
+                  label: scheduleResources.label,
+                })
+            : await tx
+                .insert(scheduleResources)
+                .values(values)
+                .returning({
+                  id: scheduleResources.id,
+                  label: scheduleResources.label,
+                });
+          if (!resource)
+            throw Error("Synthetic schedule resource was not saved");
+          if (definition.kind === "crew") crews.push(resource);
+          else truck = resource;
+        }
+        if (!truck || !crews[0])
+          throw Error("Synthetic crew and truck are required");
+        return {
+          ruleId: rule!.id,
+          accountId: account.id,
+          crewId: crews[0].id,
+          crewLabel: crews[0].label,
+          crews,
+          truckId: truck.id,
+          truckLabel: truck.label,
+          junkDurationMinutes: junkProfile?.durationMinutes ?? 120,
+          junkTravelBufferMinutes: junkProfile?.travelBufferMinutes ?? 0,
+        };
+      });
     } else if (input.action === "invitation") {
       if (!input.email?.endsWith("@example.test"))
         throw Error("Synthetic email required");

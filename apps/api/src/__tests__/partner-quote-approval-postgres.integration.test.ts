@@ -17,6 +17,7 @@ import {
   buildPartnerApprovalRequestInsert,
   resolvePartnerApprovalRequirement,
 } from "@/lib/partner-portal-v2-approvals";
+import { resolveMultiServiceApproval } from "@/lib/partner-multi-service-domain";
 import { partnerQuoteApprovalAllowsAcceptance } from "@/lib/partner-quote-v2-approval";
 
 const describeWithDatabase = process.env["DATABASE_URL"]
@@ -235,5 +236,124 @@ describeWithDatabase("Quote V2 canonical Partner approval gate", () => {
       .set({ version: 3 })
       .where(eq(partnerApprovalRules.id, ruleId));
     await expect(allowed()).resolves.toBe(false);
+  });
+  it("evaluates every combined service and requires exact service-set approval at a confirmed quote total", async () => {
+    const combinedId = randomUUID();
+    const keys = ["junk-removal", "painting"] as const;
+    await getDb()
+      .update(partnerApprovalRules)
+      .set({ active: false })
+      .where(eq(partnerApprovalRules.id, ruleId));
+    await getDb()
+      .insert(partnerBookingDrafts)
+      .values({
+        id: combinedId,
+        partnerAccountId: accountId,
+        createdByMembershipId: membershipId,
+        modelVersion: 2,
+        locationId,
+        serviceKey: null,
+        commercial: {},
+        serviceLines: keys.map((key) => ({
+          id: randomUUID(),
+          serviceKey: key,
+          description: "Combined requested work",
+          scope: {},
+          selectedAddOns: [],
+          proofRequirements: {},
+        })),
+      });
+    await getDb()
+      .insert(partnerApprovalRules)
+      .values({
+        id: randomUUID(),
+        partnerAccountId: accountId,
+        name: "Painting needs approval",
+        conditions: { serviceKey: "painting" },
+        requiredApproverCapabilities: ["approvals.decide"],
+        requiredApproverRoleKeys: [],
+        requiredDecisionCount: 1,
+        createdByTeamMemberId: teamMemberId,
+      });
+    const check = (
+      overrides: { totalMinCents?: number; totalMaxCents?: number } = {},
+    ) =>
+      getDb().transaction((tx) =>
+        partnerQuoteApprovalAllowsAcceptance(tx, {
+          accountId,
+          bookingId: null,
+          bookingDraftId: combinedId,
+          totalMinCents: 25000,
+          totalMaxCents: 25000,
+          currency: "USD",
+          ...overrides,
+        }),
+      );
+    expect(await check()).toBe(false);
+    await getDb().transaction(async (tx) => {
+      const resolution = await resolveMultiServiceApproval({
+        tx,
+        partnerAccountId: accountId,
+        requestedByMembershipId: membershipId,
+        serviceKeys: keys,
+        locationId,
+        amountMinor: 25000,
+        currency: "USD",
+        poNumber: null,
+        costCenter: null,
+      });
+      if (!resolution.required)
+        throw new Error("Second selected service must require approval");
+      const values = buildPartnerApprovalRequestInsert({
+        resolution,
+        target: {
+          kind: "booking_draft",
+          id: combinedId,
+          partnerAccountId: accountId,
+        },
+        now,
+      });
+      const [row] = await tx
+        .insert(partnerApprovalRequests)
+        .values({
+          ...values,
+          requestSnapshot: {
+            ...values.requestSnapshot,
+            modelVersion: 2,
+            serviceKeys: keys,
+          },
+          state: "approved_needs_reschedule",
+          resolvedAt: now,
+        })
+        .returning({ id: partnerApprovalRequests.id });
+      return row!.id;
+    });
+    expect(await check()).toBe(true);
+    expect(await check({ totalMaxCents: 26000 })).toBe(false);
+    expect(await check({ totalMinCents: 26000, totalMaxCents: 26000 })).toBe(
+      false,
+    );
+    // A later service edit cannot borrow the previously approved amount/rules.
+    const [draft] = await getDb()
+      .select()
+      .from(partnerBookingDrafts)
+      .where(eq(partnerBookingDrafts.id, combinedId));
+    await getDb()
+      .update(partnerBookingDrafts)
+      .set({
+        serviceLines: [
+          ...draft!.serviceLines,
+          {
+            id: randomUUID(),
+            serviceKey: "soft-washing",
+            description: "Wash the additional building exterior",
+            scope: {},
+            selectedAddOns: [],
+            proofRequirements: {},
+          },
+        ],
+      })
+      .where(eq(partnerBookingDrafts.id, combinedId));
+    expect(await check()).toBe(false);
   });
 });

@@ -21,6 +21,23 @@ import {
   X,
 } from "lucide-react";
 import { cn } from "@myst-os/ui";
+import {
+  PARTNER_SERVICE_DEFINITIONS,
+  PartnerServiceLinesInputSchema,
+  getPartnerServiceDefinition,
+} from "@myst-os/pricing";
+import {
+  PartnerMultiServiceFields,
+  PartnerServiceLineSummary,
+} from "./PartnerMultiServiceFields";
+import {
+  PartnerServiceRates,
+  PartnerRequestRateNote,
+} from "./PartnerServiceRates";
+import type {
+  BookingStructuredRates,
+  BookingStructuredRatesStatus,
+} from "../lib/booking-page-data";
 import { usePartnerUnsavedChanges } from "../lib/use-partner-unsaved-changes";
 import {
   createPortalOperationKey,
@@ -30,6 +47,7 @@ import {
   type PartnerAvailability,
   type PartnerDraft,
   type PartnerHold,
+  type PartnerRequestServiceLine,
 } from "../lib/portal-v2";
 import {
   PARTNER_EQUIPMENT_OPTIONS,
@@ -175,6 +193,9 @@ export type BookingWizardCancellationPolicy = {
 
 type WizardForm = PartnerRequestScopeValues &
   PartnerPreferredScheduleValues & {
+    modelVersion: 1 | 2;
+    serviceLines: PartnerRequestServiceLine[];
+    preservedScope: Record<string, unknown>;
     locationId: string;
     serviceKey: string;
     tierKey: string;
@@ -206,13 +227,16 @@ const STEPS = [
   { label: "Service details", shortLabel: "Details", icon: Truck },
   {
     label: "Scheduling",
-    shortLabel: "Scheduling",
+    shortLabel: "Timing",
     icon: CalendarClock,
   },
   { label: "Review and submit", shortLabel: "Review", icon: ShieldCheck },
 ] as const;
 
 const DEFAULT_FORM: WizardForm = {
+  modelVersion: 1,
+  serviceLines: [],
+  preservedScope: {},
   locationId: "",
   serviceKey: "",
   tierKey: "",
@@ -308,6 +332,25 @@ function formFromDraft(
   return {
     ...DEFAULT_FORM,
     ...defaults,
+    modelVersion: draft.modelVersion === 2 ? 2 : 1,
+    serviceLines: draft.modelVersion === 2 ? (draft.serviceLines ?? []) : [],
+    preservedScope: Object.fromEntries(
+      Object.entries(draft.scope).filter(
+        ([key]) =>
+          ![
+            "itemCount",
+            "volumeCubicYards",
+            "restrictedItems",
+            "nonStandard",
+            "hazardCategories",
+            "equipmentNeeds",
+            "requiredCompletion",
+            "multiStop",
+            "multiStopDetails",
+            "alternateContact",
+          ].includes(key),
+      ),
+    ),
     locationId: draft.locationId ?? defaults.locationId ?? "",
     serviceKey: draft.serviceKey ?? "",
     tierKey: draft.tierKey ?? "",
@@ -380,28 +423,56 @@ function formFromDraft(
   };
 }
 
+function photoServiceAssociations(form: WizardForm): Record<string, string[]> {
+  const raw = form.preservedScope["photoServiceAssociations"];
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return {};
+  const selected = new Set(form.serviceLines.map((line) => line.id));
+  return Object.fromEntries(
+    Object.entries(raw).flatMap(([photoId, lines]) => {
+      const ids = Array.isArray(lines)
+        ? lines.filter(
+            (id): id is string => typeof id === "string" && selected.has(id),
+          )
+        : [];
+      return ids.length ? [[photoId, [...new Set(ids)]]] : [];
+    }),
+  );
+}
+
 function draftMutation(form: WizardForm) {
   return {
+    ...(form.modelVersion === 2
+      ? { modelVersion: 2, serviceLines: form.serviceLines }
+      : {}),
     locationId: form.locationId || null,
-    serviceKey: form.serviceKey || null,
-    tierKey: form.tierKey || null,
-    selectedAddOns: serializePartnerAddOnQuantities(form.addOnQuantities),
+    serviceKey: form.modelVersion === 2 ? null : form.serviceKey || null,
+    tierKey: form.modelVersion === 2 ? null : form.tierKey || null,
+    selectedAddOns:
+      form.modelVersion === 2
+        ? []
+        : serializePartnerAddOnQuantities(form.addOnQuantities),
     description: form.description || null,
-    scope: buildPartnerBookingScope({
-      itemCount: form.itemCount,
-      volumeCubicYards: form.volume,
-      restrictedItems: form.restrictedItems,
-      nonStandard: form.nonStandard,
-      hazardCategories: form.hazardCategories,
-      equipmentNeeds: form.equipmentNeeds,
-      requiredCompletionDate: form.requiredCompletionDate,
-      requiredCompletionTime: form.requiredCompletionTime,
-      multiStop: form.multiStop,
-      multiStopDetails: form.multiStopDetails,
-      alternateContactName: form.alternateContactName,
-      alternateContactPhone: form.alternateContactPhone,
-      alternateContactEmail: form.alternateContactEmail,
-    }),
+    scope: {
+      ...form.preservedScope,
+      ...(form.modelVersion === 2
+        ? { photoServiceAssociations: photoServiceAssociations(form) }
+        : {}),
+      ...buildPartnerBookingScope({
+        itemCount: form.itemCount,
+        volumeCubicYards: form.volume,
+        restrictedItems: form.restrictedItems,
+        nonStandard: form.nonStandard,
+        hazardCategories: form.hazardCategories,
+        equipmentNeeds: form.equipmentNeeds,
+        requiredCompletionDate: form.requiredCompletionDate,
+        requiredCompletionTime: form.requiredCompletionTime,
+        multiStop: form.multiStop,
+        multiStopDetails: form.multiStopDetails,
+        alternateContactName: form.alternateContactName,
+        alternateContactPhone: form.alternateContactPhone,
+        alternateContactEmail: form.alternateContactEmail,
+      }),
+    },
     crewInstructions: form.crewInstructions || null,
     accessDetails: form.accessDetails || null,
     onSiteContact:
@@ -547,39 +618,55 @@ function localErrorsForStep(
     errors["scope.requiredCompletion.localDate"] =
       "Add a completion date for the time you entered, or clear the time.";
   if (step === 1) {
-    const required = new Set(
-      (service?.requiredScopeFields ?? []).map((field) =>
-        field.replace(/^scope\./u, ""),
-      ),
-    );
-    if (required.has("itemCount") && !form.itemCount.trim())
-      errors["scope.itemCount"] =
-        "Enter the item count required for this service.";
-    if (required.has("volumeCubicYards") && !form.volume.trim())
-      errors["scope.volumeCubicYards"] =
-        "Enter the estimated volume required for this service.";
-    if (!form.serviceKey) errors["serviceKey"] = "Choose a service.";
-    else if (!service || !service.bookable) {
-      errors["serviceKey"] =
-        "This service is no longer available. Choose another service to continue.";
-    }
-    if ((service?.baseOptions?.length ?? 0) > 0 && !form.tierKey) {
-      errors["tierKey"] = "Choose a base service option.";
-    }
-    if (!form.description.trim())
-      errors["description"] = "Describe the work to be completed.";
-    if (
-      form.itemCount.trim() &&
-      (!Number.isSafeInteger(Number(form.itemCount)) ||
-        Number(form.itemCount) < 0)
-    ) {
-      errors["scope.itemCount"] = "Enter a whole item count of zero or more.";
-    }
-    if (
-      form.volume.trim() &&
-      (!Number.isFinite(Number(form.volume)) || Number(form.volume) < 0)
-    ) {
-      errors["scope.volumeCubicYards"] = "Enter a volume of zero or more.";
+    if (form.modelVersion === 2) {
+      if (!form.serviceLines.length)
+        errors["serviceLines"] = "Choose at least one service.";
+      const parsed = PartnerServiceLinesInputSchema.safeParse(
+        form.serviceLines,
+      );
+      if (!parsed.success)
+        for (const issue of parsed.error.issues)
+          errors[["serviceLines", ...issue.path].join(".")] = issue.message;
+      form.serviceLines.forEach((line, index) => {
+        if (!line.description.trim())
+          errors[`serviceLines.${index}.description`] =
+            `Describe the ${getPartnerServiceDefinition(line.serviceKey)?.label.toLowerCase() ?? "selected service"} work.`;
+      });
+    } else {
+      const required = new Set(
+        (service?.requiredScopeFields ?? []).map((field) =>
+          field.replace(/^scope\./u, ""),
+        ),
+      );
+      if (required.has("itemCount") && !form.itemCount.trim())
+        errors["scope.itemCount"] =
+          "Enter the item count required for this service.";
+      if (required.has("volumeCubicYards") && !form.volume.trim())
+        errors["scope.volumeCubicYards"] =
+          "Enter the estimated volume required for this service.";
+      if (!form.serviceKey) errors["serviceKey"] = "Choose a service.";
+      else if (!service || !service.bookable) {
+        errors["serviceKey"] =
+          "This service is no longer available. Choose another service to continue.";
+      }
+      if ((service?.baseOptions?.length ?? 0) > 0 && !form.tierKey) {
+        errors["tierKey"] = "Choose a base service option.";
+      }
+      if (!form.description.trim())
+        errors["description"] = "Describe the work to be completed.";
+      if (
+        form.itemCount.trim() &&
+        (!Number.isSafeInteger(Number(form.itemCount)) ||
+          Number(form.itemCount) < 0)
+      ) {
+        errors["scope.itemCount"] = "Enter a whole item count of zero or more.";
+      }
+      if (
+        form.volume.trim() &&
+        (!Number.isFinite(Number(form.volume)) || Number(form.volume) < 0)
+      ) {
+        errors["scope.volumeCubicYards"] = "Enter a volume of zero or more.";
+      }
     }
     if (form.billingContactEmail.trim() && !form.billingContactName.trim())
       errors["commercial.billingContact.name"] =
@@ -626,6 +713,9 @@ function PartnerBookingWizardSession({
   supportPhoneDisplay,
   requesterContact,
   canDiscardDrafts = false,
+  multiServiceRequestsEnabled = false,
+  structuredRates = null,
+  structuredRatesStatus = "missing",
 }: {
   locations: BookingWizardLocation[];
   services: BookingWizardService[];
@@ -642,6 +732,9 @@ function PartnerBookingWizardSession({
   supportPhoneDisplay: string;
   requesterContact?: { name: string; phone: string; email: string };
   canDiscardDrafts?: boolean;
+  multiServiceRequestsEnabled?: boolean;
+  structuredRates?: BookingStructuredRates | null;
+  structuredRatesStatus?: BookingStructuredRatesStatus;
 }) {
   const router = useRouter();
   const personaPresentation = getPartnerPersonaPresentation(persona);
@@ -660,6 +753,23 @@ function PartnerBookingWizardSession({
   );
   const [form, setForm] = React.useState<WizardForm>(() =>
     formFromDraft(initialDraft, {
+      modelVersion: multiServiceRequestsEnabled ? 2 : 1,
+      serviceLines:
+        multiServiceRequestsEnabled &&
+        getPartnerServiceDefinition(defaultSelectedServiceKey)
+          ? [
+              {
+                id: crypto.randomUUID(),
+                serviceKey: getPartnerServiceDefinition(
+                  defaultSelectedServiceKey,
+                )!.key,
+                description: "",
+                scope: {},
+                selectedAddOns: [],
+                proofRequirements: {},
+              },
+            ]
+          : [],
       locationId: defaultLocationId,
       contactName: initialContact?.name ?? "",
       contactPhone: initialContact?.phone ?? "",
@@ -680,6 +790,9 @@ function PartnerBookingWizardSession({
           ? defaultSelectedService.baseOptions[0]?.tierKey
           : "",
     }),
+  );
+  const serviceLineCache = React.useRef(
+    new Map(form.serviceLines.map((line) => [line.serviceKey, line])),
   );
   const [draft, setDraft] = React.useState<PartnerDraft | null>(initialDraft);
   const [draftCreationAttempt, setDraftCreationAttempt] = React.useState(0);
@@ -923,7 +1036,11 @@ function PartnerBookingWizardSession({
         return;
       }
       const createdDraft = parseBookingDraft(result.data);
-      if (!createdDraft) {
+      if (
+        !createdDraft ||
+        (initialFormRef.current.modelVersion === 2 &&
+          createdDraft.modelVersion !== 2)
+      ) {
         setSaveStatus("error");
         setMessage(
           withPortalSupportReference(
@@ -972,7 +1089,11 @@ function PartnerBookingWizardSession({
           return false;
         }
         const savedDraft = parseBookingDraft(result.data);
-        if (!savedDraft || savedDraft.id !== current.id) {
+        if (
+          !savedDraft ||
+          savedDraft.id !== current.id ||
+          (snapshot.modelVersion === 2 && savedDraft.modelVersion !== 2)
+        ) {
           setSaveStatus("error");
           setMessage(
             withPortalSupportReference(
@@ -1347,6 +1468,100 @@ function PartnerBookingWizardSession({
     });
   };
 
+  const updateServiceLine = (line: PartnerRequestServiceLine): void => {
+    releaseHeldTimeAfterEdit();
+    setAvailability(null);
+    setFurthestStep((current) => Math.min(current, 1));
+    serviceLineCache.current.set(line.serviceKey, line);
+    setForm((current) => ({
+      ...current,
+      serviceLines: current.serviceLines.map((item) =>
+        item.id === line.id ? line : item,
+      ),
+    }));
+    setFieldErrors((current) =>
+      Object.fromEntries(
+        Object.entries(current).filter(
+          ([field]) => !field.startsWith("serviceLines"),
+        ),
+      ),
+    );
+    if (message === "Add the highlighted details to continue.")
+      setMessage(null);
+  };
+
+  const changePhotoServices = (photoId: string, ids: string[]): void => {
+    releaseHeldTimeAfterEdit();
+    setAvailability(null);
+    setForm((current) => {
+      const associations = photoServiceAssociations(current);
+      if (ids.length) associations[photoId] = ids;
+      else delete associations[photoId];
+      return {
+        ...current,
+        preservedScope: {
+          ...current.preservedScope,
+          photoServiceAssociations: associations,
+        },
+      };
+    });
+    setFieldErrors((current) =>
+      Object.fromEntries(
+        Object.entries(current).filter(
+          ([field]) => !field.startsWith("scope.photoServiceAssociations"),
+        ),
+      ),
+    );
+  };
+
+  const toggleServiceLine = (key: string, selected: boolean): void => {
+    const definition = getPartnerServiceDefinition(key);
+    if (!definition) return;
+    releaseHeldTimeAfterEdit();
+    setAvailability(null);
+    setFurthestStep((current) => Math.min(current, 1));
+    setForm((current) => {
+      const existing = current.serviceLines.find(
+        (line) => line.serviceKey === key,
+      );
+      if (existing) serviceLineCache.current.set(existing.serviceKey, existing);
+      if (!selected) {
+        const next = {
+          ...current,
+          serviceLines: current.serviceLines.filter(
+            (line) => line.serviceKey !== key,
+          ),
+        };
+        return {
+          ...next,
+          preservedScope: {
+            ...next.preservedScope,
+            photoServiceAssociations: photoServiceAssociations(next),
+          },
+        };
+      }
+      if (existing) return current;
+      const line = serviceLineCache.current.get(definition.key) ?? {
+        id: crypto.randomUUID(),
+        serviceKey: definition.key,
+        description: "",
+        scope: {},
+        selectedAddOns: [],
+        proofRequirements: {},
+      };
+      return { ...current, serviceLines: [...current.serviceLines, line] };
+    });
+    setFieldErrors((current) =>
+      Object.fromEntries(
+        Object.entries(current).filter(
+          ([field]) => !field.startsWith("serviceLines"),
+        ),
+      ),
+    );
+    if (message === "Add the highlighted details to continue.")
+      setMessage(null);
+  };
+
   const updateAddOn = (
     addOn: BookingWizardAddOn,
     selected: boolean,
@@ -1433,7 +1648,12 @@ function PartnerBookingWizardSession({
       return null;
     }
     const validationResult = parseBookingValidation(validated.data);
-    if (!validationResult || validationResult.draft.id !== savedDraft.id) {
+    if (
+      !validationResult ||
+      validationResult.draft.id !== savedDraft.id ||
+      (validationResult.draft.modelVersion ?? 1) !==
+        (savedDraft.modelVersion ?? 1)
+    ) {
       setAvailabilityLoading(false);
       setMessage(
         withPortalSupportReference(
@@ -1449,7 +1669,9 @@ function PartnerBookingWizardSession({
       setAvailabilityLoading(false);
       setFieldErrors(errors);
       setMessage(
-        "Add the highlighted details so we can show the right arrival windows.",
+        form.modelVersion === 2
+          ? "Add the highlighted service details to continue."
+          : "Add the highlighted details so we can show the right arrival windows.",
       );
       const targetStep = Math.min(...Object.keys(errors).map(bookingFieldStep));
       setStep(Number.isFinite(targetStep) ? targetStep : 1);
@@ -1476,7 +1698,9 @@ function PartnerBookingWizardSession({
     if (
       !result?.ok ||
       !nextAvailability ||
-      nextAvailability.draft.id !== savedDraft.id
+      nextAvailability.draft.id !== savedDraft.id ||
+      (nextAvailability.draft.modelVersion ?? 1) !==
+        (savedDraft.modelVersion ?? 1)
     ) {
       trackPartnerFunnelEvent({
         stage: "availability_degraded",
@@ -1627,6 +1851,7 @@ function PartnerBookingWizardSession({
   }
 
   const chooseWindow = async (windowId: string): Promise<void> => {
+    if (form.modelVersion === 2) return;
     setAvailabilityLoading(true);
     setMessage(null);
     // Availability can update the draft revision and then trigger a debounced
@@ -1819,6 +2044,7 @@ function PartnerBookingWizardSession({
   );
   const windowsByDate = React.useMemo(() => {
     const groups = new Map<string, PartnerAvailability["windows"]>();
+    if (form.modelVersion === 2) return [];
     if (!availability?.instantConfirmationEligible) return [];
     for (const window of availability?.windows ?? []) {
       if (!window.available) continue;
@@ -1827,7 +2053,7 @@ function PartnerBookingWizardSession({
       groups.set(window.localDate, group);
     }
     return [...groups.entries()];
-  }, [availability]);
+  }, [availability, form.modelVersion]);
   const selectedTimezone =
     availability?.timezone ??
     location?.timezone ??
@@ -2317,215 +2543,279 @@ function PartnerBookingWizardSession({
                 data-service-details
               >
                 <div className="min-w-0 space-y-6">
-                  <div
-                    className={cn(
-                      "grid gap-5",
-                      service?.baseOptions?.length
-                        ? "sm:grid-cols-2"
-                        : "sm:max-w-md",
-                    )}
-                  >
-                    <label className="block" htmlFor="partner-book-service">
-                      <span className="text-sm font-semibold text-slate-700">
-                        Service type
-                      </span>
-                      <select
-                        id="partner-book-service"
-                        value={form.serviceKey}
-                        onChange={(event) => updateService(event.target.value)}
-                        className={partnerFieldClass}
-                        required
+                  {form.modelVersion === 2 ? (
+                    <>
+                      <PartnerMultiServiceFields
+                        definitions={PARTNER_SERVICE_DEFINITIONS}
+                        lines={form.serviceLines}
+                        onToggle={toggleServiceLine}
+                        onChange={updateServiceLine}
+                        fieldErrors={fieldErrors}
                         disabled={
                           advancing || availabilityLoading || submitting
                         }
-                        aria-invalid={Boolean(serviceError)}
-                        aria-describedby={
-                          serviceError
-                            ? "partner-book-service-error"
-                            : undefined
-                        }
-                      >
-                        <option value="">Choose a service</option>
-                        {form.serviceKey && !service ? (
-                          <option value={form.serviceKey} disabled>
-                            Previously selected service — unavailable
-                          </option>
-                        ) : null}
-                        {services.map((item) => (
-                          <option
-                            key={item.key}
-                            value={item.key}
-                            disabled={!item.bookable}
-                          >
-                            {item.label}
-                            {!item.bookable ? " — configuration required" : ""}
-                          </option>
-                        ))}
-                      </select>
-                      {serviceError ? (
-                        <span
-                          id="partner-book-service-error"
-                          className="mt-1 block text-sm font-medium text-rose-700"
+                        services={services}
+                        renderRates={(serviceKey) => (
+                          <PartnerServiceRates
+                            serviceKey={serviceKey}
+                            card={structuredRates}
+                            status={structuredRatesStatus}
+                          />
+                        )}
+                      />
+                      <PartnerRequestRateNote
+                        card={structuredRates}
+                        status={structuredRatesStatus}
+                      />
+                      <details className="rounded-xl border border-slate-200 px-4">
+                        <summary className="min-h-11 cursor-pointer py-3 text-sm font-semibold text-slate-700">
+                          Project notes (optional)
+                        </summary>
+                        <label
+                          className="mb-4 block text-sm font-semibold text-slate-700"
+                          htmlFor="partner-book-description"
                         >
-                          {serviceError}
-                        </span>
-                      ) : null}
-                    </label>
-                    {service?.baseOptions?.length ? (
+                          Anything else about this request?
+                          <textarea
+                            id="partner-book-description"
+                            value={form.description}
+                            onChange={(event) =>
+                              update("description", event.target.value)
+                            }
+                            maxLength={4000}
+                            rows={3}
+                            className={partnerFieldClass}
+                          />
+                        </label>
+                      </details>
+                    </>
+                  ) : (
+                    <>
+                      <div
+                        className={cn(
+                          "grid gap-5",
+                          service?.baseOptions?.length
+                            ? "sm:grid-cols-2"
+                            : "sm:max-w-md",
+                        )}
+                      >
+                        <label className="block" htmlFor="partner-book-service">
+                          <span className="text-sm font-semibold text-slate-700">
+                            Service type
+                          </span>
+                          <select
+                            id="partner-book-service"
+                            value={form.serviceKey}
+                            onChange={(event) =>
+                              updateService(event.target.value)
+                            }
+                            className={partnerFieldClass}
+                            required
+                            disabled={
+                              advancing || availabilityLoading || submitting
+                            }
+                            aria-invalid={Boolean(serviceError)}
+                            aria-describedby={
+                              serviceError
+                                ? "partner-book-service-error"
+                                : undefined
+                            }
+                          >
+                            <option value="">Choose a service</option>
+                            {form.serviceKey && !service ? (
+                              <option value={form.serviceKey} disabled>
+                                Previously selected service — unavailable
+                              </option>
+                            ) : null}
+                            {services.map((item) => (
+                              <option
+                                key={item.key}
+                                value={item.key}
+                                disabled={!item.bookable}
+                              >
+                                {item.label}
+                                {!item.bookable
+                                  ? " — configuration required"
+                                  : ""}
+                              </option>
+                            ))}
+                          </select>
+                          {serviceError ? (
+                            <span
+                              id="partner-book-service-error"
+                              className="mt-1 block text-sm font-medium text-rose-700"
+                            >
+                              {serviceError}
+                            </span>
+                          ) : null}
+                        </label>
+                        {service?.baseOptions?.length ? (
+                          <label
+                            className="block"
+                            htmlFor="partner-book-base-option"
+                          >
+                            <span className="text-sm font-semibold text-slate-700">
+                              Base service option
+                            </span>
+                            <select
+                              id="partner-book-base-option"
+                              value={form.tierKey}
+                              onChange={(event) =>
+                                update("tierKey", event.target.value)
+                              }
+                              className={partnerFieldClass}
+                              required
+                              aria-invalid={Boolean(fieldErrors["tierKey"])}
+                              aria-describedby={
+                                fieldErrors["tierKey"]
+                                  ? "partner-book-base-option-error"
+                                  : undefined
+                              }
+                            >
+                              <option value="">Choose a base option</option>
+                              {service.baseOptions.map((option) => (
+                                <option
+                                  key={option.tierKey}
+                                  value={option.tierKey}
+                                >
+                                  {option.label}
+                                  {option.price
+                                    ? ` — ${formatMoney(option.price)}`
+                                    : ""}
+                                </option>
+                              ))}
+                            </select>
+                            {fieldErrors["tierKey"] ? (
+                              <span
+                                id="partner-book-base-option-error"
+                                className="mt-1 block text-sm font-medium text-rose-700"
+                              >
+                                {fieldErrors["tierKey"]}
+                              </span>
+                            ) : null}
+                          </label>
+                        ) : null}
+                      </div>
                       <label
                         className="block"
-                        htmlFor="partner-book-base-option"
+                        htmlFor="partner-book-description"
                       >
                         <span className="text-sm font-semibold text-slate-700">
-                          Base service option
+                          Job description
                         </span>
-                        <select
-                          id="partner-book-base-option"
-                          value={form.tierKey}
+                        <textarea
+                          id="partner-book-description"
+                          value={form.description}
                           onChange={(event) =>
-                            update("tierKey", event.target.value)
+                            update("description", event.target.value)
                           }
+                          rows={4}
+                          maxLength={4_000}
                           className={partnerFieldClass}
+                          placeholder="Example: Remove 12 empty pallets and two shelving units from the loading area."
                           required
-                          aria-invalid={Boolean(fieldErrors["tierKey"])}
+                          aria-invalid={Boolean(fieldErrors["description"])}
                           aria-describedby={
-                            fieldErrors["tierKey"]
-                              ? "partner-book-base-option-error"
-                              : undefined
+                            fieldErrors["description"]
+                              ? "partner-book-description-error"
+                              : "partner-book-description-help"
                           }
+                        />
+                        <span
+                          id="partner-book-description-help"
+                          className="mt-1 block text-xs text-slate-500"
                         >
-                          <option value="">Choose a base option</option>
-                          {service.baseOptions.map((option) => (
-                            <option key={option.tierKey} value={option.tierKey}>
-                              {option.label}
-                              {option.price
-                                ? ` — ${formatMoney(option.price)}`
-                                : ""}
-                            </option>
-                          ))}
-                        </select>
-                        {fieldErrors["tierKey"] ? (
+                          Include the items, approximate quantity, and work to
+                          be completed.
+                        </span>
+                        {fieldErrors["description"] ? (
                           <span
-                            id="partner-book-base-option-error"
+                            id="partner-book-description-error"
                             className="mt-1 block text-sm font-medium text-rose-700"
                           >
-                            {fieldErrors["tierKey"]}
+                            {fieldErrors["description"]}
                           </span>
                         ) : null}
                       </label>
-                    ) : null}
-                  </div>
-                  <label className="block" htmlFor="partner-book-description">
-                    <span className="text-sm font-semibold text-slate-700">
-                      Job description
-                    </span>
-                    <textarea
-                      id="partner-book-description"
-                      value={form.description}
-                      onChange={(event) =>
-                        update("description", event.target.value)
-                      }
-                      rows={4}
-                      maxLength={4_000}
-                      className={partnerFieldClass}
-                      placeholder="Example: Remove 12 empty pallets and two shelving units from the loading area."
-                      required
-                      aria-invalid={Boolean(fieldErrors["description"])}
-                      aria-describedby={
-                        fieldErrors["description"]
-                          ? "partner-book-description-error"
-                          : "partner-book-description-help"
-                      }
-                    />
-                    <span
-                      id="partner-book-description-help"
-                      className="mt-1 block text-xs text-slate-500"
-                    >
-                      Include the items, approximate quantity, and work to be
-                      completed.
-                    </span>
-                    {fieldErrors["description"] ? (
-                      <span
-                        id="partner-book-description-error"
-                        className="mt-1 block text-sm font-medium text-rose-700"
-                      >
-                        {fieldErrors["description"]}
-                      </span>
-                    ) : null}
-                  </label>
-                  <PartnerWorkQuestions
-                    value={form}
-                    onChange={updateScope}
-                    fieldErrors={fieldErrors}
-                  />
-                  <PartnerMaterialsQuestion
-                    value={form}
-                    onChange={updateScope}
-                    fieldErrors={fieldErrors}
-                  />
-                  <PartnerSavedScopeDetails
-                    value={form}
-                    onChange={updateScope}
-                    fieldErrors={fieldErrors}
-                    initialValue={initialFormRef.current}
-                    requiredFields={service?.requiredScopeFields}
-                  />
-                  {showPersonaSuggestions ? (
-                    <aside
-                      aria-labelledby="partner-persona-scope-heading"
-                      className="rounded-2xl border border-primary-100 bg-primary-50/70 p-4 sm:p-5"
-                    >
-                      <div className="flex flex-wrap items-start justify-between gap-3">
-                        <div className="max-w-2xl">
-                          <p className="inline-flex items-center gap-2 text-xs font-semibold uppercase tracking-[0.12em] text-primary-700">
-                            <Sparkles className="h-4 w-4" aria-hidden="true" />
-                            {personaPresentation.label} scope guide
-                          </p>
-                          <h3
-                            id="partner-persona-scope-heading"
-                            className="mt-2 font-semibold text-slate-950"
-                          >
-                            {personaPresentation.booking.scopeHeading}
-                          </h3>
-                          <p className="mt-1 text-sm leading-6 text-slate-700">
-                            {personaPresentation.booking.scopeLead}
-                          </p>
-                        </div>
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setShowPersonaSuggestions(false);
-                            setPersonaFeedback(null);
-                          }}
-                          className={cn(
-                            partnerSecondaryButtonClass,
-                            "min-h-11 px-3",
-                          )}
-                          aria-label="Dismiss persona booking suggestions"
+                      <PartnerWorkQuestions
+                        value={form}
+                        onChange={updateScope}
+                        fieldErrors={fieldErrors}
+                      />
+                      <PartnerMaterialsQuestion
+                        value={form}
+                        onChange={updateScope}
+                        fieldErrors={fieldErrors}
+                      />
+                      <PartnerSavedScopeDetails
+                        value={form}
+                        onChange={updateScope}
+                        fieldErrors={fieldErrors}
+                        initialValue={initialFormRef.current}
+                        requiredFields={service?.requiredScopeFields}
+                      />
+                      {showPersonaSuggestions ? (
+                        <aside
+                          aria-labelledby="partner-persona-scope-heading"
+                          className="rounded-2xl border border-primary-100 bg-primary-50/70 p-4 sm:p-5"
                         >
-                          <X className="h-4 w-4" aria-hidden="true" />
-                          Dismiss
-                        </button>
-                      </div>
-                      <ul className="mt-3 grid gap-x-6 gap-y-2 text-sm leading-5 text-slate-700 sm:grid-cols-2">
-                        {personaPresentation.booking.scopeChecklist.map(
-                          (item) => (
-                            <li key={item} className="flex gap-2">
-                              <Check
-                                className="mt-0.5 h-4 w-4 shrink-0 text-primary-700"
-                                aria-hidden="true"
-                              />
-                              <span>{item}</span>
-                            </li>
-                          ),
-                        )}
-                      </ul>
-                      <p className="mt-3 text-xs leading-5 text-slate-600">
-                        Use this checklist if it saves time. It does not change
-                        your service, account access, or saved request.
-                      </p>
-                    </aside>
-                  ) : null}
+                          <div className="flex flex-wrap items-start justify-between gap-3">
+                            <div className="max-w-2xl">
+                              <p className="inline-flex items-center gap-2 text-xs font-semibold uppercase tracking-[0.12em] text-primary-700">
+                                <Sparkles
+                                  className="h-4 w-4"
+                                  aria-hidden="true"
+                                />
+                                {personaPresentation.label} scope guide
+                              </p>
+                              <h3
+                                id="partner-persona-scope-heading"
+                                className="mt-2 font-semibold text-slate-950"
+                              >
+                                {personaPresentation.booking.scopeHeading}
+                              </h3>
+                              <p className="mt-1 text-sm leading-6 text-slate-700">
+                                {personaPresentation.booking.scopeLead}
+                              </p>
+                            </div>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setShowPersonaSuggestions(false);
+                                setPersonaFeedback(null);
+                              }}
+                              className={cn(
+                                partnerSecondaryButtonClass,
+                                "min-h-11 px-3",
+                              )}
+                              aria-label="Dismiss persona booking suggestions"
+                            >
+                              <X className="h-4 w-4" aria-hidden="true" />
+                              Dismiss
+                            </button>
+                          </div>
+                          <ul className="mt-3 grid gap-x-6 gap-y-2 text-sm leading-5 text-slate-700 sm:grid-cols-2">
+                            {personaPresentation.booking.scopeChecklist.map(
+                              (item) => (
+                                <li key={item} className="flex gap-2">
+                                  <Check
+                                    className="mt-0.5 h-4 w-4 shrink-0 text-primary-700"
+                                    aria-hidden="true"
+                                  />
+                                  <span>{item}</span>
+                                </li>
+                              ),
+                            )}
+                          </ul>
+                          <p className="mt-3 text-xs leading-5 text-slate-600">
+                            Use this checklist if it saves time. It does not
+                            change your service, account access, or saved
+                            request.
+                          </p>
+                        </aside>
+                      ) : null}
+                    </>
+                  )}
                 </div>
                 <fieldset
                   id="partner-book-photos"
@@ -2542,6 +2832,22 @@ function PartnerBookingWizardSession({
                       onPendingChange={setPendingPhotos}
                       onPhaseChange={setPhotoPhase}
                       persona={persona}
+                      serviceChoices={
+                        form.modelVersion === 2
+                          ? form.serviceLines.map((line) => ({
+                              id: line.id,
+                              label:
+                                getPartnerServiceDefinition(line.serviceKey)
+                                  ?.label ?? line.serviceKey,
+                            }))
+                          : undefined
+                      }
+                      serviceAssociations={photoServiceAssociations(form)}
+                      onServiceAssociationsChange={
+                        form.modelVersion === 2
+                          ? changePhotoServices
+                          : undefined
+                      }
                     />
                   ) : (
                     <PartnerNotice tone="info">
@@ -2744,7 +3050,7 @@ function PartnerBookingWizardSession({
                       </aside>
                     ) : null}
                   </PartnerBookingDetailsRow>{" "}
-                  {service?.addOns?.length ? (
+                  {form.modelVersion !== 2 && service?.addOns?.length ? (
                     <PartnerBookingDetailsRow
                       title="Additional services"
                       summary={
@@ -2862,7 +3168,7 @@ function PartnerBookingWizardSession({
                       </fieldset>
                     </PartnerBookingDetailsRow>
                   ) : null}
-                  {service?.agreement ? (
+                  {form.modelVersion !== 2 && service?.agreement ? (
                     <PartnerBookingDetailsRow
                       title="Service and pricing"
                       summary={service.agreement.label}
@@ -2974,6 +3280,7 @@ function PartnerBookingWizardSession({
                 ) : null}
                 {windowsByDate.length === 0 ? (
                   <PartnerPreferredSchedule
+                    multiService={form.modelVersion === 2}
                     value={form}
                     onChange={(key, value) =>
                       update<keyof PartnerPreferredScheduleFormValues>(
@@ -3139,111 +3446,183 @@ function PartnerBookingWizardSession({
                       {location?.address}
                     </dd>
                   </div>
-                  <div className="rounded-xl border border-slate-200 p-4">
-                    <dt className="text-xs font-semibold uppercase tracking-wide text-slate-500">
-                      Service
-                    </dt>
-                    <dd className="mt-1 font-semibold text-slate-950">
-                      {service?.label ?? form.serviceKey}
-                    </dd>
-                    {selectedBaseOption ? (
-                      <dd className="mt-1 text-sm font-medium text-slate-700">
-                        {selectedBaseOption.label}
+                  {form.modelVersion === 2 ? (
+                    <>
+                      <PartnerServiceLineSummary
+                        lines={form.serviceLines}
+                        definitions={PARTNER_SERVICE_DEFINITIONS}
+                        services={services}
+                        renderRates={(serviceKey) => (
+                          <PartnerServiceRates
+                            compact
+                            serviceKey={serviceKey}
+                            card={structuredRates}
+                            status={structuredRatesStatus}
+                          />
+                        )}
+                      />
+                      <div className="sm:col-span-2">
+                        <dt className="sr-only">Service rate information</dt>
+                        <dd>
+                          <PartnerRequestRateNote
+                            card={structuredRates}
+                            status={structuredRatesStatus}
+                          />
+                        </dd>
+                      </div>
+                      {form.description ||
+                      form.equipmentNeeds.length ||
+                      form.requiredCompletionDate ||
+                      (form.multiStop && form.multiStopDetails) ? (
+                        <div className="rounded-xl border border-slate-200 p-4 sm:col-span-2">
+                          <dt className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+                            Shared project details
+                          </dt>
+                          <dd className="mt-2 space-y-2 whitespace-pre-wrap break-words text-sm text-slate-700">
+                            {form.description ? (
+                              <p>{form.description}</p>
+                            ) : null}
+                            {form.equipmentNeeds.length ? (
+                              <p>
+                                <strong>Equipment and access: </strong>
+                                {PARTNER_EQUIPMENT_OPTIONS.filter((option) =>
+                                  form.equipmentNeeds.includes(option.key),
+                                )
+                                  .map((option) => option.label)
+                                  .join(", ")}
+                              </p>
+                            ) : null}
+                            {form.requiredCompletionDate ? (
+                              <p>
+                                <strong>Completion deadline requested: </strong>
+                                {formatDate(
+                                  form.requiredCompletionDate,
+                                  selectedTimezone,
+                                )}
+                                {form.requiredCompletionTime
+                                  ? ` at ${form.requiredCompletionTime}`
+                                  : ""}{" "}
+                                ({selectedTimezone})
+                              </p>
+                            ) : null}
+                            {form.multiStop && form.multiStopDetails ? (
+                              <p>
+                                <strong>Stops and sequence: </strong>
+                                {form.multiStopDetails}
+                              </p>
+                            ) : null}
+                          </dd>
+                        </div>
+                      ) : null}
+                    </>
+                  ) : (
+                    <div className="rounded-xl border border-slate-200 p-4">
+                      <dt className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+                        Service
+                      </dt>
+                      <dd className="mt-1 font-semibold text-slate-950">
+                        {service?.label ?? form.serviceKey}
                       </dd>
-                    ) : null}
-                    <dd className="mt-1 whitespace-pre-wrap break-words text-sm text-slate-600">
-                      {form.description}
-                    </dd>
-                    {form.itemCount || form.volume ? (
-                      <dd className="mt-3 text-sm text-slate-700">
-                        {[
-                          form.itemCount ? `${form.itemCount} items` : null,
-                          form.volume ? `${form.volume} cubic yards` : null,
-                        ]
-                          .filter(Boolean)
-                          .join(" · ")}
+                      {selectedBaseOption ? (
+                        <dd className="mt-1 text-sm font-medium text-slate-700">
+                          {selectedBaseOption.label}
+                        </dd>
+                      ) : null}
+                      <dd className="mt-1 whitespace-pre-wrap break-words text-sm text-slate-600">
+                        {form.description}
                       </dd>
-                    ) : null}
-                    {form.hazardCategories.length > 0 ||
-                    form.equipmentNeeds.length > 0 ||
-                    form.requiredCompletionDate ||
-                    (form.multiStop && form.multiStopDetails) ? (
-                      <dd className="mt-3 space-y-2 border-t border-slate-200 pt-3 text-sm text-slate-700">
-                        {form.hazardCategories.length > 0 ? (
-                          <p>
-                            <strong>Materials: </strong>
-                            {PARTNER_HAZARD_OPTIONS.filter((option) =>
-                              form.hazardCategories.includes(option.key),
-                            )
-                              .map((option) => option.label)
-                              .join(", ")}
-                          </p>
-                        ) : null}
-                        {form.equipmentNeeds.length > 0 ? (
-                          <p>
-                            <strong>Equipment and access: </strong>
-                            {PARTNER_EQUIPMENT_OPTIONS.filter((option) =>
-                              form.equipmentNeeds.includes(option.key),
-                            )
-                              .map((option) => option.label)
-                              .join(", ")}
-                          </p>
-                        ) : null}
-                        {form.requiredCompletionDate ? (
-                          <p>
-                            <strong>Completion deadline requested: </strong>
-                            {formatDate(
-                              form.requiredCompletionDate,
-                              selectedTimezone,
-                            )}
-                            {form.requiredCompletionTime
-                              ? ` at ${form.requiredCompletionTime}`
-                              : ""}{" "}
-                            ({selectedTimezone})
-                          </p>
-                        ) : null}
-                        {form.multiStop && form.multiStopDetails ? (
-                          <p className="whitespace-pre-wrap break-words">
-                            <strong>Stops and sequence: </strong>
-                            {form.multiStopDetails}
-                          </p>
-                        ) : null}
-                      </dd>
-                    ) : null}
-                    {selectedServiceAddOns.length ? (
-                      <dd className="mt-3 border-t border-slate-200 pt-3 text-sm text-slate-700">
-                        <span className="block text-xs font-semibold uppercase tracking-wide text-slate-500">
-                          Add-ons
-                        </span>
-                        <ul className="mt-1 space-y-1">
-                          {selectedServiceAddOns.map((addOn) => (
-                            <li key={addOn.key}>
-                              {addOn.label} × {form.addOnQuantities[addOn.key]}
-                            </li>
-                          ))}
-                        </ul>
-                      </dd>
-                    ) : null}
-                    {form.restrictedItems || form.nonStandard ? (
-                      <dd className="mt-3 rounded-lg bg-amber-50 p-3 text-sm text-amber-950">
-                        <span className="block font-semibold">
-                          Stonegate review requested
-                        </span>
-                        <ul className="mt-1 list-disc space-y-1 pl-5">
-                          {form.restrictedItems ? (
-                            <li>
-                              Potentially restricted or special-handling
-                              material
-                            </li>
+                      {form.itemCount || form.volume ? (
+                        <dd className="mt-3 text-sm text-slate-700">
+                          {[
+                            form.itemCount ? `${form.itemCount} items` : null,
+                            form.volume ? `${form.volume} cubic yards` : null,
+                          ]
+                            .filter(Boolean)
+                            .join(" · ")}
+                        </dd>
+                      ) : null}
+                      {form.hazardCategories.length > 0 ||
+                      form.equipmentNeeds.length > 0 ||
+                      form.requiredCompletionDate ||
+                      (form.multiStop && form.multiStopDetails) ? (
+                        <dd className="mt-3 space-y-2 border-t border-slate-200 pt-3 text-sm text-slate-700">
+                          {form.hazardCategories.length > 0 ? (
+                            <p>
+                              <strong>Materials: </strong>
+                              {PARTNER_HAZARD_OPTIONS.filter((option) =>
+                                form.hazardCategories.includes(option.key),
+                              )
+                                .map((option) => option.label)
+                                .join(", ")}
+                            </p>
                           ) : null}
-                          {form.nonStandard ? (
-                            <li>Handling review requested</li>
+                          {form.equipmentNeeds.length > 0 ? (
+                            <p>
+                              <strong>Equipment and access: </strong>
+                              {PARTNER_EQUIPMENT_OPTIONS.filter((option) =>
+                                form.equipmentNeeds.includes(option.key),
+                              )
+                                .map((option) => option.label)
+                                .join(", ")}
+                            </p>
                           ) : null}
-                        </ul>
-                      </dd>
-                    ) : null}
-                  </div>
-                  {availability?.pricing ? (
+                          {form.requiredCompletionDate ? (
+                            <p>
+                              <strong>Completion deadline requested: </strong>
+                              {formatDate(
+                                form.requiredCompletionDate,
+                                selectedTimezone,
+                              )}
+                              {form.requiredCompletionTime
+                                ? ` at ${form.requiredCompletionTime}`
+                                : ""}{" "}
+                              ({selectedTimezone})
+                            </p>
+                          ) : null}
+                          {form.multiStop && form.multiStopDetails ? (
+                            <p className="whitespace-pre-wrap break-words">
+                              <strong>Stops and sequence: </strong>
+                              {form.multiStopDetails}
+                            </p>
+                          ) : null}
+                        </dd>
+                      ) : null}
+                      {selectedServiceAddOns.length ? (
+                        <dd className="mt-3 border-t border-slate-200 pt-3 text-sm text-slate-700">
+                          <span className="block text-xs font-semibold uppercase tracking-wide text-slate-500">
+                            Add-ons
+                          </span>
+                          <ul className="mt-1 space-y-1">
+                            {selectedServiceAddOns.map((addOn) => (
+                              <li key={addOn.key}>
+                                {addOn.label} ×{" "}
+                                {form.addOnQuantities[addOn.key]}
+                              </li>
+                            ))}
+                          </ul>
+                        </dd>
+                      ) : null}
+                      {form.restrictedItems || form.nonStandard ? (
+                        <dd className="mt-3 rounded-lg bg-amber-50 p-3 text-sm text-amber-950">
+                          <span className="block font-semibold">
+                            Stonegate review requested
+                          </span>
+                          <ul className="mt-1 list-disc space-y-1 pl-5">
+                            {form.restrictedItems ? (
+                              <li>
+                                Potentially restricted or special-handling
+                                material
+                              </li>
+                            ) : null}
+                            {form.nonStandard ? (
+                              <li>Handling review requested</li>
+                            ) : null}
+                          </ul>
+                        </dd>
+                      ) : null}
+                    </div>
+                  )}
+                  {form.modelVersion !== 2 && availability?.pricing ? (
                     <div className="rounded-xl border border-slate-200 p-4 sm:col-span-2">
                       <dt className="text-xs font-semibold uppercase tracking-wide text-slate-500">
                         {service
@@ -3376,7 +3755,9 @@ function PartnerBookingWizardSession({
                     </dd>
                     {!hold ? (
                       <dd className="mt-1 text-xs font-medium text-slate-600">
-                        Stonegate will confirm the appointment.
+                        {form.modelVersion === 2
+                          ? "Stonegate will confirm the date and time of each visit."
+                          : "Stonegate will confirm the appointment."}
                       </dd>
                     ) : null}
                     {!hold &&
@@ -3520,7 +3901,8 @@ function PartnerBookingWizardSession({
                     .
                   </p>
                 </section>
-                {availability?.reviewReasons.length || !hold ? (
+                {form.modelVersion !== 2 &&
+                (availability?.reviewReasons.length || !hold) ? (
                   <PartnerNotice tone="warning">
                     This request will be sent to Stonegate for review. Any time
                     or date shown as a preference remains unreserved until staff

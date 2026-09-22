@@ -12,3 +12,4 @@ export * from "./twilio-provider";
 export * from "./provider-test-runtime";
 export * from "./agent-action-contracts";
 export { MystSDK } from "./http/client";
+export * from "./partner-multi-service";

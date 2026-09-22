@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { partnerMultiServiceRequestSchema } from "./partner-multi-service";
 
 const text = z.string().nullable();
 const number = z.number().finite().nullable();
@@ -8,6 +9,7 @@ const window = z.object({ startAt: z.string(), endAt: z.string() }).nullable();
 /** Staff-safe submitted request data. Private location secrets are excluded. */
 export const partnerRequestDetailsSchema = z.object({
   version: z.literal(1),
+  multiService: partnerMultiServiceRequestSchema.optional(),
   jobId: z.string().min(1),
   accountId: z.string().min(1),
   accountName: z.string(),

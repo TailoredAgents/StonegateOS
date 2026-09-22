@@ -62,6 +62,9 @@ export async function getPartnerRelationshipContext(
       name: partnerAccounts.name,
       enabled: partnerAccounts.portalAccessEnabled,
       lifecycle: partnerAccounts.portalLifecycleStatus,
+      setupStatus: partnerAccounts.portalSetupStatus,
+      contactName: partnerAccounts.serviceContactName,
+      contactEmail: partnerAccounts.serviceContactEmail,
       config: partnerAccounts.portalWorkflowConfig,
       revision: partnerAccounts.portalWorkflowRevision,
     })
@@ -120,6 +123,9 @@ export async function getPartnerRelationshipContext(
         name: account.name,
         enabled: account.enabled,
         lifecycle: account.lifecycle,
+        setupStatus: account.setupStatus,
+        contactName: account.contactName,
+        contactEmail: account.contactEmail,
       },
       config: normalizePartnerAccountWorkflow(account.config),
       version: String(account.revision),
@@ -146,10 +152,7 @@ export async function handlePartnerRelationshipWrite(
           : kind === "revoke"
             ? ["partners.invitations.revoke"]
             : ["partners.accounts.manage"],
-    risk:
-      kind === "workflow" || kind === "revoke" || kind === "enable"
-        ? "normal"
-        : "external",
+    risk: kind === "workflow" || kind === "revoke" ? "normal" : "external",
     requiresIdempotency: true,
     auditAction: "partner.relationship." + kind,
   });
@@ -213,9 +216,23 @@ export async function handlePartnerRelationshipWrite(
     if (claimed.kind === "replay")
       return teamMutationIdempotencyReplayResponse(claimed.replay);
     claim = claimed.claim;
-    if (kind === "create" || kind === "invite" || kind === "resend") {
-      const rate = await consumeTeamAuthRateLimit({ action: "partner_invitation_management", request, identity: { kind: "team_member", value: mutation.actor.id! } });
-      if (rate.limited) throw new TeamMutationFailure("rate_limited", "Too many invitation requests. Wait a few minutes before trying again.", { retryAfter: String(rate.retryAfterSeconds), retryable: true });
+    if (
+      kind === "create" ||
+      kind === "invite" ||
+      kind === "resend" ||
+      kind === "enable"
+    ) {
+      const rate = await consumeTeamAuthRateLimit({
+        action: "partner_invitation_management",
+        request,
+        identity: { kind: "team_member", value: mutation.actor.id! },
+      });
+      if (rate.limited)
+        throw new TeamMutationFailure(
+          "rate_limited",
+          "Too many invitation requests. Wait a few minutes before trying again.",
+          { retryAfter: String(rate.retryAfterSeconds), retryable: true },
+        );
     }
     const result = await db.transaction(async (tx) => {
       const data =
@@ -250,9 +267,20 @@ export async function handlePartnerRelationshipWrite(
                     accountId!,
                     PartnerWorkflowUpdateSchema.parse(parsed.data),
                   );
-      const invitation = "invitation" in data && data.invitation && typeof data.invitation === "object" ? data.invitation as Record<string, unknown> : null;
-      const entityId = "invitationId" in data ? data.invitationId : kind === "invite" && typeof invitation?.["id"] === "string" ? invitation["id"] : data.accountId;
-      const entityType = kind === "invite" && !invitation ? "partner_account" : data.recordType;
+      const invitation =
+        "invitation" in data &&
+        data.invitation &&
+        typeof data.invitation === "object"
+          ? (data.invitation as Record<string, unknown>)
+          : null;
+      const entityId =
+        "invitationId" in data
+          ? data.invitationId
+          : kind === "invite" && typeof invitation?.["id"] === "string"
+            ? invitation["id"]
+            : data.accountId;
+      const entityType =
+        kind === "invite" && !invitation ? "partner_account" : data.recordType;
       const audit = await mutation.audit.insertSuccess(tx, {
         entityType,
         entityId,

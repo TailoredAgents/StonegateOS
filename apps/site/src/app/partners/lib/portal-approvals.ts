@@ -62,6 +62,8 @@ export type PartnerApprovalDecisionRecord = {
 };
 
 export type PartnerApprovalRequestSnapshot = {
+  modelVersion?: 1 | 2;
+  serviceKeys?: string[];
   serviceKey?: string;
   serviceType?: string;
   poNumber?: string;
@@ -233,6 +235,22 @@ function isApprovalRequestSnapshot(
   value: unknown,
 ): value is PartnerApprovalRequestSnapshot {
   if (!isRecord(value)) return false;
+  if (
+    value["modelVersion"] !== undefined &&
+    value["modelVersion"] !== 1 &&
+    value["modelVersion"] !== 2
+  )
+    return false;
+  if (
+    value["serviceKeys"] !== undefined &&
+    (!Array.isArray(value["serviceKeys"]) ||
+      value["serviceKeys"].length > 8 ||
+      !value["serviceKeys"].every(
+        (key) =>
+          typeof key === "string" && /^[a-z][a-z0-9_-]{0,79}$/u.test(key),
+      ))
+  )
+    return false;
   const amount = value["amount"];
   const address = value["address"];
   const optionalTextKeys = [
@@ -249,6 +267,8 @@ function isApprovalRequestSnapshot(
     ...optionalTimestampKeys,
     "amount",
     "address",
+    "modelVersion",
+    "serviceKeys",
   ]);
   if (
     Object.keys(value).some((key) => !allowedKeys.has(key)) ||

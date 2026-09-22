@@ -1,3 +1,7 @@
+import {
+  parsePartnerQuoteServiceSeeds,
+  type PartnerQuoteServiceSeed,
+} from "../lib/quote-v2-composer-model";
 import { randomUUID } from "node:crypto";
 import type { ReactElement } from "react";
 import type { TeamRequestPrincipal } from "@/lib/team-principal";
@@ -22,6 +26,7 @@ type VerifiedPartnerQuoteContext = {
   accountName: string;
   target: { type: "location" | "booking"; id: string };
   targetLabel: string;
+  serviceLines: PartnerQuoteServiceSeed[];
 };
 
 function record(value: unknown): Record<string, unknown> | null {
@@ -76,6 +81,8 @@ async function verifyPartnerQuoteContext(input: {
   });
   const item = record(target);
   if (!item || typeof item["label"] !== "string") return null;
+  const serviceLines = parsePartnerQuoteServiceSeeds(item["serviceLines"]);
+  if (!serviceLines) return null;
   return {
     accountId: input.context.accountId,
     accountName: account["name"].slice(0, 240),
@@ -84,6 +91,7 @@ async function verifyPartnerQuoteContext(input: {
       id: input.context.targetId,
     },
     targetLabel: item["label"].slice(0, 240),
+    serviceLines,
   };
 }
 
@@ -158,6 +166,7 @@ export async function QuoteV2BuilderSection({
         )}
         preparerName={principal.name}
         recoveryId={randomUUID()}
+        initialServiceLines={verifiedPartnerContext?.serviceLines}
         initialContactId={initialContactId}
         initialPropertyId={initialPropertyId}
         partnerContext={

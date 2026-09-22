@@ -84,6 +84,11 @@ const DESTRUCTIVE_ROUTE_PATTERN =
   /\/(?:merge|merge-suggestions|purge|sales\/reset|stripe\/backfill)(?:\/|$)/u;
 
 const HUMAN_ONLY_ROUTE_KEYS = new Set([
+  "app/api/admin/partner-management/v1/accounts/[accountId]/service-rates/route.ts#PATCH",
+  "app/api/admin/partner-management/v1/service-requests/[jobId]/price/route.ts#POST",
+  "app/api/admin/partner-management/v1/service-requests/[jobId]/visits/route.ts#POST",
+  "app/api/admin/partner-management/v1/service-requests/[jobId]/visits/[visitId]/route.ts#PATCH",
+  "app/api/admin/partner-management/v1/service-requests/[jobId]/visits/[visitId]/schedule/route.ts#POST",
   "app/api/admin/contacts/[contactId]/purge/route.ts#GET",
   "app/api/admin/contacts/[contactId]/purge/route.ts#POST",
   "app/api/appointments/[id]/manual-payments/route.ts#POST",
@@ -114,6 +119,16 @@ const HUMAN_ONLY_ROUTE_KEYS = new Set([
 ]);
 
 const RISK_OVERRIDES: Readonly<Record<string, TeamActionRisk>> = {
+  "app/api/admin/partner-management/v1/accounts/[accountId]/service-rates/route.ts#PATCH":
+    "financial",
+  "app/api/admin/partner-management/v1/service-requests/[jobId]/price/route.ts#POST":
+    "financial",
+  "app/api/admin/partner-management/v1/service-requests/[jobId]/visits/route.ts#POST":
+    "external",
+  "app/api/admin/partner-management/v1/service-requests/[jobId]/visits/[visitId]/route.ts#PATCH":
+    "external",
+  "app/api/admin/partner-management/v1/service-requests/[jobId]/visits/[visitId]/schedule/route.ts#POST":
+    "external",
   "app/api/admin/roles/[roleId]/route.ts#PATCH": "destructive",
   "app/api/admin/automation/route.ts#POST": "external",
   "app/api/admin/inbox/export/jsonl/route.ts#POST": "read",

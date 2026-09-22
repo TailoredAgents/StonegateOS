@@ -15,6 +15,7 @@ import {
   PartnerInvitationCreateSchema,
   type PartnerStaffInvitationActor,
 } from "./partner-account-invitations";
+import { loadPartnerPublishedServiceRateCard } from "./partner-structured-rates";
 import { loadPartnerStaffInvitationAuthority } from "./partner-invitation-authority";
 import { acquirePartnerRecurringHorizonClaimLock } from "./partner-recurring-coordination";
 import { acquireScheduleConflictLock } from "./appointment-schedule-conflicts";
@@ -164,7 +165,8 @@ export async function createPartnerRelationship(
       segment: input.persona,
       source: "stonegate_relationship_setup",
       portalFit: "staff_relationship_confirmed",
-      portalAccessEnabled: true,
+      portalAccessEnabled: false,
+      portalSetupStatus: "rates_required",
       portalLifecycleStatus: "active",
       serviceContactName: input.contactName,
       serviceContactEmail: input.contactEmail.toLowerCase(),
@@ -185,36 +187,12 @@ export async function createPartnerRelationship(
       source: "account_default" as const,
     })),
   );
-  const result = await createPartnerAccountInvitation({
-    transaction: tx,
-    principal: staffActor(mutation, account.id),
-    payload: {
-      email: input.contactEmail,
-      name: input.contactName,
-      persona: input.persona,
-      roleKey: "administrator",
-      accessLevel: "account",
-      locationIds: [],
-      costCenterIds: [],
-    },
-    correlationId: mutation.correlationId,
-    idempotencyKeyHash: mutation.idempotencyKeyHash!,
-  });
-  if (result.status >= 500)
-    throw new TeamMutationFailure(
-      "internal",
-      "Invitation setup is temporarily unavailable. No company was created. Check the public invitation-link configuration, then retry.",
-      { status: 503, retryable: true },
-    );
-  if (result.status !== 202 || !result.body["invitation"])
-    throw new TeamMutationFailure(
-      "conflict",
-      "The contact could not safely be invited. No company was created; review the existing identity with Sales.",
-    );
   return {
     accountId: account.id,
-    invitation: result.body["invitation"],
-    deliveryStatus: "queued",
+    invitation: null,
+    deliveryStatus: "not_sent",
+    setupStatus: "rates_required",
+    version: "1",
     recordType: "partner_account",
   };
 }
@@ -225,13 +203,21 @@ export async function invitePartnerAsStaff(
   input: z.infer<typeof PartnerStaffInvitationCreateSchema>,
 ) {
   const [account] = await tx
-    .select({ id: partnerAccounts.id })
+    .select({
+      id: partnerAccounts.id,
+      setupStatus: partnerAccounts.portalSetupStatus,
+    })
     .from(partnerAccounts)
     .where(eq(partnerAccounts.id, input.accountId))
     .for("update")
     .limit(1);
   if (!account)
     throw new TeamMutationFailure("invalid", "Choose an existing company.");
+  if (account.setupStatus !== "complete")
+    throw new TeamMutationFailure(
+      "conflict",
+      "Publish all required service rates and activate this company before inviting people.",
+    );
   const [anyMember] = await tx
     .select({ id: partnerAccountMemberships.id })
     .from(partnerAccountMemberships)
@@ -311,10 +297,38 @@ export async function enablePartnerRelationshipAsStaff(
       "conflict",
       "This company already has approved portal access.",
     );
+  const stagedSetup = account.portalSetupStatus === "rates_required";
+  if (stagedSetup) {
+    if (
+      !(await loadPartnerStaffInvitationAuthority(tx, mutation.actor.id, [
+        "partners.accounts.manage",
+        "partners.rates",
+        "partners.invitations.send",
+      ]))
+    )
+      throw new TeamMutationFailure(
+        "forbidden",
+        "Activating a new partner requires company, rate and invitation permissions.",
+      );
+    const published = await loadPartnerPublishedServiceRateCard(tx, {
+      accountId,
+    });
+    if (!published || published.source !== "structured" || !published.complete)
+      throw new TeamMutationFailure(
+        "conflict",
+        "Publish current rates for all eight services and their required variants before activating this company.",
+      );
+    if (!account.serviceContactName || !account.serviceContactEmail)
+      throw new TeamMutationFailure(
+        "invalid",
+        "Add the Administrator's name and email before activating this company.",
+      );
+  }
   await tx
     .update(partnerAccounts)
     .set({
       portalAccessEnabled: true,
+      ...(stagedSetup ? { portalSetupStatus: "complete" as const } : {}),
       portalWorkflowRevision: account.portalWorkflowRevision + 1,
       updatedAt: new Date(),
     })
@@ -337,8 +351,41 @@ export async function enablePartnerRelationshipAsStaff(
         minimumCount: 1,
         source: "account_default",
       });
+  let invitation: unknown = null;
+  if (stagedSetup) {
+    const result = await createPartnerAccountInvitation({
+      transaction: tx,
+      principal: staffActor(mutation, accountId),
+      payload: {
+        email: account.serviceContactEmail!,
+        name: account.serviceContactName!,
+        persona: PartnerRelationshipCreateSchema.shape.persona
+          .catch("other")
+          .parse(account.segment),
+        roleKey: "administrator",
+        accessLevel: "account",
+        locationIds: [],
+        costCenterIds: [],
+      },
+      correlationId: mutation.correlationId,
+      idempotencyKeyHash: mutation.idempotencyKeyHash!,
+    });
+    if (result.status !== 202 || !result.body["invitation"])
+      throw new TeamMutationFailure(
+        result.status >= 500 ? "internal" : "conflict",
+        "The invitation could not be prepared. The company remains inactive; its saved rates are unchanged.",
+        {
+          status: result.status >= 500 ? 503 : 409,
+          retryable: result.status >= 500,
+        },
+      );
+    invitation = result.body["invitation"];
+  }
   return {
     accountId,
+    invitation,
+    deliveryStatus: stagedSetup ? "queued" : "not_sent",
+    setupStatus: stagedSetup ? "complete" : account.portalSetupStatus,
     version: String(account.portalWorkflowRevision + 1),
     recordType: "partner_account",
   };
@@ -498,10 +545,22 @@ export async function updatePartnerWorkflowAsStaff(
             and ${partnerRecurringSeries.partnerAccountId} = ${accountId}
             and ${partnerRecurringOccurrences.localDate} >= (now() at time zone ${partnerRecurringSeries.timezone})::date)`,
           ),
-        ).returning({ draftId: partnerRecurringOccurrences.bookingDraftId });
-      const draftIds = skipped.flatMap((row) => row.draftId ? [row.draftId] : []);
-      if (draftIds.length) await tx.update(appointmentHolds).set({ status: "released", updatedAt: new Date() })
-        .where(and(eq(appointmentHolds.partnerAccountId, accountId), inArray(appointmentHolds.partnerBookingDraftId, draftIds), eq(appointmentHolds.status, "active")));
+        )
+        .returning({ draftId: partnerRecurringOccurrences.bookingDraftId });
+      const draftIds = skipped.flatMap((row) =>
+        row.draftId ? [row.draftId] : [],
+      );
+      if (draftIds.length)
+        await tx
+          .update(appointmentHolds)
+          .set({ status: "released", updatedAt: new Date() })
+          .where(
+            and(
+              eq(appointmentHolds.partnerAccountId, accountId),
+              inArray(appointmentHolds.partnerBookingDraftId, draftIds),
+              eq(appointmentHolds.status, "active"),
+            ),
+          );
     }
   }
   const [saved] = await tx

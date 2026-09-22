@@ -26,7 +26,15 @@ export type RelationshipWorkflow = {
   partialPayments: boolean;
 };
 export type RelationshipContext = {
-  account: { id: string; name: string; enabled: boolean; lifecycle: string };
+  account: {
+    id: string;
+    name: string;
+    enabled: boolean;
+    lifecycle: string;
+    setupStatus: "complete" | "rates_required";
+    contactName: string | null;
+    contactEmail: string | null;
+  };
   config: RelationshipWorkflow;
   version: string;
   locations: RelationshipChoice[];
@@ -296,6 +304,7 @@ export async function savePartnerRelationship(
       accountId: string;
       version?: string;
       deliveryStatus?: string;
+      setupStatus?: string;
     }>(response);
     if (!success || !UUID.test(success.data.accountId))
       return {
@@ -310,13 +319,15 @@ export async function savePartnerRelationship(
       ...(success.data.version ? { version: success.data.version } : {}),
       message:
         kind === "enable"
-          ? "Company access approved. Now explicitly invite the first Administrator."
+          ? success.data.deliveryStatus === "queued"
+            ? "Company activated and Administrator invitation queued."
+            : "Company access approved. Now explicitly invite the first Administrator."
           : kind === "workflow"
             ? "Company tools saved."
             : success.data.deliveryStatus === "unchanged"
               ? "No new invitation was created. Check current invitations and company access before retrying."
               : kind === "create"
-                ? "Company created and Administrator invitation queued."
+                ? "Company details saved. Set its service rates before activating access or sending an invitation."
                 : "Invitation queued. Delivery status is shown in Invitations.",
     };
   } catch {

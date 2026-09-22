@@ -1,4 +1,5 @@
 import { normalizePartnerAccountWorkflow } from "@/lib/partner-account-workflows";
+import { PARTNER_SERVICE_KEYS } from "@myst-os/pricing";
 
 export const GENERAL_PARTNER_SERVICE_REQUEST = "service_request";
 
@@ -6,6 +7,7 @@ export const GENERAL_PARTNER_SERVICE_REQUEST = "service_request";
 export function partnerServiceRequestability(
   config: unknown,
   serviceKey: string,
+  multiService = false,
 ) {
   const workflow = normalizePartnerAccountWorkflow(config);
   return {
@@ -13,6 +15,8 @@ export function partnerServiceRequestability(
     reviewAllowed:
       !workflow.disabledServiceKeys.includes(serviceKey) &&
       (serviceKey === GENERAL_PARTNER_SERVICE_REQUEST ||
+        (multiService &&
+          (PARTNER_SERVICE_KEYS as readonly string[]).includes(serviceKey)) ||
         workflow.requestableServiceKeys.includes(serviceKey)),
   };
 }

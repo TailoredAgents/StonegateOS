@@ -33,6 +33,7 @@ export function PartnerApprovalDecisionForm({
   initialCurrentMemberDecision,
   expiresAt,
   rulesValid,
+  multiServiceRequest = false,
 }: {
   requestId: string;
   initialEtag: string | null;
@@ -41,6 +42,7 @@ export function PartnerApprovalDecisionForm({
   initialCurrentMemberDecision: PartnerApprovalDecision | null;
   expiresAt: string | null;
   rulesValid: boolean;
+  multiServiceRequest?: boolean;
 }) {
   const router = useRouter();
   const [decision, setDecision] =
@@ -168,7 +170,9 @@ export function PartnerApprovalDecisionForm({
               tone: "success",
               text:
                 result.data.decision.decision === "approved"
-                  ? "The request was approved."
+                  ? multiServiceRequest
+                    ? "The request was approved. Stonegate will review pricing and schedule the service visits; no appointment is reserved yet."
+                    : "The request was approved."
                   : "The request was declined and the requester can review your reason.",
             },
     );

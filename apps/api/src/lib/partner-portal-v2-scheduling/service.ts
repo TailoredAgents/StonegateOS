@@ -11,7 +11,23 @@ import {
   namedResourceBlocksForOccupancy,
   type NamedResourcePlan,
 } from "@/lib/scheduling-resource-store";
-import { isPartnerAddOnTierKey } from "@myst-os/pricing";
+import {
+  isPartnerAddOnTierKey,
+  PartnerServiceLinesInputSchema,
+  type PartnerServiceLineInput,
+  getPartnerServiceDefinition,
+} from "@myst-os/pricing";
+import { arePartnerMultiServiceRequestsEnabled } from "@/lib/partner-portal-feature-flags";
+import { loadPartnerServiceRateSnapshot } from "@/lib/partner-structured-rates";
+import { createPartnerMultiServiceVisit } from "@/lib/partner-multi-service";
+import {
+  lockPartnerRequestFinancials,
+  lockMultiServiceRequestIfApplicable,
+} from "@/lib/partner-request-financials";
+import {
+  resolveMultiServiceApproval,
+  requiredServiceRateVariants,
+} from "@/lib/partner-multi-service-domain";
 import {
   and,
   desc,
@@ -46,6 +62,9 @@ import {
   partnerApprovalRequests,
   partnerBookingDrafts,
   partnerBookings,
+  partnerBookingServiceLines,
+  partnerBookingVisits,
+  partnerBookingVisitLines,
   partnerCancellationRequests,
   partnerDraftMedia,
   partnerJobEvidence,
@@ -165,7 +184,7 @@ import {
   type PartnerPreferredWindow,
   type SubmittedPartnerBookingDto,
 } from "./domain";
-import { PartnerPortalSchedulingError } from "./errors";
+import { PartnerPortalSchedulingError, schedulingFieldError } from "./errors";
 
 type SchedulingTransaction = Parameters<
   DatabaseClient["transaction"]
@@ -209,6 +228,8 @@ export type PartnerSchedulingActor = Readonly<{
 }>;
 
 export type PartnerDraftDto = Readonly<{
+  modelVersion: 1 | 2;
+  serviceLines: readonly PartnerServiceLineInput[];
   id: string;
   rescheduleFromJobId: string | null;
   additionalServiceFromJobId: string | null;
@@ -376,6 +397,8 @@ export function toPartnerDraftDto(row: DraftRow): PartnerDraftDto {
   );
   return Object.freeze({
     id: row.id,
+    modelVersion: row.modelVersion === 2 ? 2 : 1,
+    serviceLines: row.serviceLines ?? [],
     rescheduleFromJobId: row.rescheduleFromPartnerBookingId,
     additionalServiceFromJobId: row.additionalServiceFromPartnerBookingId,
     state: row.state,
@@ -747,8 +770,15 @@ export async function createPartnerAdditionalServiceDraft(input: {
         partnerAccountId: input.actor.accountId,
         createdByMembershipId: input.actor.membershipId,
         additionalServiceFromPartnerBookingId: source.id,
+        modelVersion: arePartnerMultiServiceRequestsEnabled(
+          input.actor.accountId,
+        )
+          ? 2
+          : 1,
+        serviceLines: [],
         locationId: location?.id ?? null,
         serviceKey:
+          !arePartnerMultiServiceRequestsEnabled(input.actor.accountId) &&
           fallback &&
           !partnerServiceRequestability(fallback.workflow, fallback.key)
             .disabled
@@ -830,6 +860,62 @@ async function resolveMutationLocation(
   const location = await loadLocation(tx, actor.accountId, locationId);
   if (locationId) assertLocationAccess(actor, location);
   return location;
+}
+
+function assertMultiServiceEnabled(accountId: string) {
+  if (!arePartnerMultiServiceRequestsEnabled(accountId))
+    throw new PartnerPortalSchedulingError(
+      "review_required",
+      "Multi-service requests are not enabled for this account.",
+      { status: 403 },
+    );
+}
+function assertMultiServiceShape(mutation: PartnerDraftMutation) {
+  if (
+    mutation.serviceKey ||
+    mutation.tierKey ||
+    mutation.selectedAddOns?.length
+  )
+    throw schedulingFieldError({
+      serviceLines: "Choose services and extras within each service line.",
+    });
+}
+async function assertMultiServiceLines(
+  tx: SchedulingTransaction,
+  lines: readonly PartnerServiceLineInput[],
+  accountId: string,
+) {
+  const parsed = PartnerServiceLinesInputSchema.safeParse(lines);
+  if (!parsed.success)
+    throw schedulingFieldError({
+      serviceLines: "Review the selected services and their details.",
+    });
+  const [account] = await tx
+    .select({ workflow: partnerAccounts.portalWorkflowConfig })
+    .from(partnerAccounts)
+    .where(eq(partnerAccounts.id, accountId))
+    .limit(1);
+  if (!account)
+    throw new PartnerPortalSchedulingError(
+      "not_found",
+      "The account was not found.",
+      { status: 404 },
+    );
+  for (const line of parsed.data) {
+    if (
+      partnerServiceRequestability(account.workflow, line.serviceKey, true)
+        .disabled
+    )
+      throw schedulingFieldError({
+        serviceLines: "A selected service is not enabled for this account.",
+      });
+    await assertMutationService(tx, line.serviceKey);
+    await assertConfiguredSelectedAddOns(
+      tx,
+      line.serviceKey,
+      line.selectedAddOns,
+    );
+  }
 }
 
 async function assertMutationService(
@@ -1276,19 +1362,33 @@ export async function createPartnerBookingDraft(input: {
       return { draft: toPartnerDraftDto(replay), replayed: true };
     }
     await resolveMutationLocation(tx, input.actor, input.mutation.locationId);
-    await assertMutationService(tx, input.mutation.serviceKey);
-    await assertConfiguredSelectedAddOns(
-      tx,
-      input.mutation.serviceKey ?? null,
-      input.mutation.selectedAddOns ?? [],
-    );
-    await assertAccountServiceTier(
-      tx,
-      input.actor.accountId,
-      input.mutation.serviceKey ?? null,
-      input.mutation.tierKey ?? null,
-      now,
-    );
+    if (input.mutation.modelVersion === 2) {
+      assertMultiServiceEnabled(input.actor.accountId);
+      assertMultiServiceShape(input.mutation);
+      await assertMultiServiceLines(
+        tx,
+        input.mutation.serviceLines ?? [],
+        input.actor.accountId,
+      );
+    } else {
+      if (input.mutation.serviceLines?.length)
+        throw schedulingFieldError({
+          serviceLines: "Use the multi-service request format.",
+        });
+      await assertMutationService(tx, input.mutation.serviceKey);
+      await assertConfiguredSelectedAddOns(
+        tx,
+        input.mutation.serviceKey ?? null,
+        input.mutation.selectedAddOns ?? [],
+      );
+      await assertAccountServiceTier(
+        tx,
+        input.actor.accountId,
+        input.mutation.serviceKey ?? null,
+        input.mutation.tierKey ?? null,
+        now,
+      );
+    }
     const [created] = await tx
       .insert(partnerBookingDrafts)
       .values({
@@ -1433,6 +1533,7 @@ export async function createPartnerRescheduleDraft(input: {
   const requestHash = sha256(input.jobId);
 
   return getDb().transaction(async (tx) => {
+    await rejectParentWideMultiServiceReschedule(tx, input.actor, input.jobId);
     await tx.execute(
       sql`select pg_advisory_xact_lock(hashtext(${`partner_reschedule_draft_v2:${input.actor.accountId}`}))`,
     );
@@ -1915,7 +2016,8 @@ export async function updatePartnerBookingDraft(input: {
     input.mutation.serviceKey !== undefined ||
     input.mutation.tierKey !== undefined ||
     input.mutation.selectedAddOns !== undefined ||
-    input.mutation.scope !== undefined;
+    input.mutation.scope !== undefined ||
+    input.mutation.serviceLines !== undefined;
   return getDb().transaction(async (tx) => {
     // Draft mutations can release an active hold when schedule-defining scope
     // changes. Keep the lock order consistent with hold/submit/reschedule.
@@ -1926,31 +2028,52 @@ export async function updatePartnerBookingDraft(input: {
     assertDraftStateMutable(draft, now);
     assertRevision(draft, input.ifMatch, input.correlationId);
     await resolveMutationLocation(tx, input.actor, input.mutation.locationId);
-    await assertMutationService(tx, input.mutation.serviceKey);
-    const nextServiceKey =
-      input.mutation.serviceKey === undefined
-        ? draft.serviceKey
-        : input.mutation.serviceKey;
-    const nextSelectedAddOns =
-      input.mutation.selectedAddOns === undefined
-        ? draft.selectedAddOns
-        : input.mutation.selectedAddOns;
-    await assertConfiguredSelectedAddOns(
-      tx,
-      nextServiceKey,
-      nextSelectedAddOns,
-    );
-    const nextTierKey =
-      input.mutation.tierKey === undefined
-        ? draft.tierKey
-        : input.mutation.tierKey;
-    await assertAccountServiceTier(
-      tx,
-      input.actor.accountId,
-      nextServiceKey,
-      nextTierKey,
-      now,
-    );
+    if (
+      input.mutation.modelVersion !== undefined &&
+      input.mutation.modelVersion !== draft.modelVersion
+    )
+      throw schedulingFieldError({
+        modelVersion: "Start a new request to change its format.",
+      });
+    if (draft.modelVersion === 2) {
+      assertMultiServiceEnabled(input.actor.accountId);
+      assertMultiServiceShape(input.mutation);
+      await assertMultiServiceLines(
+        tx,
+        input.mutation.serviceLines ?? draft.serviceLines,
+        input.actor.accountId,
+      );
+    } else {
+      if (input.mutation.serviceLines?.length)
+        throw schedulingFieldError({
+          serviceLines: "Use a new multi-service request.",
+        });
+      await assertMutationService(tx, input.mutation.serviceKey);
+      const nextServiceKey =
+        input.mutation.serviceKey === undefined
+          ? draft.serviceKey
+          : input.mutation.serviceKey;
+      const nextSelectedAddOns =
+        input.mutation.selectedAddOns === undefined
+          ? draft.selectedAddOns
+          : input.mutation.selectedAddOns;
+      await assertConfiguredSelectedAddOns(
+        tx,
+        nextServiceKey,
+        nextSelectedAddOns,
+      );
+      const nextTierKey =
+        input.mutation.tierKey === undefined
+          ? draft.tierKey
+          : input.mutation.tierKey;
+      await assertAccountServiceTier(
+        tx,
+        input.actor.accountId,
+        nextServiceKey,
+        nextTierKey,
+        now,
+      );
+    }
     if (
       partnerDraftMutationInvalidatesHold({
         currentLocationId: draft.locationId,
@@ -2825,25 +2948,35 @@ async function validateDraftWithRows(input: {
   environmentalReviewReasons?: readonly SchedulingReviewReasonCode[];
   now: Date;
 }): Promise<DraftValidationResult> {
-  await assertConfiguredSelectedAddOns(
-    input.tx,
-    input.draft.serviceKey,
-    input.draft.selectedAddOns,
-  );
-  await assertAccountServiceTier(
-    input.tx,
-    input.draft.partnerAccountId,
-    input.draft.serviceKey,
-    input.draft.tierKey,
-    input.now,
-    true,
-  );
+  if (input.draft.modelVersion === 2)
+    await assertMultiServiceLines(
+      input.tx,
+      input.draft.serviceLines,
+      input.draft.partnerAccountId,
+    );
+  else {
+    await assertConfiguredSelectedAddOns(
+      input.tx,
+      input.draft.serviceKey,
+      input.draft.selectedAddOns,
+    );
+    await assertAccountServiceTier(
+      input.tx,
+      input.draft.partnerAccountId,
+      input.draft.serviceKey,
+      input.draft.tierKey,
+      input.now,
+      true,
+    );
+  }
   const { catalog, profile } = await loadCatalogAndProfile(
     input.tx,
     input.draft.serviceKey,
     input.now,
   );
   return validatePartnerBookingDraft({
+    modelVersion: input.draft.modelVersion,
+    serviceLines: input.draft.serviceLines,
     locationId: input.draft.locationId,
     serviceKey: input.draft.serviceKey,
     scope: input.draft.scope,
@@ -3245,6 +3378,12 @@ async function computeAvailabilityInTransaction(input: {
   reviewReasons: readonly SchedulingReviewReasonCode[];
   draftMedia: readonly DraftMediaTransferRow[];
 }> {
+  if (input.draft.modelVersion === 2)
+    throw new PartnerPortalSchedulingError(
+      "review_required",
+      "Stonegate schedules multi-service requests after review.",
+      { status: 422 },
+    );
   const setup = await requireSchedulingSetup({
     tx: input.tx,
     draft: input.draft,
@@ -3346,6 +3485,24 @@ export async function getPartnerDraftAvailability(input: {
   return getDb().transaction(async (tx) => {
     const { draft, location } = await loadDraft(tx, input.actor, input.draftId);
     assertDraftStateMutable(draft, now);
+    if (draft.modelVersion === 2)
+      return {
+        draft: toPartnerDraftDto(draft),
+        timezone: location?.timezone ?? "America/New_York",
+        calendar: { state: "unconfigured" as const },
+        reviewReasons: ["manual_review_required"],
+        instantConfirmationEligible: false,
+        windows: [],
+        rankedAlternatives: [],
+        pricing: {
+          status: "review_required" as const,
+          currency: "USD",
+          baseAmount: null,
+          addOnTotal: null,
+          total: null,
+          addOns: [],
+        },
+      };
     const { catalog, profile } = await loadCatalogAndProfile(
       tx,
       draft.serviceKey,
@@ -4470,6 +4627,445 @@ async function submitUnscheduledPartnerReviewRequest(input: {
   return { booking: toSubmittedBookingDto(booking), replayed: false };
 }
 
+async function submitMultiServiceReviewRequest(input: {
+  tx: SchedulingTransaction;
+  actor: PartnerSchedulingActor;
+  draft: DraftRow;
+  location: LocationRow;
+  opHash: string;
+  correlationId: string;
+  now: Date;
+}): Promise<{ booking: SubmittedPartnerBookingDto; replayed: false }> {
+  const validation = await validateDraftWithRows({
+    tx: input.tx,
+    draft: input.draft,
+    location: input.location,
+    environmentalReviewReasons: [
+      "availability_unverified",
+      "manual_review_required",
+    ],
+    now: input.now,
+  });
+  if (!validation.valid) {
+    throw new PartnerPortalSchedulingError(
+      "invalid_fields",
+      "Complete the required booking details before submitting.",
+      { status: 422, fieldErrors: validation.fieldErrors },
+    );
+  }
+  const preferredWindows = validatePreferredReviewWindows({
+    windows: input.draft.preferredWindows,
+    timezone: input.location.timezone,
+    now: input.now,
+  });
+  const draftMedia = await loadDraftMediaForTransfer(
+    input.tx,
+    input.actor.accountId,
+    input.draft.id,
+  );
+  const photoAssociations = input.draft.scope["photoServiceAssociations"] as
+    | Record<string, string[]>
+    | undefined;
+  const evidenceIds = new Map(
+    draftMedia.map(({ association }) => [association.id, randomUUID()]),
+  );
+  if (
+    photoAssociations &&
+    Object.entries(photoAssociations).some(
+      ([id, lineIds]) =>
+        !evidenceIds.has(id) ||
+        !Array.isArray(lineIds) ||
+        lineIds.some(
+          (lineId) =>
+            !input.draft.serviceLines.some((line) => line.id === lineId),
+        ),
+    )
+  )
+    throw schedulingFieldError({
+      "scope.photoServiceAssociations":
+        "A photo or service changed. Review photo associations before submitting.",
+    });
+  const savedPhotoAssociations = Object.fromEntries(
+    Object.entries(photoAssociations ?? {}).map(([id, lineIds]) => [
+      evidenceIds.get(id)!,
+      lineIds,
+    ]),
+  );
+  const rateSnapshots = await Promise.all(
+    input.draft.serviceLines.map((line) =>
+      loadPartnerServiceRateSnapshot(input.tx, {
+        accountId: input.actor.accountId,
+        serviceKey: line.serviceKey,
+        now: input.now,
+      }),
+    ),
+  );
+  const mediaReadiness = evaluateDraftMediaReadiness(
+    draftMedia.map((item) => ({
+      status: item.assetStatus,
+      readyAt: item.assetReadyAt,
+      deletedAt: item.assetDeletedAt,
+    })),
+  );
+  let approvalResolution: Awaited<
+    ReturnType<typeof resolveMultiServiceApproval>
+  > | null = null;
+  let approvalFailure: string | null = null;
+  try {
+    approvalResolution = await resolveMultiServiceApproval({
+      tx: input.tx,
+      partnerAccountId: input.actor.accountId,
+      requestedByMembershipId: input.actor.membershipId,
+      serviceKeys: input.draft.serviceLines.map((line) => line.serviceKey),
+      locationId: input.location.id,
+      amountMinor: null,
+      currency: "USD",
+      poNumber: optionalCommercialString(input.draft.commercial, "poNumber"),
+      costCenter: optionalCommercialString(
+        input.draft.commercial,
+        "costCenter",
+      ),
+    });
+  } catch (error) {
+    if (!(error instanceof PartnerApprovalRuleResolutionError)) throw error;
+    approvalFailure = error.code;
+  }
+  const approvalRequired =
+    approvalResolution?.required === true || approvalFailure !== null;
+  const reviewReasons = normalizeSchedulingReviewReasons([
+    ...validation.reviewReasons,
+    "manual_review_required",
+    ...(approvalRequired ? ["account_approval_required" as const] : []),
+    ...(rateSnapshots.some((snapshot, index) => {
+      const line = input.draft.serviceLines[index]!;
+      return (
+        !snapshot ||
+        requiredServiceRateVariants(line.serviceKey, line.scope).some(
+          (variant) =>
+            !snapshot.rates.some((rate) => rate.variantKey === variant),
+        )
+      );
+    })
+      ? ["rate_not_configured" as const]
+      : []),
+    ...(!mediaReadiness.readyForInstantConfirmation
+      ? ["media_requires_review" as const]
+      : []),
+  ]);
+  const { contactId, propertyId } =
+    await resolvePartnerBookingContactAndProperty({
+      tx: input.tx,
+      actor: input.actor,
+      location: input.location,
+      bookingDraftId: input.draft.id,
+      now: input.now,
+    });
+
+  // A manual request never retains an interactive hold or claims capacity.
+  await input.tx
+    .update(appointmentHolds)
+    .set({ status: "released", consumedAt: null, updatedAt: input.now })
+    .where(
+      and(
+        eq(appointmentHolds.partnerAccountId, input.actor.accountId),
+        eq(appointmentHolds.partnerBookingDraftId, input.draft.id),
+        eq(appointmentHolds.status, "active"),
+      ),
+    );
+
+  const confirmationMode = approvalRequired ? "approval" : "review";
+  const publicStatus = approvalRequired ? "approval_needed" : "under_review";
+  const [booking] = await input.tx
+    .insert(partnerBookings)
+    .values({
+      orgContactId: contactId,
+      partnerAccountId: input.actor.accountId,
+      bookingDraftId: input.draft.id,
+      additionalServiceFromPartnerBookingId:
+        input.draft.additionalServiceFromPartnerBookingId,
+      requestedByMembershipId: input.actor.membershipId,
+      partnerUserId: input.actor.partnerUserId,
+      propertyId,
+      appointmentId: null,
+      modelVersion: 2,
+      serviceKey: null,
+      tierKey: null,
+      amountCents: null,
+      currency: "USD",
+      publicStatus,
+      confirmationMode,
+      arrivalWindowStartAt: null,
+      arrivalWindowEndAt: null,
+      scopeSnapshot: {
+        serviceLabel: input.draft.serviceLines
+          .map((line) => getPartnerServiceDefinition(line.serviceKey)!.label)
+          .join(", "),
+        scope: {
+          ...input.draft.scope,
+          photoServiceAssociations: savedPhotoAssociations,
+        },
+        description: input.draft.description,
+        crewInstructions: input.draft.crewInstructions,
+        accessDetails: input.draft.accessDetails,
+        onSiteContact: input.draft.onSiteContact,
+        locationId: input.location.id,
+        locationSnapshot: partnerJobLocationSnapshot(input.location),
+        preferredWindows,
+        scheduleAssistancePreference: input.draft.scheduleAssistancePreference,
+      },
+      rateSnapshot: {
+        modelVersion: 2,
+        displayOnly: true,
+        estimatedTotal: null,
+      },
+      addOnsSnapshot: [],
+      proofRequirementsSnapshot: input.draft.proofRequirements,
+      poNumber: optionalCommercialString(input.draft.commercial, "poNumber"),
+      costCenter: optionalCommercialString(
+        input.draft.commercial,
+        "costCenter",
+      ),
+      projectReference: optionalCommercialString(
+        input.draft.commercial,
+        "projectReference",
+      ),
+      billingContactSnapshot: sanitizedBillingContact(input.draft.commercial),
+      requestedReviewReasons: [...reviewReasons],
+      createOperationKeyHash: input.opHash,
+      createRequestHash: sha256(input.draft.id, "review"),
+      version: 1,
+      createdAt: input.now,
+      updatedAt: input.now,
+    })
+    .returning();
+  if (!booking) throw new Error("partner_review_booking_create_failed");
+  await input.tx.insert(partnerBookingServiceLines).values(
+    input.draft.serviceLines.map((line, index) => ({
+      id: line.id,
+      partnerBookingId: booking.id,
+      partnerAccountId: input.actor.accountId,
+      position: index,
+      serviceKey: line.serviceKey,
+      serviceLabel: getPartnerServiceDefinition(line.serviceKey)!.label,
+      description: line.description,
+      scope: line.scope,
+      selectedAddOns: line.selectedAddOns,
+      proofRequirements: line.proofRequirements,
+      rateSnapshot: rateSnapshots[index]
+        ? { ...rateSnapshots[index], displayOnly: true }
+        : null,
+      createdAt: input.now,
+    })),
+  );
+  await ensurePartnerJobThread(input.tx, input.actor.accountId, booking.id);
+
+  let scheduleAssistanceRequestId: string | null = null;
+  if (input.draft.scheduleAssistancePreference !== "none") {
+    const assistanceOperationHash = operationHash(
+      "schedule.assistance",
+      input.actor.accountId,
+      input.opHash,
+    );
+    const [assistanceRequest] = await input.tx
+      .insert(partnerScheduleAssistanceRequests)
+      .values({
+        partnerAccountId: input.actor.accountId,
+        partnerBookingId: booking.id,
+        bookingDraftId: input.draft.id,
+        requestedByMembershipId: input.actor.membershipId,
+        preference: input.draft.scheduleAssistancePreference,
+        state: "pending",
+        preferredWindowsSnapshot: {
+          version: 1,
+          windows: preferredWindows.map((window) => ({ ...window })),
+        },
+        operationKeyHash: assistanceOperationHash,
+        requestHash: sha256(
+          input.draft.id,
+          booking.id,
+          input.draft.scheduleAssistancePreference,
+          stableJson(preferredWindows),
+        ),
+        revision: 1,
+        createdAt: input.now,
+        updatedAt: input.now,
+      })
+      .returning({ id: partnerScheduleAssistanceRequests.id });
+    if (!assistanceRequest) {
+      throw new Error("partner_schedule_assistance_create_failed");
+    }
+    scheduleAssistanceRequestId = assistanceRequest.id;
+  }
+
+  let approvalRequestId: string | null = null;
+  if (approvalResolution?.required) {
+    const approvalValues = buildPartnerApprovalRequestInsert({
+      resolution: approvalResolution,
+      target: {
+        kind: "booking",
+        id: booking.id,
+        partnerAccountId: input.actor.accountId,
+      },
+      request: {
+        ...approvalRequestSnapshot({
+          draft: input.draft,
+          location: input.location,
+        }),
+        description: input.draft.serviceLines
+          .map(
+            (line) =>
+              `${getPartnerServiceDefinition(line.serviceKey)!.label}: ${line.description}`,
+          )
+          .join("\n"),
+      },
+      approvalHold: null,
+      now: input.now,
+    });
+    const [approvalRequest] = await input.tx
+      .insert(partnerApprovalRequests)
+      .values({
+        ...approvalValues,
+        requestSnapshot: {
+          ...approvalValues.requestSnapshot,
+          modelVersion: 2,
+          serviceKeys: input.draft.serviceLines.map((line) => line.serviceKey),
+        },
+      })
+      .returning({ id: partnerApprovalRequests.id });
+    if (!approvalRequest) {
+      throw new Error("partner_review_approval_request_create_failed");
+    }
+    approvalRequestId = approvalRequest.id;
+    await input.tx.insert(outboxEvents).values({
+      type: "partner.approval.requested",
+      payload: {
+        partnerAccountId: input.actor.accountId,
+        partnerBookingId: booking.id,
+        version: booking.version,
+      },
+    });
+  }
+
+  if (draftMedia.length > 0) {
+    await input.tx.insert(partnerJobEvidence).values([
+      ...buildPartnerJobEvidenceTransferValues({
+        partnerAccountId: input.actor.accountId,
+        partnerBookingId: booking.id,
+        createdAt: input.now,
+        associations: draftMedia.map(({ association }) => association),
+      }).map((evidence, index) => ({
+        ...evidence,
+        id: evidenceIds.get(draftMedia[index]!.association.id)!,
+      })),
+    ]);
+  }
+  await input.tx.insert(partnerJobEvents).values({
+    partnerAccountId: input.actor.accountId,
+    partnerBookingId: booking.id,
+    eventType: "job.submitted",
+    publicLabel: approvalRequired ? "Approval requested" : "Review requested",
+    publicDetail: approvalRequired
+      ? "Your request was submitted for account approval. No arrival window is reserved."
+      : input.draft.scheduleAssistancePreference === "waitlist"
+        ? "Stonegate received your preferred dates and added this request to the scheduling waitlist. No arrival window is reserved."
+        : input.draft.scheduleAssistancePreference === "callback"
+          ? "Stonegate received your preferred dates and callback request. No arrival window is reserved."
+          : "Stonegate received your preferred dates and will confirm availability after review.",
+    effectiveAt: input.now,
+    actorType: "partner",
+    actorMembershipId: input.actor.membershipId,
+    metadata: {
+      appointmentId: null,
+      approvalRequestId,
+      confirmationMode,
+      publicStatus,
+      capacityReserved: false,
+      scheduleAssistancePreference: input.draft.scheduleAssistancePreference,
+    },
+    createdAt: input.now,
+  });
+  await queuePartnerBookingNotification({
+    tx: input.tx,
+    accountId: input.actor.accountId,
+    membershipId: input.actor.membershipId,
+    partnerBookingId: booking.id,
+    eventType: "booking.review_received",
+    dedupeKey: input.opHash,
+    correlationId: input.correlationId,
+    occurredAt: input.now,
+    accountTimezone: input.location.timezone,
+  });
+  const [submittedDraft] = await input.tx
+    .update(partnerBookingDrafts)
+    .set({
+      state: "submitted",
+      reviewReasons: [...reviewReasons],
+      validation: {
+        ...input.draft.validation,
+        valid: true,
+        ready: true,
+        fieldErrors: {},
+        checkedAt: input.now.toISOString(),
+        bookingId: booking.id,
+        schedulePromise: "none",
+        scheduleAssistancePreference: input.draft.scheduleAssistancePreference,
+      },
+      revision: input.draft.revision + 1,
+      submittedAt: input.now,
+      updatedAt: input.now,
+    })
+    .where(
+      and(
+        eq(partnerBookingDrafts.partnerAccountId, input.actor.accountId),
+        eq(partnerBookingDrafts.id, input.draft.id),
+        eq(partnerBookingDrafts.revision, input.draft.revision),
+      ),
+    )
+    .returning({ id: partnerBookingDrafts.id });
+  if (!submittedDraft) throw new Error("partner_review_draft_submit_failed");
+
+  await input.tx.insert(auditLogs).values({
+    actorType: "human",
+    actorId: input.actor.partnerUserId,
+    actorRole: "partner",
+    actorLabel: input.actor.email,
+    sessionId: input.actor.sessionId,
+    authMethod: "partner_session",
+    correlationId: input.correlationId,
+    requiredPermissions: ["bookings.create"],
+    outcome: "succeeded",
+    surface: "/partners/book",
+    idempotencyKeyHash: input.opHash,
+    action: "partner.portal.v2.booking.review_requested",
+    entityType: "partner_booking",
+    entityId: booking.id,
+    meta: sanitizeAuditMetadata({
+      accountId: input.actor.accountId,
+      membershipId: input.actor.membershipId,
+      draftId: input.draft.id,
+      holdId: null,
+      appointmentId: null,
+      propertyId,
+      confirmationMode,
+      publicStatus,
+      capacityReserved: false,
+      holdDisposition: "none",
+      reviewReasons,
+      preferredWindows,
+      policyRevision: null,
+      serviceProfileVersion: null,
+      transferredDraftMediaCount: draftMedia.length,
+      calendarOutboxEventId: null,
+      approvalRequestId,
+      approvalResolutionFailure: approvalFailure,
+      scheduleAssistancePreference: input.draft.scheduleAssistancePreference,
+      scheduleAssistanceRequestId,
+    }),
+    createdAt: input.now,
+  });
+  return { booking: toSubmittedBookingDto(booking), replayed: false };
+}
+
 export async function submitPartnerBookingDraft(input: {
   actor: PartnerSchedulingActor;
   draftId: string;
@@ -4501,7 +5097,7 @@ export async function submitPartnerBookingDraft(input: {
     const [replay] = await tx
       .select({ booking: partnerBookings, appointment: appointments })
       .from(partnerBookings)
-      .innerJoin(
+      .leftJoin(
         appointments,
         eq(partnerBookings.appointmentId, appointments.id),
       )
@@ -4554,6 +5150,35 @@ export async function submitPartnerBookingDraft(input: {
         true,
       );
     }
+    if (draft.modelVersion === 2) {
+      assertMultiServiceEnabled(input.actor.accountId);
+      if (input.holdId)
+        throw schedulingFieldError({
+          holdId: "Multi-service requests are scheduled after review.",
+        });
+      const result = await submitMultiServiceReviewRequest({
+        tx,
+        actor: input.actor,
+        draft,
+        location,
+        opHash,
+        correlationId: input.correlationId,
+        now,
+      });
+      await finalizePartnerRecurringBooking(
+        tx,
+        recurringSource,
+        input.actor,
+        result.booking,
+        now,
+      );
+      await enqueueOwnerAlertEvaluation(tx, {
+        accountId: input.actor.accountId,
+        bookingId: result.booking.id,
+        now,
+      });
+      return result;
+    }
     const holdId = input.holdId;
     if (!holdId) {
       const result = await submitUnscheduledPartnerReviewRequest({
@@ -4572,7 +5197,11 @@ export async function submitPartnerBookingDraft(input: {
         result.booking,
         now,
       );
-      await enqueueOwnerAlertEvaluation(tx, { accountId: input.actor.accountId, bookingId: result.booking.id, now });
+      await enqueueOwnerAlertEvaluation(tx, {
+        accountId: input.actor.accountId,
+        bookingId: result.booking.id,
+        now,
+      });
       return result;
     }
     const [hold] = await tx
@@ -5099,7 +5728,11 @@ export async function submitPartnerBookingDraft(input: {
       toSubmittedBookingDto(booking),
       now,
     );
-    await enqueueOwnerAlertEvaluation(tx, { accountId: input.actor.accountId, bookingId: booking.id, now });
+    await enqueueOwnerAlertEvaluation(tx, {
+      accountId: input.actor.accountId,
+      bookingId: booking.id,
+      now,
+    });
     return {
       booking: toSubmittedBookingDto(booking),
       replayed: false,
@@ -5206,6 +5839,7 @@ export async function reschedulePartnerBooking(input: {
     : sha256(input.jobId, input.draftId, "review", input.draftIfMatch ?? "");
 
   return getDb().transaction(async (tx) => {
+    await rejectParentWideMultiServiceReschedule(tx, input.actor, input.jobId);
     await acquireScheduleConflictLock(tx);
 
     const [source] = await tx
@@ -6082,13 +6716,32 @@ export async function getPartnerRescheduleRequestForStaff(
         ),
       )
       .limit(1);
+    const [selectedVisit] = request.partnerBookingVisitId
+      ? await tx
+          .select({ appointmentId: partnerBookingVisits.appointmentId })
+          .from(partnerBookingVisits)
+          .where(
+            and(
+              eq(partnerBookingVisits.id, request.partnerBookingVisitId),
+              eq(
+                partnerBookingVisits.partnerAccountId,
+                request.partnerAccountId,
+              ),
+              eq(
+                partnerBookingVisits.partnerBookingId,
+                request.partnerBookingId,
+              ),
+            ),
+          )
+          .limit(1)
+      : [];
     let candidates: Array<{
       startAt: string;
       windowStartAt: string;
       windowEndAt: string;
     }> = [];
     let warning: string | null = null;
-    if (request.state === "pending") {
+    if (request.state === "pending" && !request.partnerBookingVisitId) {
       try {
         const availability = await computeAvailabilityInTransaction({
           tx,
@@ -6123,7 +6776,9 @@ export async function getPartnerRescheduleRequestForStaff(
         id: request.id,
         accountId: request.partnerAccountId,
         jobId: request.partnerBookingId,
-        appointmentId: sourceJob?.appointmentId ?? null,
+        appointmentId:
+          selectedVisit?.appointmentId ?? sourceJob?.appointmentId ?? null,
+        visitId: request.partnerBookingVisitId,
         state: request.state,
         requestKind: request.requestKind,
         preferredWindows: request.preferredWindows,
@@ -6142,7 +6797,9 @@ export async function getPartnerRescheduleRequestForStaff(
         siteName: location?.siteName ?? null,
       },
       candidates,
-      warning,
+      warning: request.partnerBookingVisitId
+        ? "Choose a start time for this visit. Its current services, duration, and minimum are retained; capacity and resources will be checked before confirmation."
+        : warning,
     };
   });
 }
@@ -6164,6 +6821,11 @@ export async function withdrawPartnerRescheduleRequest(input: {
   );
   const requestHash = sha256(input.jobId, input.requestId);
   return getDb().transaction(async (tx) => {
+    await lockVisitRescheduleParent(tx, {
+      accountId: input.actor.accountId,
+      jobId: input.jobId,
+      requestId: input.requestId,
+    });
     await acquireScheduleConflictLock(tx);
     const [request] = await tx
       .select()
@@ -6291,6 +6953,7 @@ export async function decidePartnerRescheduleRequest(
   },
 ) {
   const now = input.now ?? new Date();
+  await lockVisitRescheduleParent(tx, { requestId: input.requestId });
   await acquireScheduleConflictLock(tx);
   const [request] = await tx
     .select()
@@ -6316,6 +6979,179 @@ export async function decidePartnerRescheduleRequest(
       "This request has already been resolved.",
       { status: 409 },
     );
+  if (request.partnerBookingVisitId) {
+    const [source] = await tx
+      .select({
+        booking: partnerBookings,
+        visit: partnerBookingVisits,
+        appointment: appointments,
+      })
+      .from(partnerBookings)
+      .innerJoin(
+        partnerBookingVisits,
+        and(
+          eq(partnerBookingVisits.partnerBookingId, partnerBookings.id),
+          eq(
+            partnerBookingVisits.partnerAccountId,
+            partnerBookings.partnerAccountId,
+          ),
+        ),
+      )
+      .innerJoin(
+        appointments,
+        eq(appointments.id, partnerBookingVisits.appointmentId),
+      )
+      .where(
+        and(
+          eq(partnerBookings.id, request.partnerBookingId),
+          eq(partnerBookings.partnerAccountId, request.partnerAccountId),
+          eq(partnerBookings.modelVersion, 2),
+          eq(partnerBookingVisits.id, request.partnerBookingVisitId),
+        ),
+      )
+      .limit(1);
+    if (
+      !source ||
+      source.visit.status !== "scheduled" ||
+      !source.appointment.startAt ||
+      source.appointment.startAt.getTime() !==
+        request.previousStartAt.getTime() ||
+      ["completed", "canceled", "declined"].includes(
+        source.booking.publicStatus,
+      )
+    )
+      throw new PartnerPortalSchedulingError(
+        "conflict",
+        "The visit schedule changed. Review this request before continuing.",
+        { status: 409 },
+      );
+    let arrivalStartAt = source.appointment.promisedArrivalStartAt;
+    let arrivalEndAt = source.appointment.promisedArrivalEndAt;
+    if (input.decision === "accepted") {
+      if (!input.startAt || !Number.isFinite(input.startAt.getTime()))
+        throw new PartnerPortalSchedulingError(
+          "invalid_fields",
+          "Select a real available start before approving this visit change.",
+          { status: 422 },
+        );
+      const local = DateTime.fromJSDate(input.startAt, {
+        zone: "America/New_York",
+      });
+      const mappings = await tx
+        .select({ id: partnerBookingVisitLines.serviceLineId })
+        .from(partnerBookingVisitLines)
+        .where(
+          and(
+            eq(
+              partnerBookingVisitLines.partnerAccountId,
+              request.partnerAccountId,
+            ),
+            eq(
+              partnerBookingVisitLines.partnerBookingId,
+              request.partnerBookingId,
+            ),
+            eq(partnerBookingVisitLines.visitId, source.visit.id),
+          ),
+        );
+      const resourceIds = input.selectedResourceIds?.length
+        ? [...input.selectedResourceIds]
+        : (source.appointment.resourceAssignmentSnapshot ?? []).map(
+            (resource) => resource.resourceId,
+          );
+      const changed = await createPartnerMultiServiceVisit(
+        tx,
+        {
+          expectedVersion: String(source.booking.version),
+          correlationId: input.correlationId,
+          actor: { id: input.teamMemberId },
+        },
+        source.booking.id,
+        {
+          accountId: request.partnerAccountId,
+          serviceLineIds: mappings.map((line) => line.id),
+          date: local.toISODate()!,
+          startTime: local.toFormat("HH:mm"),
+          durationMinutes: source.appointment.durationMinutes,
+          travelBufferMinutes: source.appointment.travelBufferMinutes,
+          resourceIds,
+        },
+        now,
+        source.visit.id,
+      );
+      if (new Date(changed.startAt).getTime() !== input.startAt.getTime())
+        throw new PartnerPortalSchedulingError(
+          "invalid_fields",
+          "Select an exact half-hour Eastern start time.",
+          { status: 422 },
+        );
+      arrivalStartAt = new Date(changed.arrivalStartAt);
+      arrivalEndAt = new Date(changed.arrivalEndAt);
+    } else {
+      await tx
+        .update(partnerBookings)
+        .set({ version: source.booking.version + 1, updatedAt: now })
+        .where(eq(partnerBookings.id, source.booking.id));
+    }
+    await tx
+      .update(partnerRescheduleRequests)
+      .set({
+        state: input.decision,
+        resolutionReason: input.reason,
+        resolvedByTeamMemberId: input.teamMemberId,
+        resolvedAt: now,
+        updatedAt: now,
+      })
+      .where(eq(partnerRescheduleRequests.id, request.id));
+    await tx.insert(partnerJobEvents).values({
+      partnerAccountId: request.partnerAccountId,
+      partnerBookingId: request.partnerBookingId,
+      eventType:
+        input.decision === "accepted"
+          ? "job.reschedule_accepted"
+          : "job.reschedule_declined",
+      publicLabel:
+        input.decision === "accepted"
+          ? "Visit date change accepted"
+          : "Visit date change declined",
+      publicDetail:
+        input.decision === "accepted"
+          ? "Stonegate confirmed the new arrival window for this visit."
+          : "This visit's original arrival window remains scheduled.",
+      actorType: "staff",
+      actorTeamMemberId: input.teamMemberId,
+      effectiveAt: now,
+      metadata: { requestId: request.id, visitId: source.visit.id },
+      createdAt: now,
+    });
+    await queuePartnerBookingNotification({
+      tx,
+      accountId: request.partnerAccountId,
+      membershipId:
+        source.booking.requestedByMembershipId ?? request.createdByMembershipId,
+      fallbackMembershipId: request.createdByMembershipId,
+      partnerBookingId: request.partnerBookingId,
+      eventType:
+        input.decision === "accepted"
+          ? "booking.rescheduled"
+          : "booking.reschedule_declined",
+      dedupeKey: `visit-reschedule-decision:${request.id}:${input.decision}`,
+      correlationId: input.correlationId,
+      occurredAt: now,
+      accountTimezone:
+        source.appointment.schedulingTimezone ?? "America/New_York",
+      serviceAt: arrivalStartAt,
+    });
+    return {
+      requestId: request.id,
+      accountId: request.partnerAccountId,
+      jobId: request.partnerBookingId,
+      visitId: source.visit.id,
+      state: input.decision,
+      updatedAt: now.toISOString(),
+      arrivalWindowStartAt: arrivalStartAt?.toISOString() ?? null,
+      arrivalWindowEndAt: arrivalEndAt?.toISOString() ?? null,
+    };
+  }
   const [source] = await tx
     .select({ booking: partnerBookings, appointment: appointments })
     .from(partnerBookings)
@@ -6537,4 +7373,290 @@ export async function decidePartnerRescheduleRequest(
     arrivalWindowStartAt: arrivalStartAt?.toISOString() ?? null,
     arrivalWindowEndAt: arrivalEndAt?.toISOString() ?? null,
   };
+}
+
+/** A preferred-date request belongs to one real visit and never changes its schedule. */
+export async function requestPartnerVisitReschedule(input: {
+  actor: PartnerSchedulingActor;
+  jobId: string;
+  visitId: string;
+  preferredWindows: readonly Record<string, unknown>[];
+  ifMatch: string | null;
+  idempotencyKeyHash: string;
+  correlationId: string;
+  now?: Date;
+}) {
+  const now = input.now ?? new Date();
+  const opHash = operationHash(
+    "visit.reschedule.request",
+    input.actor.accountId,
+    input.idempotencyKeyHash,
+  );
+  const requestHash = sha256(
+    input.jobId,
+    input.visitId,
+    JSON.stringify(input.preferredWindows),
+  );
+  return getDb().transaction(async (tx) => {
+    await lockMultiServiceRequestIfApplicable(
+      tx,
+      input.actor.accountId,
+      input.jobId,
+    );
+    await acquireScheduleConflictLock(tx);
+    const [source] = await tx
+      .select({
+        booking: partnerBookings,
+        visit: partnerBookingVisits,
+        appointment: appointments,
+      })
+      .from(partnerBookings)
+      .innerJoin(
+        partnerBookingVisits,
+        and(
+          eq(partnerBookingVisits.partnerBookingId, partnerBookings.id),
+          eq(
+            partnerBookingVisits.partnerAccountId,
+            partnerBookings.partnerAccountId,
+          ),
+        ),
+      )
+      .innerJoin(
+        appointments,
+        eq(appointments.id, partnerBookingVisits.appointmentId),
+      )
+      .where(
+        and(
+          eq(partnerBookings.id, input.jobId),
+          eq(partnerBookings.partnerAccountId, input.actor.accountId),
+          eq(partnerBookings.modelVersion, 2),
+          eq(partnerBookingVisits.id, input.visitId),
+        ),
+      )
+      .limit(1);
+    if (!source)
+      throw new PartnerPortalSchedulingError(
+        "not_found",
+        "The visit was not found.",
+        { status: 404 },
+      );
+    const location = await loadRescheduleLocation({
+      tx,
+      actor: input.actor,
+      propertyId: source.booking.propertyId,
+      scopeSnapshot: source.booking.scopeSnapshot,
+    });
+    const receipt = (
+      request: typeof partnerRescheduleRequests.$inferSelect,
+      booking: typeof partnerBookings.$inferSelect,
+    ) => ({
+      mode: "review" as const,
+      requestId: request.id,
+      jobId: booking.id,
+      visitId: input.visitId,
+      preferredWindows: request.preferredWindows,
+      etag: createPortalV2StrongEtag(partnerJobRevision(booking)),
+      consequence: { existingScheduleRemainsInPlace: true as const },
+    });
+    const [replay] = await tx
+      .select()
+      .from(partnerRescheduleRequests)
+      .where(eq(partnerRescheduleRequests.operationKeyHash, opHash))
+      .limit(1);
+    if (replay) {
+      if (
+        replay.partnerAccountId !== input.actor.accountId ||
+        replay.partnerBookingId !== input.jobId ||
+        replay.partnerBookingVisitId !== input.visitId ||
+        replay.requestHash !== requestHash
+      )
+        throw new PartnerPortalSchedulingError(
+          "idempotency_conflict",
+          "This request key was used for different visit preferences.",
+          { status: 409 },
+        );
+      return { result: receipt(replay, source.booking), replayed: true };
+    }
+    assertPartnerJobRevision(
+      source.booking,
+      input.ifMatch,
+      input.correlationId,
+    );
+    if (
+      !source.booking.bookingDraftId ||
+      source.visit.status !== "scheduled" ||
+      !source.appointment.startAt ||
+      ["completed", "canceled", "declined"].includes(
+        source.booking.publicStatus,
+      )
+    )
+      throw new PartnerPortalSchedulingError(
+        "conflict",
+        "Only an upcoming scheduled visit can request a different date.",
+        { status: 409 },
+      );
+    const preferredWindows = validatePreferredReviewWindows({
+      windows: input.preferredWindows,
+      timezone: location.timezone,
+      now,
+    });
+    const [pending] = await tx
+      .select({ id: partnerRescheduleRequests.id })
+      .from(partnerRescheduleRequests)
+      .where(
+        and(
+          eq(partnerRescheduleRequests.partnerAccountId, input.actor.accountId),
+          eq(partnerRescheduleRequests.partnerBookingId, input.jobId),
+          eq(partnerRescheduleRequests.state, "pending"),
+        ),
+      )
+      .limit(1);
+    if (pending)
+      throw new PartnerPortalSchedulingError(
+        "conflict",
+        "A date-change request for this job is already awaiting review. Withdraw or resolve it before requesting another change.",
+        { status: 409 },
+      );
+    const [request] = await tx
+      .insert(partnerRescheduleRequests)
+      .values({
+        partnerAccountId: input.actor.accountId,
+        partnerBookingId: input.jobId,
+        partnerBookingVisitId: input.visitId,
+        bookingDraftId: source.booking.bookingDraftId,
+        requestKind: "preferred_dates",
+        preferredWindows: preferredWindows.map((window) => ({ ...window })),
+        previousStartAt: source.appointment.startAt,
+        previousArrivalStartAt: source.appointment.promisedArrivalStartAt,
+        previousArrivalEndAt: source.appointment.promisedArrivalEndAt,
+        reviewReasons: ["manual_review_required"],
+        operationKeyHash: opHash,
+        requestHash,
+        createdByMembershipId: input.actor.membershipId,
+        createdAt: now,
+        updatedAt: now,
+      })
+      .returning();
+    const [booking] = await tx
+      .update(partnerBookings)
+      .set({ version: source.booking.version + 1, updatedAt: now })
+      .where(eq(partnerBookings.id, input.jobId))
+      .returning();
+    if (!request || !booking)
+      throw new Error("partner_visit_reschedule_request_failed");
+    await tx.insert(partnerJobEvents).values({
+      partnerAccountId: input.actor.accountId,
+      partnerBookingId: input.jobId,
+      eventType: "job.reschedule_review_requested",
+      publicLabel: "Visit date change requested",
+      publicDetail:
+        "Stonegate will review your preferred dates for this visit. Its confirmed schedule has not changed.",
+      actorType: "partner",
+      actorMembershipId: input.actor.membershipId,
+      effectiveAt: now,
+      metadata: { requestId: request.id, visitId: input.visitId },
+      createdAt: now,
+    });
+    await queuePartnerBookingNotification({
+      tx,
+      accountId: input.actor.accountId,
+      membershipId:
+        source.booking.requestedByMembershipId ?? input.actor.membershipId,
+      fallbackMembershipId: input.actor.membershipId,
+      partnerBookingId: input.jobId,
+      eventType: "booking.reschedule_review_requested",
+      dedupeKey: opHash,
+      correlationId: input.correlationId,
+      occurredAt: now,
+      accountTimezone: location.timezone,
+      serviceAt: source.appointment.promisedArrivalStartAt,
+    });
+    await tx.insert(auditLogs).values({
+      actorType: "human",
+      actorId: input.actor.partnerUserId,
+      actorRole: "partner",
+      actorLabel: input.actor.email,
+      sessionId: input.actor.sessionId,
+      authMethod: "partner_session",
+      correlationId: input.correlationId,
+      requiredPermissions: ["bookings.update"],
+      outcome: "succeeded",
+      surface: `/partners/jobs/${input.jobId}`,
+      idempotencyKeyHash: opHash,
+      action: "partner.portal.v2.visit.reschedule_requested",
+      entityType: "partner_reschedule_request",
+      entityId: request.id,
+      meta: sanitizeAuditMetadata({
+        accountId: input.actor.accountId,
+        partnerBookingId: input.jobId,
+        visitId: input.visitId,
+      }),
+      createdAt: now,
+    });
+    return { result: receipt(request, booking), replayed: false };
+  });
+}
+
+/** Lock commercial parents before the global calendar lock, including request resolution. */
+async function lockVisitRescheduleParent(
+  tx: SchedulingTransaction,
+  filter: { accountId?: string; jobId?: string; requestId?: string },
+) {
+  const [request] = filter.requestId
+    ? await tx
+        .select({
+          accountId: partnerRescheduleRequests.partnerAccountId,
+          jobId: partnerRescheduleRequests.partnerBookingId,
+          visitId: partnerRescheduleRequests.partnerBookingVisitId,
+        })
+        .from(partnerRescheduleRequests)
+        .where(
+          and(
+            eq(partnerRescheduleRequests.id, filter.requestId),
+            filter.accountId
+              ? eq(partnerRescheduleRequests.partnerAccountId, filter.accountId)
+              : undefined,
+            filter.jobId
+              ? eq(partnerRescheduleRequests.partnerBookingId, filter.jobId)
+              : undefined,
+          ),
+        )
+        .limit(1)
+    : [];
+  if (request?.visitId)
+    await lockPartnerRequestFinancials(tx, request.accountId, request.jobId);
+}
+
+async function rejectParentWideMultiServiceReschedule(
+  tx: SchedulingTransaction,
+  actor: PartnerSchedulingActor,
+  jobId: string,
+) {
+  const [parent] = await tx
+    .select()
+    .from(partnerBookings)
+    .where(
+      and(
+        eq(partnerBookings.partnerAccountId, actor.accountId),
+        eq(partnerBookings.id, jobId),
+        eq(partnerBookings.modelVersion, 2),
+      ),
+    )
+    .limit(1);
+  if (parent) {
+    await loadRescheduleLocation({
+      tx,
+      actor,
+      propertyId: parent.propertyId,
+      scopeSnapshot: parent.scopeSnapshot,
+    });
+    throw new PartnerPortalSchedulingError(
+      "invalid_fields",
+      "Choose the specific visit whose date you want to change.",
+      {
+        status: 422,
+        fieldErrors: { visitId: "Choose an upcoming service visit." },
+      },
+    );
+  }
 }

@@ -1,3 +1,4 @@
+import { assertAppointmentHasIndependentFinancials } from "@/lib/partner-request-financials";
 import type {
   ActionPolicy,
   MutationResult,
@@ -786,6 +787,15 @@ export async function POST(
     claim = claimed.claim;
 
     const outcome = await database.transaction(async (tx) => {
+      if (
+        parsed.data.status !== "confirmed" ||
+        parsed.data.quotedTotalCents !== undefined ||
+        parsed.data.finalTotalCents !== undefined ||
+        parsed.data.bookingDetails !== undefined ||
+        parsed.data.finalTotalSameAsQuoted ||
+        parsed.data.cardTipCents !== undefined
+      )
+        await assertAppointmentHasIndependentFinancials(tx, appointmentId);
       // Status transitions into or out of a non-blocking state change schedule
       // capacity. Take the same transaction-scoped lock as every booking and
       // reschedule writer before locking the appointment row.
@@ -852,6 +862,11 @@ export async function POST(
           409,
         );
       }
+
+      // Same-status crew metadata may be maintained here, but a closed visit
+      // must never be reopened independently of its request and service lines.
+      if (existing.status !== "confirmed")
+        await assertAppointmentHasIndependentFinancials(tx, appointmentId);
 
       const isMoving = isMovingCommissionJob({
         bookingDetails:

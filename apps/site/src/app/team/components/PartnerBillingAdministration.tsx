@@ -1,8 +1,12 @@
 import { loadPartnerBillingAdministration } from "../actions/partner-billing";
 import { PartnerBillingAdministrationClient } from "./PartnerBillingAdministrationClient";
-import type { TeamRequestPrincipal } from "@/lib/team-principal";
+import {
+  hasTeamPermission,
+  type TeamRequestPrincipal,
+} from "@/lib/team-principal";
 
 export async function PartnerBillingAdministration({
+  principal,
   accountId,
   accountName,
   canManage,
@@ -34,6 +38,7 @@ export async function PartnerBillingAdministration({
           key={accountId}
           initial={result.data}
           canManage={canManage}
+          canCollect={hasTeamPermission(principal, "payments.collect")}
         />
       ) : (
         <p role="alert" className="mt-4 text-red-700">

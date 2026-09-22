@@ -8,6 +8,7 @@ import {
   partnerAccounts,
   partnerRateAddOnItems,
   partnerRateCards,
+  partnerRateCardVersions,
   partnerRateItems,
 } from "@/db";
 import { requirePermission } from "@/lib/permissions";
@@ -435,7 +436,25 @@ export async function POST(request: NextRequest): Promise<Response> {
         .select({ id: partnerAccounts.id })
         .from(partnerAccounts)
         .where(eq(partnerAccounts.portalContactId, input.orgContactId))
+        .for("update")
         .limit(1);
+      if (portalAccount) {
+        const [structured] = await tx
+          .select({ id: partnerRateCardVersions.id })
+          .from(partnerRateCardVersions)
+          .where(
+            and(
+              eq(partnerRateCardVersions.partnerAccountId, portalAccount.id),
+              eq(partnerRateCardVersions.pricingModelVersion, 2),
+            ),
+          )
+          .limit(1);
+        if (structured)
+          throw new TeamMutationFailure(
+            "conflict",
+            "This company uses versioned service rates. Open Company Settings → Service rates to make changes.",
+          );
+      }
 
       const [existing] = await tx
         .select({

@@ -2088,6 +2088,18 @@ export async function PartnerAdministrationSection({
             canManageAccounts && (!company || companySection === "settings")
           }
           canConfigureBilling={canManageCommercial}
+          canViewRates={hasTeamPermission(
+            principal,
+            "partners.commercial.read",
+          )}
+          canConfigureRates={
+            canManageAccounts && hasTeamPermission(principal, "partners.rates")
+          }
+          canCompleteSetup={
+            canManageAccounts &&
+            hasTeamPermission(principal, "partners.rates") &&
+            hasTeamPermission(principal, "partners.invitations.send")
+          }
         />
       ) : null}
 

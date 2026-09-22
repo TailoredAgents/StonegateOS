@@ -19,7 +19,7 @@ export type PartnerRequestDetailsSource = {
   costCenter: string | null;
   projectReference: string | null;
   billingContactSnapshot: unknown;
-  appointmentStatus: string;
+  appointmentStatus: string | null;
   appointmentStartAt: Date | null;
   schedulingTimezone: string | null;
   promisedArrivalStartAt: Date | null;
@@ -86,12 +86,14 @@ function window(start: unknown, end: unknown) {
 
 export function hasConfirmedPartnerSchedule(source: {
   publicStatus: string;
-  appointmentStatus: string;
+  appointmentStatus: string | null;
   appointmentStartAt: Date | null;
 }): boolean {
   return (
     source.appointmentStartAt !== null &&
-    ["confirmed", "completed", "no_show"].includes(source.appointmentStatus) &&
+    ["confirmed", "completed", "no_show"].includes(
+      source.appointmentStatus ?? "",
+    ) &&
     [
       "confirmed",
       "en_route",

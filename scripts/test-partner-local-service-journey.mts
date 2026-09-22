@@ -201,16 +201,22 @@ test(
             .getByRole("button", { name: "Continue", exact: true })
             .click();
           await page
-            .locator("#partner-book-service")
-            .selectOption("service_request");
+            .getByRole("checkbox", { name: "Junk removal", exact: true })
+            .check();
           await page
-            .locator("#partner-book-description")
+            .getByRole("textbox", {
+              name: "What needs to be done?",
+              exact: true,
+            })
             .fill(
               "Local rehearsal only: remove two empty boxes. No real service requested.",
             );
           await assertAccessible("request scope");
           await page
-            .getByRole("button", { name: "Continue", exact: true })
+            .getByRole("button", {
+              name: "Continue to scheduling",
+              exact: true,
+            })
             .click();
           const date = new Date();
           date.setDate(date.getDate() + 2);

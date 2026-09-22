@@ -1,3 +1,4 @@
+import { lockPartnerRequestFinancials } from "./partner-request-financials";
 import { randomUUID } from "node:crypto";
 import { and, desc, eq, inArray, sql } from "drizzle-orm";
 import { z } from "zod";
@@ -59,7 +60,10 @@ async function lockInvoicePaymentCollection(
   invoiceId: string,
 ): Promise<void> {
   const [binding] = await tx
-    .select({ appointmentId: partnerBookings.appointmentId })
+    .select({
+      appointmentId: partnerBookings.appointmentId,
+      bookingId: partnerBookings.id,
+    })
     .from(partnerInvoices)
     .innerJoin(
       partnerBookings,
@@ -76,7 +80,7 @@ async function lockInvoicePaymentCollection(
     )
     .limit(1);
   if (binding)
-    await lockAppointmentInvoiceCollection(tx, binding.appointmentId);
+    await lockPartnerRequestFinancials(tx, accountId, binding.bookingId);
 }
 
 const UUID_PATTERN =
@@ -648,7 +652,7 @@ export async function createPartnerHostedPaymentIntent(
         ),
       )
       .limit(1);
-    if (!job) {
+    if (!job || !job.appointmentId) {
       return {
         kind: "failure" as const,
         result: failure(422, "review_required"),
@@ -667,7 +671,9 @@ export async function createPartnerHostedPaymentIntent(
       invoice.currency !== "USD" ||
       input.currency !== invoice.currency ||
       (invoice.provider !== null && invoice.provider !== "square") ||
-      (invoice.providerInvoiceId !== null || invoice.legacyHostedUrl !== null || invoice.legacyProviderOrderId !== null)
+      invoice.providerInvoiceId !== null ||
+      invoice.legacyHostedUrl !== null ||
+      invoice.legacyProviderOrderId !== null
     ) {
       return {
         kind: "failure" as const,
@@ -1175,6 +1181,7 @@ export async function createPartnerEmbeddedPaymentIntent(
       .limit(1);
     if (
       !job ||
+      !job.appointmentId ||
       !["issued", "partially_paid", "overdue"].includes(invoice.status) ||
       invoice.balanceCents <= 0 ||
       invoice.totalCents !==
@@ -1187,7 +1194,9 @@ export async function createPartnerEmbeddedPaymentIntent(
       invoice.currency !== "USD" ||
       input.currency !== invoice.currency ||
       (invoice.provider !== null && invoice.provider !== "square") ||
-      (invoice.providerInvoiceId !== null || invoice.legacyHostedUrl !== null || invoice.legacyProviderOrderId !== null)
+      invoice.providerInvoiceId !== null ||
+      invoice.legacyHostedUrl !== null ||
+      invoice.legacyProviderOrderId !== null
     ) {
       return {
         kind: "failure" as const,
@@ -1690,7 +1699,9 @@ export async function completePartnerEmbeddedPaymentIntent(
       !invoice ||
       !["issued", "partially_paid", "overdue"].includes(invoice.status) ||
       invoice.currency !== metadata.currency ||
-      invoice.providerInvoiceId !== null || invoice.legacyHostedUrl !== null || invoice.legacyProviderOrderId !== null ||
+      invoice.providerInvoiceId !== null ||
+      invoice.legacyHostedUrl !== null ||
+      invoice.legacyProviderOrderId !== null ||
       invoice.totalCents !==
         invoice.paidCents + invoice.balanceCents + invoice.creditedCents ||
       !canCollectAppointmentPayment(
@@ -2178,7 +2189,8 @@ export async function getPartnerInvoiceHostedPaymentLink(input: {
       ),
     )
     .limit(1);
-  if (!job) return { ok: true, paymentLink: null, eligible: false };
+  if (!job || !job.appointmentId)
+    return { ok: true, paymentLink: null, eligible: false };
   const eligible =
     invoiceEligible && canCollectAppointmentPayment(job.status, job.type);
   const attempts = await db
@@ -2365,18 +2377,32 @@ export async function finalizePartnerPortalPaymentReconciliation(
     .from(partnerPaymentAllocations)
     .where(eq(partnerPaymentAllocations.paymentId, payment.id))
     .for("update");
-  if (allocations.length && invoice.partnerBookingId && await hasMatchingPartnerAllocationEvidence(tx, {
-    accountId: metadata.partnerAccountId,
-    jobId: invoice.partnerBookingId,
-    paymentId: payment.id,
-    principalCents: payment.jobAmountCents,
-    allocations,
-  })) {
+  if (
+    allocations.length &&
+    invoice.partnerBookingId &&
+    (await hasMatchingPartnerAllocationEvidence(tx, {
+      accountId: metadata.partnerAccountId,
+      jobId: invoice.partnerBookingId,
+      paymentId: payment.id,
+      principalCents: payment.jobAmountCents,
+      allocations,
+    }))
+  ) {
     // Preserve the immutable correction instead of recreating the original
     // checkout allocation when Square redelivers an older settlement event.
-    await tx.update(paymentAttempts).set({ metadata: { partnerPortalPayment: {
-      ...metadata, allocationState: "settled", allocationError: undefined,
-    } }, updatedAt: new Date() }).where(eq(paymentAttempts.id, attempt.id));
+    await tx
+      .update(paymentAttempts)
+      .set({
+        metadata: {
+          partnerPortalPayment: {
+            ...metadata,
+            allocationState: "settled",
+            allocationError: undefined,
+          },
+        },
+        updatedAt: new Date(),
+      })
+      .where(eq(paymentAttempts.id, attempt.id));
     return;
   }
   const existing = allocations.find(

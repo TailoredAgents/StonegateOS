@@ -1,3 +1,4 @@
+import { lockPartnerRequestFinancials } from "./partner-request-financials";
 import { enqueueOwnerAlertEvaluation } from "@/lib/partner-owner-alerts";
 import { randomUUID } from "node:crypto";
 import {
@@ -1221,6 +1222,18 @@ function summarizedRequestSnapshot(value: unknown): Record<string, unknown> {
     const text = safeText(source[key], 160);
     if (text) result[key] = text;
   }
+  if (
+    source["modelVersion"] === 2 &&
+    Array.isArray(source["serviceKeys"]) &&
+    source["serviceKeys"].length <= 8 &&
+    source["serviceKeys"].every(
+      (key) => typeof key === "string" && SERVICE_KEY_PATTERN.test(key),
+    )
+  ) {
+    result["modelVersion"] = 2;
+    result["serviceKeys"] = [...new Set(source["serviceKeys"] as string[])];
+    delete result["serviceKey"];
+  }
   for (const key of ["description", "notes"] as const) {
     const text = safeText(source[key], 2_000);
     if (text) result[key] = text;
@@ -1639,13 +1652,14 @@ export type PartnerApprovalLifecycleTarget = Readonly<{
   bookingRequestedByMembershipId: string | null;
   bookingPropertyId: string | null;
   bookingVersion: number;
+  bookingModelVersion?: number;
   bookingPublicStatus: string;
   bookingConfirmationMode: string;
   bookingArrivalWindowStartAt: Date | null;
   bookingArrivalWindowEndAt: Date | null;
-  appointmentId: string;
+  appointmentId: string | null;
   appointmentAccountId: string | null;
-  appointmentStatus: string;
+  appointmentStatus: string | null;
   appointmentStartAt: Date | null;
   appointmentPromisedArrivalStartAt: Date | null;
   appointmentPromisedArrivalEndAt: Date | null;
@@ -1750,10 +1764,14 @@ export function planPartnerApprovalLifecycle(input: {
           input.target.bookingAccountId === input.accountId &&
           input.target.bookingRequestedByMembershipId ===
             input.requestedByMembershipId &&
-          input.target.appointmentAccountId === input.accountId &&
           input.target.bookingPublicStatus === "approval_needed" &&
-          input.target.bookingConfirmationMode === "approval" &&
-          input.target.appointmentStatus === "requested",
+          (input.target.bookingModelVersion === 2
+            ? input.target.appointmentId === null &&
+              input.approvalHoldId === null
+            : input.target.appointmentId !== null &&
+              input.target.appointmentAccountId === input.accountId &&
+              input.target.bookingConfirmationMode === "approval" &&
+              input.target.appointmentStatus === "requested"),
       )
     : input.target === null;
   if (!targetMatches) {
@@ -1784,6 +1802,13 @@ export function planPartnerApprovalLifecycle(input: {
     });
   }
   if (!input.partnerBookingId || !input.target) {
+    return Object.freeze({
+      kind: "approved_needs_reschedule" as const,
+      approvalState: "approved_needs_reschedule" as const,
+      releaseApprovalHold: false as const,
+    });
+  }
+  if (input.target.bookingModelVersion === 2) {
     return Object.freeze({
       kind: "approved_needs_reschedule" as const,
       approvalState: "approved_needs_reschedule" as const,
@@ -1904,11 +1929,12 @@ async function loadPartnerApprovalLifecycleContext(input: {
               partnerBookings.requestedByMembershipId,
             bookingPropertyId: partnerBookings.propertyId,
             bookingVersion: partnerBookings.version,
+            bookingModelVersion: partnerBookings.modelVersion,
             bookingPublicStatus: partnerBookings.publicStatus,
             bookingConfirmationMode: partnerBookings.confirmationMode,
             bookingArrivalWindowStartAt: partnerBookings.arrivalWindowStartAt,
             bookingArrivalWindowEndAt: partnerBookings.arrivalWindowEndAt,
-            appointmentId: appointments.id,
+            appointmentId: partnerBookings.appointmentId,
             appointmentAccountId: appointments.partnerAccountId,
             appointmentStatus: appointments.status,
             appointmentStartAt: appointments.startAt,
@@ -1920,18 +1946,20 @@ async function loadPartnerApprovalLifecycleContext(input: {
             appointmentCalendarEventId: appointments.calendarEventId,
           })
           .from(partnerBookings)
-          .innerJoin(
+          .leftJoin(
             appointments,
-            eq(partnerBookings.appointmentId, appointments.id),
+            and(
+              eq(partnerBookings.appointmentId, appointments.id),
+              eq(appointments.partnerAccountId, input.accountId),
+            ),
           )
           .where(
             and(
               eq(partnerBookings.id, input.request.partnerBookingId),
               eq(partnerBookings.partnerAccountId, input.accountId),
-              eq(appointments.partnerAccountId, input.accountId),
             ),
           )
-          .for("update")
+          .for("update", { of: partnerBookings })
           .limit(1)
       )[0] ?? null)
     : null;
@@ -2041,8 +2069,51 @@ async function applyPartnerApprovalLifecycle(input: {
       .returning({ id: appointmentHolds.id });
     if (!released) throw new Error("partner_approval_hold_release_race");
   }
+  if (input.target?.bookingModelVersion === 2) {
+    if (input.target.appointmentId !== null || input.plan.kind === "confirm")
+      throw new Error("partner_parent_approval_cannot_schedule");
+    const declined = input.plan.kind === "decline";
+    const [changed] = await input.tx
+      .update(partnerBookings)
+      .set({
+        publicStatus: declined ? "declined" : "under_review",
+        confirmationMode: "review",
+        arrivalWindowStartAt: null,
+        arrivalWindowEndAt: null,
+        version: input.target.bookingVersion + 1,
+        updatedAt: input.now,
+      })
+      .where(
+        and(
+          eq(partnerBookings.id, input.target.bookingId),
+          eq(partnerBookings.partnerAccountId, input.accountId),
+          eq(partnerBookings.modelVersion, 2),
+          isNull(partnerBookings.appointmentId),
+          eq(partnerBookings.version, input.target.bookingVersion),
+          eq(partnerBookings.publicStatus, "approval_needed"),
+        ),
+      )
+      .returning({ id: partnerBookings.id });
+    if (!changed) throw new Error("partner_parent_approval_transition_race");
+    await input.tx.insert(partnerJobEvents).values({
+      partnerAccountId: input.accountId,
+      partnerBookingId: changed.id,
+      eventType: declined ? "job.company_declined" : "job.company_approved",
+      publicLabel: declined
+        ? "Company approval declined"
+        : "Company approval complete",
+      publicDetail: declined
+        ? "The company declined this service request."
+        : "Stonegate will review the price and arrange service visits. This approval does not reserve an appointment.",
+      actorType: "partner",
+      actorMembershipId: input.actorMembershipId,
+      effectiveAt: input.now,
+      createdAt: input.now,
+    });
+    return;
+  }
   if (input.plan.kind === "decline") {
-    if (!input.target) return;
+    if (!input.target?.appointmentId) return;
     const [canceledAppointment] = await input.tx
       .update(appointments)
       .set({
@@ -2087,7 +2158,7 @@ async function applyPartnerApprovalLifecycle(input: {
     return;
   }
   if (input.plan.kind === "approved_needs_reschedule") {
-    if (input.target) {
+    if (input.target?.appointmentId) {
       const [unscheduled] = await input.tx
         .update(appointments)
         .set({
@@ -2141,7 +2212,7 @@ async function applyPartnerApprovalLifecycle(input: {
     }
     return;
   }
-  if (!input.target || !input.hold || !expectedDraftId) {
+  if (!input.target?.appointmentId || !input.hold || !expectedDraftId) {
     throw new Error("partner_approval_confirmation_context_missing");
   }
   const [consumedHold] = await input.tx
@@ -2261,6 +2332,31 @@ export async function decidePartnerApprovalRequest(
 ): Promise<PortalV2StoredResult> {
   const db = getDb();
   return db.transaction(async (tx) => {
+    // Match price/visit mutations: parent financial lock -> parent row -> schedule
+    // lock -> approval row. The binding is account-bound and is revalidated below.
+    const [parentBinding] = await tx
+      .select({ id: partnerBookings.id })
+      .from(partnerApprovalRequests)
+      .innerJoin(
+        partnerBookings,
+        and(
+          eq(partnerBookings.id, partnerApprovalRequests.partnerBookingId),
+          eq(
+            partnerBookings.partnerAccountId,
+            partnerApprovalRequests.partnerAccountId,
+          ),
+        ),
+      )
+      .where(
+        and(
+          eq(partnerApprovalRequests.id, input.requestId),
+          eq(partnerApprovalRequests.partnerAccountId, input.accountId),
+          eq(partnerBookings.modelVersion, 2),
+        ),
+      )
+      .limit(1);
+    if (parentBinding)
+      await lockPartnerRequestFinancials(tx, input.accountId, parentBinding.id);
     await acquireScheduleConflictLock(tx);
     const [activeIdentity] = await tx
       .select({ id: partnerAccountMemberships.id })

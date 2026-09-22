@@ -1,3 +1,8 @@
+import { loadPartnerStaffInvitationAuthority } from "./partner-invitation-authority";
+import {
+  lockPartnerRequestFinancials,
+  partnerRequestTotalSql,
+} from "./partner-request-financials";
 import { randomUUID } from "node:crypto";
 import {
   and,
@@ -32,10 +37,7 @@ import {
 } from "@/db";
 import { queuePartnerBillingDocument } from "@/lib/partner-billing-documents";
 import type { PartnerBillingDocumentSnapshot } from "@/lib/partner-billing-document-renderer";
-import {
-  lockAppointmentInvoiceCollection,
-  reconcilePartnerAppointmentInvoices,
-} from "@/lib/partner-invoice-ledger";
+import { reconcilePartnerAppointmentInvoices } from "@/lib/partner-invoice-ledger";
 import { PAYMENT_MUTATION_BLOCKING_ATTEMPT_STATUSES } from "@/lib/payment-ledger";
 import { allocateRefund } from "@/lib/payment-summary";
 import { resolvePartnerRefundAllocations } from "@/lib/partner-refund-allocation";
@@ -121,6 +123,18 @@ export const PartnerBillingCommandSchema = z.discriminatedUnion("action", [
     .strict(),
   z
     .object({
+      action: z.literal("record_manual_payment"),
+      invoiceId: z.string().uuid(),
+      clientRequestId: z.string().uuid(),
+      amountCents: Minor.positive(),
+      method: z.enum(["cash", "check"]),
+      reference: z.string().trim().max(120).nullable().default(null),
+      reason: Reason,
+      confirmation: z.literal("PAYMENT ALREADY RECEIVED"),
+    })
+    .strict(),
+  z
+    .object({
       action: z.literal("record_manual_refund"),
       invoiceId: z.string().uuid(),
       paymentId: z.string().uuid(),
@@ -184,14 +198,16 @@ export function calculatePartnerInvoiceLines(
 
 async function assertNoUnresolvedPayment(
   tx: TeamMutationTransaction,
-  appointmentId: string,
+  binding: { id: string; appointmentId: string | null },
 ) {
   const [attempt] = await tx
     .select({ id: paymentAttempts.id })
     .from(paymentAttempts)
     .where(
       and(
-        eq(paymentAttempts.appointmentId, appointmentId),
+        binding.appointmentId
+          ? eq(paymentAttempts.appointmentId, binding.appointmentId)
+          : eq(paymentAttempts.partnerBookingId, binding.id),
         inArray(paymentAttempts.status, [
           ...PAYMENT_MUTATION_BLOCKING_ATTEMPT_STATUSES,
         ]),
@@ -228,6 +244,8 @@ export async function runPartnerBillingCommand(
   operationId?: string;
   creditId?: string;
   refundRequestId?: string;
+  paymentId?: string;
+  replayed?: boolean;
   revision?: number;
 }> {
   const { command, accountId } = input;
@@ -251,19 +269,17 @@ export async function runPartnerBillingCommand(
 
   let invoice: typeof partnerInvoices.$inferSelect | undefined;
   let booking:
-    | { id: string; appointmentId: string; totalCents: number | null }
+    | { id: string; appointmentId: string | null; totalCents: number | null }
     | undefined;
   if (command.action === "create_invoice") {
     [booking] = await tx
       .select({
         id: partnerBookings.id,
         appointmentId: partnerBookings.appointmentId,
-        totalCents: sql<
-          number | null
-        >`coalesce(${appointments.finalTotalCents}, ${appointments.quotedTotalCents})`,
+        totalCents: partnerRequestTotalSql,
       })
       .from(partnerBookings)
-      .innerJoin(
+      .leftJoin(
         appointments,
         eq(appointments.id, partnerBookings.appointmentId),
       )
@@ -290,12 +306,10 @@ export async function runPartnerBillingCommand(
         .select({
           id: partnerBookings.id,
           appointmentId: partnerBookings.appointmentId,
-          totalCents: sql<
-            number | null
-          >`coalesce(${appointments.finalTotalCents}, ${appointments.quotedTotalCents})`,
+          totalCents: partnerRequestTotalSql,
         })
         .from(partnerBookings)
-        .innerJoin(
+        .leftJoin(
           appointments,
           eq(appointments.id, partnerBookings.appointmentId),
         )
@@ -313,19 +327,11 @@ export async function runPartnerBillingCommand(
       "Choose an account-owned job with a reconciled invoice binding.",
       { status: 404 },
     );
-  await lockAppointmentInvoiceCollection(tx, booking.appointmentId);
-  const [currentJob] = await tx
-    .select({
-      totalCents: sql<
-        number | null
-      >`coalesce(${appointments.finalTotalCents}, ${appointments.quotedTotalCents})`,
-    })
-    .from(appointments)
-    .where(eq(appointments.id, booking.appointmentId))
-    .for("update")
-    .limit(1);
-  if (!currentJob)
-    throw new TeamMutationFailure("invalid", "Job not found.", { status: 404 });
+  const currentJob = await lockPartnerRequestFinancials(
+    tx,
+    accountId,
+    booking.id,
+  );
   booking.totalCents = currentJob.totalCents;
   if (command.action !== "create_invoice") {
     [invoice] = await tx
@@ -354,7 +360,7 @@ export async function runPartnerBillingCommand(
         "This legacy hosted collection requires verified provider retirement and reconciliation before CRM billing changes.",
       );
   }
-  await assertNoUnresolvedPayment(tx, booking.appointmentId);
+  await assertNoUnresolvedPayment(tx, booking);
   const now = new Date();
   if (
     command.action === "create_invoice" ||
@@ -461,6 +467,159 @@ export async function runPartnerBillingCommand(
     invoice.dueDate ? `Payment due: ${invoice.dueDate}` : "",
   ].filter(Boolean);
 
+  if (command.action === "record_manual_payment") {
+    if (
+      !(await loadPartnerStaffInvitationAuthority(tx, input.actorId, [
+        "partners.commercial.manage",
+        "payments.collect",
+      ]))
+    )
+      throw new TeamMutationFailure(
+        "forbidden",
+        "Your permission to record payments is no longer available.",
+      );
+    if (currentJob.modelVersion !== 2 || booking.appointmentId)
+      throw new TeamMutationFailure(
+        "conflict",
+        "Record this legacy job's cash or check payment from its appointment.",
+      );
+    await tx.execute(
+      sql`select pg_advisory_xact_lock(hashtext('payment_client_request'), hashtext(${command.clientRequestId}))`,
+    );
+    const providerPaymentId = `manual:${command.clientRequestId}`;
+    const [existing] = await tx
+      .select()
+      .from(payments)
+      .where(
+        and(
+          eq(payments.provider, "manual"),
+          eq(payments.providerPaymentId, providerPaymentId),
+        ),
+      )
+      .limit(1);
+    if (existing) {
+      if (
+        existing.partnerAccountId !== accountId ||
+        existing.partnerBookingId !== booking.id ||
+        existing.appointmentId !== null ||
+        existing.metadata?.["invoiceId"] !== invoice.id ||
+        existing.amount !== command.amountCents ||
+        existing.method !== command.method ||
+        (existing.metadata?.["reference"] ?? null) !== command.reference ||
+        existing.canonicalStatus !== "completed"
+      )
+        throw new TeamMutationFailure(
+          "conflict",
+          "This payment reference already belongs to another recorded operation. Retry the original payment.",
+        );
+      return {
+        invoiceId: invoice.id,
+        paymentId: existing.id,
+        revision: invoice.version,
+        replayed: true,
+      };
+    }
+    if (
+      !invoice.issuedAt ||
+      !["issued", "partially_paid", "overdue"].includes(invoice.status) ||
+      invoice.currency !== "USD"
+    )
+      throw new TeamMutationFailure(
+        "conflict",
+        "Issue and review this invoice before recording a received payment.",
+      );
+    await reconcilePartnerAppointmentInvoices(tx, {
+      bookingId: booking.id,
+      accountId,
+    });
+    const [current] = await tx
+      .select()
+      .from(partnerInvoices)
+      .where(
+        and(
+          eq(partnerInvoices.id, invoice.id),
+          eq(partnerInvoices.partnerAccountId, accountId),
+        ),
+      )
+      .for("update")
+      .limit(1);
+    if (!current)
+      throw new TeamMutationFailure(
+        "conflict",
+        "Refresh this invoice before recording payment.",
+      );
+    requireVersion(current.version, input.expectedVersion);
+    if (current.balanceCents <= 0 || command.amountCents > current.balanceCents)
+      throw new TeamMutationFailure(
+        "conflict",
+        "The received amount exceeds this invoice's remaining balance. Review the payment before saving.",
+      );
+    const [payment] = await tx
+      .insert(payments)
+      .values({
+        provider: "manual",
+        providerPaymentId,
+        partnerAccountId: accountId,
+        partnerBookingId: booking.id,
+        appointmentId: null,
+        amount: command.amountCents,
+        jobAmountCents: command.amountCents,
+        totalAmountCents: command.amountCents,
+        tipCents: 0,
+        currency: "USD",
+        status: "completed",
+        canonicalStatus: "completed",
+        providerStatus: "completed",
+        method: command.method,
+        tenderType: command.method,
+        initiatedByMemberId: input.actorId,
+        metadata: {
+          clientRequestId: command.clientRequestId,
+          invoiceId: invoice.id,
+          reference: command.reference,
+          note: command.reason,
+        },
+        paidAt: now,
+        capturedAt: now,
+        createdAt: now,
+        updatedAt: now,
+      })
+      .returning({ id: payments.id });
+    if (!payment) throw new Error("partner_manual_payment_not_recorded");
+    await reconcilePartnerAppointmentInvoices(tx, {
+      bookingId: booking.id,
+      accountId,
+    });
+    const [settled] = await tx
+      .select()
+      .from(partnerInvoices)
+      .where(eq(partnerInvoices.id, invoice.id))
+      .limit(1);
+    const [allocation] = await tx
+      .select({ amount: partnerPaymentAllocations.amountCents })
+      .from(partnerPaymentAllocations)
+      .where(
+        and(
+          eq(partnerPaymentAllocations.partnerAccountId, accountId),
+          eq(partnerPaymentAllocations.partnerInvoiceId, invoice.id),
+          eq(partnerPaymentAllocations.paymentId, payment.id),
+          eq(partnerPaymentAllocations.state, "settled"),
+        ),
+      )
+      .limit(1);
+    if (
+      !settled ||
+      allocation?.amount !== command.amountCents ||
+      settled.balanceCents !== current.balanceCents - command.amountCents
+    )
+      throw new Error("partner_manual_payment_reconciliation_failed");
+    return {
+      invoiceId: invoice.id,
+      paymentId: payment.id,
+      revision: settled.version,
+    };
+  }
+
   if (command.action === "issue_invoice") {
     if (invoice.status !== "draft" || invoice.totalCents !== booking.totalCents)
       throw new TeamMutationFailure(
@@ -490,7 +649,10 @@ export async function runPartnerBillingCommand(
         updatedAt: now,
       })
       .where(eq(partnerInvoices.id, invoice.id));
-    await reconcilePartnerAppointmentInvoices(tx, booking.appointmentId);
+    await reconcilePartnerAppointmentInvoices(
+      tx,
+      booking.appointmentId ?? { bookingId: booking.id, accountId },
+    );
     const [issued] = await tx
       .select()
       .from(partnerInvoices)
@@ -624,7 +786,7 @@ async function createRefund(
     accountName: string;
     invoiceId: string;
     bookingId: string;
-    appointmentId: string;
+    appointmentId: string | null;
     actorId: string;
     invoice: typeof partnerInvoices.$inferSelect;
     now: Date;
@@ -641,7 +803,12 @@ async function createRefund(
     .where(
       and(
         eq(payments.id, command.paymentId),
-        eq(payments.appointmentId, input.appointmentId),
+        input.appointmentId
+          ? eq(payments.appointmentId, input.appointmentId)
+          : and(
+              eq(payments.partnerBookingId, input.bookingId),
+              eq(payments.partnerAccountId, input.accountId),
+            ),
       ),
     )
     .for("update")
@@ -669,7 +836,10 @@ async function createRefund(
       "Only a settled, invoice-linked payment can be refunded.",
     );
   const pending = await tx
-    .select({ amount: partnerBillingRefundRequests.amountCents, invoiceId: partnerBillingRefundRequests.partnerInvoiceId })
+    .select({
+      amount: partnerBillingRefundRequests.amountCents,
+      invoiceId: partnerBillingRefundRequests.partnerInvoiceId,
+    })
     .from(partnerBillingRefundRequests)
     .where(
       and(
@@ -758,8 +928,13 @@ async function createRefund(
     command.amountCents,
     Math.max(0, (payment.jobAmountCents ?? 0) - refundedPrincipal),
   );
-  const reservedForInvoice = pending.filter(row => row.invoiceId === input.invoiceId).reduce((sum, row) => sum + row.amount, 0);
-  if (nextRefundPrincipal + reservedForInvoice > allocation.amountCents - priorInvoiceRefund)
+  const reservedForInvoice = pending
+    .filter((row) => row.invoiceId === input.invoiceId)
+    .reduce((sum, row) => sum + row.amount, 0);
+  if (
+    nextRefundPrincipal + reservedForInvoice >
+    allocation.amountCents - priorInvoiceRefund
+  )
     throw new TeamMutationFailure(
       "conflict",
       "That refund exceeds the settled service payment allocated to this invoice. Choose the invoice receiving those funds.",
@@ -842,15 +1017,19 @@ async function createRefund(
     })
     .where(eq(payments.id, payment.id));
   if (allocationAmounts.refundedJobCents > 0)
-    await tx
-      .insert(partnerRefundAllocations)
-      .values({
-        partnerAccountId: input.accountId,
-        partnerInvoiceId: input.invoiceId,
-        refundId,
-        jobAmountCents: allocationAmounts.refundedJobCents,
-      });
-  await reconcilePartnerAppointmentInvoices(tx, input.appointmentId);
+    await tx.insert(partnerRefundAllocations).values({
+      partnerAccountId: input.accountId,
+      partnerInvoiceId: input.invoiceId,
+      refundId,
+      jobAmountCents: allocationAmounts.refundedJobCents,
+    });
+  await reconcilePartnerAppointmentInvoices(
+    tx,
+    input.appointmentId ?? {
+      bookingId: input.bookingId,
+      accountId: input.accountId,
+    },
+  );
   const [operation] = await tx
     .select({ id: partnerBillingDocumentOperations.id })
     .from(partnerBillingDocumentOperations)
@@ -930,7 +1109,13 @@ async function generateStatement(
               partnerBookings.partnerAccountId,
               partnerInvoices.partnerAccountId,
             ),
-            eq(partnerBookings.appointmentId, payments.appointmentId),
+            or(
+              eq(partnerBookings.appointmentId, payments.appointmentId),
+              and(
+                eq(partnerBookings.id, payments.partnerBookingId),
+                eq(partnerBookings.partnerAccountId, payments.partnerAccountId),
+              ),
+            ),
           ),
         )
         .where(

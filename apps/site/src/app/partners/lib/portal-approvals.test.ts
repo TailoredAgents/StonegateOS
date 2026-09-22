@@ -205,3 +205,35 @@ void test("approval decision UI sends revision and idempotency guards", () => {
   assert.doesNotMatch(component, /mfa_step_up_required|mfa\/step-up/iu);
   assert.match(component, /requestedByCurrentMember/u);
 });
+
+void test("multi-service approval details retain all selected services and reject malformed summaries", () => {
+  const detail = {
+    ...summary(),
+    rulesValid: true,
+    rules: [],
+    request: { modelVersion: 2, serviceKeys: ["junk-removal", "painting"] },
+    decisions: [],
+  };
+  assert.equal(isPartnerApprovalDetail(detail), true);
+  assert.equal(
+    isPartnerApprovalDetail({
+      ...detail,
+      request: { ...detail.request, modelVersion: 3 },
+    }),
+    false,
+  );
+  assert.equal(
+    isPartnerApprovalDetail({
+      ...detail,
+      request: { ...detail.request, serviceKeys: [null] },
+    }),
+    false,
+  );
+  assert.equal(
+    isPartnerApprovalDetail({
+      ...detail,
+      request: { ...detail.request, serviceKeys: Array(9).fill("painting") },
+    }),
+    false,
+  );
+});

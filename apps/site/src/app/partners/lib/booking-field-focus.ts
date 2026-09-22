@@ -78,6 +78,7 @@ export function bookingErrorSection(field: string): BookingErrorSection {
   )
     return "address";
   if (belongsTo(path, "scope.requiredCompletion")) return "scheduling";
+  if (belongsTo(path, "scope.photoServiceAssociations")) return "proof";
   if (belongsTo(path, "selectedAddOns")) return "addons";
   if (belongsTo(path, "scope.alternateContact")) return "contact";
   if (belongsTo(path, "scope.equipmentNeeds"))
@@ -123,6 +124,9 @@ const SECTION_FALLBACK_IDS: Readonly<Record<BookingErrorSection, string>> = {
 export function bookingFieldElementId(field: string): string {
   const path = fieldPath(field);
   if (path.startsWith("location")) return "partner-book-location";
+  if (belongsTo(path, "scope.photoServiceAssociations"))
+    return "partner-book-photos";
+  if (belongsTo(path, "serviceLines")) return "partner-book-services";
   if (path.startsWith("service")) return "partner-book-service";
   if (path.startsWith("tier")) return "partner-book-base-option";
   if (belongsTo(path, "selectedAddOns")) return "partner-book-add-ons";
@@ -189,6 +193,15 @@ export function bookingFieldElementId(field: string): string {
 export function focusBookingField(field: string): boolean {
   if (typeof document === "undefined") return false;
   const path = fieldPath(field);
+  if (
+    belongsTo(path, "serviceLines") &&
+    document.getElementById("partner-book-services")
+  ) {
+    window.dispatchEvent(
+      new CustomEvent("partner-service-field-focus", { detail: path }),
+    );
+    return true;
+  }
   const savedDetail = [
     "scope.nonStandard",
     "scope.restrictedItems",

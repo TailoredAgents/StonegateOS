@@ -8,6 +8,9 @@ const base = require("./jest.config.cjs");
 module.exports = {
   ...base,
   testMatch: [
+    "<rootDir>/src/__tests__/partner-multi-service.test.ts",
+    "<rootDir>/src/__tests__/partner-structured-rates.test.ts",
+    "<rootDir>/src/__tests__/partner-quote-v2-approval.test.ts",
     "<rootDir>/src/__tests__/media-storage.test.ts",
     "<rootDir>/src/__tests__/quote-v2-pdf.test.ts",
     "<rootDir>/src/__tests__/quote-v2-acceptance-certificate.test.ts",

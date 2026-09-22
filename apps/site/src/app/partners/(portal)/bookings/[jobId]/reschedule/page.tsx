@@ -20,6 +20,7 @@ import {
 
 type RescheduleJob = {
   id: string;
+  modelVersion?: 1 | 2;
   status: string;
   location: { name: string | null; address: { line1: string } | null };
   schedule: {
@@ -100,6 +101,14 @@ export default async function PartnerReschedulePage({
       />
     );
   const job = result.value;
+  if (job.modelVersion === 2)
+    return (
+      <PartnerErrorState
+        title="Choose a service visit"
+        description="Open the job and choose Request a different date on the visit you want to change. Each confirmed visit keeps its schedule until Stonegate reviews your request."
+        retryHref={`/partners/bookings/${encodeURIComponent(job.id)}`}
+      />
+    );
   const etag = result.response.headers.get("etag");
   const currentWindow = job.schedule.arrivalWindow;
   if (

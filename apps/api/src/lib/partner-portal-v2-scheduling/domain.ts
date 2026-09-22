@@ -1,5 +1,9 @@
 import { DateTime } from "luxon";
 import {
+  PartnerServiceLinesInputSchema,
+  type PartnerServiceLineInput,
+} from "@myst-os/pricing";
+import {
   createScheduleDemand,
   createScheduleOccupancy,
   evaluateWeightedScheduleCapacity,
@@ -38,6 +42,8 @@ const PARTNER_PREFERRED_TIME_OF_DAY = new Set([
   "anytime",
 ]);
 const DRAFT_KEYS = new Set([
+  "modelVersion",
+  "serviceLines",
   "locationId",
   "serviceKey",
   "tierKey",
@@ -85,6 +91,8 @@ const PARTNER_ALTERNATE_CONTACT_KEYS = new Set(["name", "phone", "email"]);
 const PARTNER_REQUIRED_COMPLETION_KEYS = new Set(["localDate", "localTime"]);
 
 export type PartnerDraftMutation = Readonly<{
+  modelVersion?: 1 | 2;
+  serviceLines?: PartnerServiceLineInput[];
   locationId?: string | null;
   serviceKey?: string | null;
   tierKey?: string | null;
@@ -107,6 +115,8 @@ export type PartnerPreferredWindow = Readonly<{
 }>;
 
 export type DraftValidationInput = Readonly<{
+  modelVersion?: number;
+  serviceLines?: readonly PartnerServiceLineInput[];
   locationId: string | null;
   serviceKey: string | null;
   scope: Readonly<Record<string, unknown>>;
@@ -676,6 +686,27 @@ function parseKnownScopeStringArray(input: {
 
 function parsePartnerScope(value: unknown): Record<string, unknown> {
   const scope = cloneJsonRecord(value, "scope");
+  if ("photoServiceAssociations" in scope) {
+    const associations = scope["photoServiceAssociations"];
+    if (
+      !isRecord(associations) ||
+      Object.keys(associations).length > MAX_ACTIVE_PARTNER_DRAFT_MEDIA ||
+      Object.entries(associations).some(
+        ([id, lines]) =>
+          !UUID_PATTERN.test(id) ||
+          !Array.isArray(lines) ||
+          lines.length > 8 ||
+          lines.some(
+            (line) => typeof line !== "string" || !UUID_PATTERN.test(line),
+          ) ||
+          new Set(lines).size !== lines.length,
+      )
+    )
+      throw schedulingFieldError({
+        "scope.photoServiceAssociations":
+          "Choose valid photos and service lines.",
+      });
+  }
   for (const key of ["restrictedItems", "nonStandard", "multiStop"] as const) {
     if (key in scope && typeof scope[key] !== "boolean") {
       throw schedulingFieldError({
@@ -976,6 +1007,28 @@ export function parsePartnerDraftMutation(
   }
 
   const result: Record<string, unknown> = {};
+  if ("modelVersion" in value) {
+    if (value["modelVersion"] !== 1 && value["modelVersion"] !== 2)
+      throw schedulingFieldError({
+        modelVersion: "Choose a supported request format.",
+      });
+    result["modelVersion"] = value["modelVersion"];
+  }
+  if ("serviceLines" in value) {
+    const parsed = PartnerServiceLinesInputSchema.safeParse(
+      value["serviceLines"],
+    );
+    if (!parsed.success)
+      throw schedulingFieldError(
+        Object.fromEntries(
+          parsed.error.issues.map((issue) => [
+            ["serviceLines", ...issue.path].join("."),
+            issue.message,
+          ]),
+        ),
+      );
+    result["serviceLines"] = parsed.data;
+  }
   if ("locationId" in value)
     result["locationId"] = optionalUuid(value["locationId"], "locationId");
   if ("serviceKey" in value) {
@@ -1216,9 +1269,26 @@ export function validatePartnerBookingDraft(
     fieldErrors["locationId"] = "Choose a service location.";
   else if (!input.location || input.location.id !== input.locationId)
     fieldErrors["locationId"] = "Choose an accessible service location.";
-  if (!input.serviceKey) fieldErrors["serviceKey"] = "Choose a service.";
-  if (!input.description?.trim())
-    fieldErrors["description"] = "Describe the work to be completed.";
+  if (input.modelVersion === 2) {
+    const parsed = PartnerServiceLinesInputSchema.safeParse(input.serviceLines);
+    if (!parsed.success)
+      for (const issue of parsed.error.issues)
+        fieldErrors[["serviceLines", ...issue.path].join(".")] = issue.message;
+    else {
+      if (!parsed.data.length)
+        fieldErrors["serviceLines"] = "Choose at least one service.";
+      parsed.data.forEach((line, index) => {
+        if (!line.description.trim())
+          fieldErrors[`serviceLines.${index}.description`] =
+            "Describe this service's work.";
+      });
+    }
+    reviewReasons.push("manual_review_required");
+  } else {
+    if (!input.serviceKey) fieldErrors["serviceKey"] = "Choose a service.";
+    if (!input.description?.trim())
+      fieldErrors["description"] = "Describe the work to be completed.";
+  }
   const onSiteName = input.onSiteContact?.["name"];
   const onSitePhone = input.onSiteContact?.["phone"];
   const onSiteEmail = input.onSiteContact?.["email"];

@@ -1,4 +1,8 @@
-import { readFileSync, readdirSync } from "node:fs";
+import { localPartnerRehearsalDatabaseUrl } from "./lib/partner-local-rehearsal";
+import { existsSync, readFileSync, readdirSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { createRequire } from "node:module";
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
@@ -6,6 +10,17 @@ import { fileURLToPath } from "node:url";
 // Local browser rehearsal only. Do not inherit production/provider secrets
 // from either the calling shell or Next's automatic .env loading.
 const repo = fileURLToPath(new URL("../", import.meta.url));
+// Matches the workspace-specific certificate prepared by the local TLS runner.
+const localTlsCertificate = join(
+  tmpdir(),
+  `stonegate-partner-access-tls-${createHash("sha256").update(repo).digest("hex").slice(0, 16)}`,
+  "cert.pem",
+);
+if (!existsSync(localTlsCertificate)) {
+  throw new Error(
+    "Prepare local TLS first: pnpm exec tsx scripts/run-partner-access-https.mts --prepare",
+  );
+}
 const service = process.argv[2];
 if (service !== "api" && service !== "site") throw Error("Choose api or site");
 const environment: NodeJS.ProcessEnv = {
@@ -36,8 +51,8 @@ Object.assign(environment, {
       ? "--max-old-space-size=4096"
       : "--max-old-space-size=6144",
   NEXT_TELEMETRY_DISABLED: "1",
-  DATABASE_URL:
-    "postgresql://portal_test:portal_local_only@127.0.0.1:55443/portal_access_browser",
+  NODE_EXTRA_CA_CERTS: localTlsCertificate,
+  DATABASE_URL: localPartnerRehearsalDatabaseUrl(),
   DATABASE_SSL: "false",
   APPOINTMENT_TIMEZONE: "America/New_York",
   DOTENV_CONFIG_PATH: "/dev/null",
@@ -57,7 +72,8 @@ Object.assign(environment, {
   PARTNER_PROOF_SHARE_TOKEN_KEY_BASE64: Buffer.alloc(32, 2).toString("base64"),
   E2E_RUN_ID: "partner-production-release-rehearsal",
   TEAM_CRM_AUDIT_MODE: "1",
-  MEDIA_OBJECT_ENDPOINT: "http://127.0.0.1:14566",
+  MEDIA_OBJECT_ENDPOINT: "https://localhost:14567",
+  PARTNER_MEDIA_STORAGE_ORIGIN: "https://localhost:14567",
   MEDIA_OBJECT_BUCKET: "partner-release-rehearsal",
   MEDIA_OBJECT_REGION: "us-east-1",
   MEDIA_OBJECT_ACCESS_KEY_ID: "test",
@@ -66,6 +82,7 @@ Object.assign(environment, {
   MEDIA_OBJECT_AUTO_CREATE_BUCKET: "false",
   PARTNER_PORTAL_V2_READS_ENABLED: "true",
   PARTNER_PORTAL_V2_WRITES_ENABLED: "true",
+  PARTNER_MULTI_SERVICE_REQUESTS_ENABLED: "true",
   PARTNER_PORTAL_PURPOSE_AUTH_ENABLED: "true",
   PARTNER_PORTAL_OUTBOUND_NOTIFICATIONS_ENABLED: "true",
   PARTNER_PORTAL_ROUTINE_MAGIC_LOGIN_ENABLED: "false",
@@ -77,8 +94,10 @@ Object.assign(environment, {
   // Invitations may enter the local outbox, but no worker or provider can run.
   TEAM_KILL_EXTERNAL_SENDS: "false",
   TEAM_KILL_OUTBOX_DISPATCH: "true",
-  TEAM_KILL_FINANCIAL_MUTATIONS: "true",
-  TEAM_KILL_DESTRUCTIVE_MUTATIONS: "true",
+  // Local-only staff setup must publish agreed rates before activation.
+  TEAM_KILL_FINANCIAL_MUTATIONS: "false",
+  // Staff must accept visit date changes in this guarded, synthetic database.
+  TEAM_KILL_DESTRUCTIVE_MUTATIONS: "false",
   TEAM_KILL_ADVERTISING_CHANGES: "true",
   TEAM_KILL_PUBLISHING: "true",
   RENDER: "false",

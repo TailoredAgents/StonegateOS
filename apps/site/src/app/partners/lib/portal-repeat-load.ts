@@ -1,23 +1,43 @@
 import { z } from "zod";
+import { PartnerServiceLinesInputSchema } from "@myst-os/pricing";
 
 const text = z.string();
 const nullable = text.nullable();
 const date = text.refine((value) => Number.isFinite(Date.parse(value)));
-const template = z.object({
-  active: z.boolean(),
-  reusable: z
-    .object({
-      description: text.optional(),
-      crewInstructions: nullable.optional(),
-    })
-    .optional(),
-  id: text,
-  name: text,
-  serviceKey: text,
-  locationId: nullable,
-  updatedAt: date,
-  etag: text,
-});
+const template = z
+  .object({
+    active: z.boolean(),
+    reusable: z
+      .object({
+        modelVersion: z.union([z.literal(1), z.literal(2)]).optional(),
+        serviceLines: PartnerServiceLinesInputSchema.optional(),
+        description: text.optional(),
+        crewInstructions: nullable.optional(),
+      })
+      .optional(),
+    id: text,
+    name: text,
+    serviceKey: nullable,
+    locationId: nullable,
+    updatedAt: date,
+    etag: text,
+  })
+  .superRefine((value, context) => {
+    if (value.reusable?.modelVersion === 2) {
+      if (value.serviceKey !== null || !value.reusable.serviceLines?.length)
+        context.addIssue({
+          code: "custom",
+          message: "The multi-service shortcut is incomplete.",
+        });
+    } else if (
+      value.serviceKey === null ||
+      value.reusable?.serviceLines?.length
+    )
+      context.addIssue({
+        code: "custom",
+        message: "The service shortcut is incomplete.",
+      });
+  });
 const series = z.object({
   id: text,
   name: text,
@@ -87,7 +107,7 @@ const bulkPage = z.object({
   nextCursor: nullable,
 });
 const bulkDetail = z.object({ ok: z.literal(true), import: bulk });
-function parser<T>(schema: z.ZodType<T>) {
+function parser<T>(schema: z.ZodType<T, z.ZodTypeDef, unknown>) {
   return (payload: unknown): T | null => {
     const result = schema.safeParse(payload);
     return result.success ? result.data : null;

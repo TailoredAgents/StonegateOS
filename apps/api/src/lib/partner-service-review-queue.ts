@@ -21,7 +21,7 @@ import {
 } from "@/db";
 import { readPartnerJobLocationSnapshot } from "./partner-job-location";
 import { createMediaReadUrl } from "./media-storage";
-import { loadPartnerRequestDetailsForAppointments } from "./partner-request-details-store";
+import { loadPartnerRequestDetailsForBookings } from "./partner-request-details-store";
 import { hasConfirmedPartnerSchedule } from "./partner-request-details";
 import {
   encodePortalV2Cursor,
@@ -61,6 +61,9 @@ function preferredWindows(scope: unknown) {
 }
 const fields = {
   id: partnerBookings.id,
+  modelVersion: partnerBookings.modelVersion,
+  bookingVersion: partnerBookings.version,
+  bookingUpdatedAt: partnerBookings.updatedAt,
   accountId: partnerBookings.partnerAccountId,
   accountName: partnerAccounts.name,
   status: partnerBookings.publicStatus,
@@ -96,8 +99,9 @@ function summary(row: {
     status: row.status,
     createdAt: row.createdAt.toISOString(),
     service:
-      row.serviceLabel ??
-      row.serviceKey?.replaceAll("_", " ") ??
+      text(record(row.scope)["serviceLabel"], 1000) ||
+      row.serviceLabel ||
+      row.serviceKey?.replaceAll("_", " ") ||
       "Service request",
     siteName:
       readPartnerJobLocationSnapshot(row.scope)?.name ??
@@ -173,7 +177,7 @@ export async function listPartnerServiceReviews(params: URLSearchParams) {
       partnerAccounts,
       eq(partnerBookings.partnerAccountId, partnerAccounts.id),
     )
-    .innerJoin(
+    .leftJoin(
       appointments,
       and(
         eq(partnerBookings.appointmentId, appointments.id),
@@ -190,7 +194,10 @@ export async function listPartnerServiceReviews(params: URLSearchParams) {
           ? undefined
           : and(
               isNull(appointments.startAt),
-              eq(appointments.status, "requested"),
+              or(
+                eq(appointments.status, "requested"),
+                eq(partnerBookings.modelVersion, 2),
+              ),
               inArray(partnerBookings.publicStatus, [
                 "requested",
                 "under_review",
@@ -290,7 +297,7 @@ export async function getPartnerServiceReview(
       partnerAccounts,
       eq(partnerBookings.partnerAccountId, partnerAccounts.id),
     )
-    .innerJoin(
+    .leftJoin(
       appointments,
       and(
         eq(partnerBookings.appointmentId, appointments.id),
@@ -309,11 +316,12 @@ export async function getPartnerServiceReview(
     )
     .limit(1);
   if (!row) return null;
-  const partnerRequestMap = await loadPartnerRequestDetailsForAppointments(
-    [row.appointmentId],
+  const partnerRequestMap = await loadPartnerRequestDetailsForBookings(
+    accountId,
+    [row.id],
     visibility,
   );
-  const partnerRequest = partnerRequestMap.get(row.appointmentId) ?? null;
+  const partnerRequest = partnerRequestMap.get(row.id) ?? null;
   const scope = record(row.scope),
     contact = record(scope["onSiteContact"]),
     proof = record(row.proof);
@@ -411,14 +419,14 @@ export async function getPartnerServiceReview(
       },
       photos,
       appointment: {
-        id: row.appointmentId,
+        id: row.appointmentId ?? "",
         type: row.appointmentType,
         startAt: row.appointmentStartAt?.toISOString() ?? null,
-        status: row.appointmentStatus,
-        version: row.version.toISOString(),
+        status: row.appointmentStatus ?? "requested",
+        version: (row.version ?? row.bookingUpdatedAt).toISOString(),
       },
       canSchedule:
-        row.appointmentStatus === "requested" &&
+        (row.modelVersion === 2 || row.appointmentStatus === "requested") &&
         row.appointmentStartAt === null &&
         ["requested", "under_review"].includes(row.status),
     },

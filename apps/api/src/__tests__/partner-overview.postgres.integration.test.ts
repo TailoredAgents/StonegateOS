@@ -12,6 +12,7 @@ import {
   partnerAccountMemberships,
   partnerBookingDrafts,
   partnerBookings,
+  partnerBookingVisits,
   partnerInvoices,
   partnerMembershipLocationScopes,
   partnerRoleTemplates,
@@ -21,7 +22,10 @@ import {
 import type { PartnerPrincipal } from "@/lib/partner-account-authorization";
 
 const jest = import.meta.jest;
-const mockModule = jest.unstable_mockModule as unknown as (name: string, factory: () => Record<string, unknown>) => void;
+const mockModule = jest.unstable_mockModule as unknown as (
+  name: string,
+  factory: () => Record<string, unknown>,
+) => void;
 const authorization = await import("@/lib/partner-account-authorization");
 let principal: PartnerPrincipal | null = null;
 // Only session authentication is replaced. Capability derivation, relational
@@ -32,15 +36,47 @@ mockModule("@/lib/partner-account-authorization", () => ({
     _request: NextRequest,
     capability: Parameters<typeof authorization.hasPartnerCapability>[1],
   ) =>
-    Promise.resolve(principal && authorization.hasPartnerCapability(principal, capability)
-      ? { ok: true, principal }
-      : { ok: false, status: 401, error: "unauthorized" }),
+    Promise.resolve(
+      principal && authorization.hasPartnerCapability(principal, capability)
+        ? { ok: true, principal }
+        : { ok: false, status: 401, error: "unauthorized" },
+    ),
 }));
-const OverviewResponse = z.object({ ok: z.literal(true),
-  nextJob: z.object({ id: z.string().uuid(), status: z.string(), locationName: z.string().nullable(), startAt: z.string().nullable(), endAt: z.string().nullable(), timezone: z.string() }).passthrough().nullable(),
-  savedRequest: z.object({ id: z.string().uuid(), locationName: z.string().nullable(), updatedAt: z.string() }).passthrough().nullable(),
-  outstandingBalances: z.array(z.object({ currency: z.string(), amountMinor: z.number().int().nonnegative(), minorUnit: z.literal(2) }).passthrough()).nullable(),
-}).passthrough();
+const OverviewResponse = z
+  .object({
+    ok: z.literal(true),
+    nextJob: z
+      .object({
+        id: z.string().uuid(),
+        status: z.string(),
+        locationName: z.string().nullable(),
+        startAt: z.string().nullable(),
+        endAt: z.string().nullable(),
+        timezone: z.string(),
+      })
+      .passthrough()
+      .nullable(),
+    savedRequest: z
+      .object({
+        id: z.string().uuid(),
+        locationName: z.string().nullable(),
+        updatedAt: z.string(),
+      })
+      .passthrough()
+      .nullable(),
+    outstandingBalances: z
+      .array(
+        z
+          .object({
+            currency: z.string(),
+            amountMinor: z.number().int().nonnegative(),
+            minorUnit: z.literal(2),
+          })
+          .passthrough(),
+      )
+      .nullable(),
+  })
+  .passthrough();
 const { GET } = await import("../../app/api/portal/v2/overview/route");
 const local =
   process.env["DATABASE_URL"] &&
@@ -77,102 +113,86 @@ async function fixture() {
       .select()
       .from(partnerRoleTemplates)
       .where(isNull(partnerRoleTemplates.partnerAccountId));
-    await tx
-      .insert(partnerAccounts)
-      .values(
-        [accountId, foreignAccountId].map((id) => ({
-          id,
-          name: "Local overview company",
-          normalizedName: id,
-          status: "active_partner" as const,
-          portalAccessEnabled: true,
-        })),
-      );
+    await tx.insert(partnerAccounts).values(
+      [accountId, foreignAccountId].map((id) => ({
+        id,
+        name: "Local overview company",
+        normalizedName: id,
+        status: "active_partner" as const,
+        portalAccessEnabled: true,
+      })),
+    );
     await tx
       .insert(contacts)
       .values({ id: contactId, firstName: "Local", lastName: "Overview" });
-    await tx
-      .insert(partnerUsers)
-      .values(
-        people.map((person) => ({
-          id: person.userId,
-          email: `${person.userId}@example.test`,
-          normalizedEmail: `${person.userId}@example.test`,
-          name: "Local overview user",
-          active: true,
-          identityStatus: "active" as const,
-          emailVerifiedAt: new Date(),
-        })),
-      );
-    await tx
-      .insert(partnerAccountMemberships)
-      .values(
-        people.map((person) => ({
-          id: person.membershipId,
-          partnerAccountId: accountId,
-          partnerUserId: person.userId,
-          roleKey: person.roleKey,
-          roleTemplateId: roles.find((role) => role.key === person.roleKey)!.id,
-          status: "active" as const,
-          accessLevel: person.scoped
-            ? ("scoped" as const)
-            : ("account" as const),
-          acceptedAt: new Date(),
-        })),
-      );
+    await tx.insert(partnerUsers).values(
+      people.map((person) => ({
+        id: person.userId,
+        email: `${person.userId}@example.test`,
+        normalizedEmail: `${person.userId}@example.test`,
+        name: "Local overview user",
+        active: true,
+        identityStatus: "active" as const,
+        emailVerifiedAt: new Date(),
+      })),
+    );
+    await tx.insert(partnerAccountMemberships).values(
+      people.map((person) => ({
+        id: person.membershipId,
+        partnerAccountId: accountId,
+        partnerUserId: person.userId,
+        roleKey: person.roleKey,
+        roleTemplateId: roles.find((role) => role.key === person.roleKey)!.id,
+        status: "active" as const,
+        accessLevel: person.scoped ? ("scoped" as const) : ("account" as const),
+        acceptedAt: new Date(),
+      })),
+    );
     for (const [index, job] of jobs.entries()) {
       const owner = index === 4 ? foreignAccountId : accountId;
-      await tx
-        .insert(properties)
-        .values({
-          id: job.propertyId,
-          contactId,
-          addressLine1: `${index + 1} Local Way`,
-          city: "Atlanta",
-          state: "GA",
-          postalCode: "30301",
-        });
-      await tx
-        .insert(partnerAccountLocations)
-        .values({
-          id: job.locationId,
-          partnerAccountId: owner,
-          propertyId: job.propertyId,
-          siteName: `Local site ${index}`,
-          addressLine1: `${index + 1} Local Way`,
-          city: "Atlanta",
-          state: "GA",
-          postalCode: "30301",
-        });
-      await tx
-        .insert(appointments)
-        .values({
-          id: job.appointmentId,
-          contactId,
-          propertyId: job.propertyId,
-          partnerAccountId: owner,
-          type: "job",
-          status:
-            index === 2 ? "canceled" : index === 3 ? "requested" : "confirmed",
-          rescheduleToken: randomUUID(),
-        });
-      await tx
-        .insert(partnerBookings)
-        .values({
-          id: job.id,
-          orgContactId: contactId,
-          partnerAccountId: owner,
-          appointmentId: job.appointmentId,
-          propertyId: job.propertyId,
-          publicStatus: index === 3 ? "under_review" : "confirmed",
-          arrivalWindowStartAt:
-            index === 3
-              ? null
-              : new Date(
-                  now + (index === 0 ? 2 : index === 1 ? 1 : 0.1) * 3600000,
-                ),
-          arrivalWindowEndAt: index === 3 ? null : new Date(now + 4 * 3600000),
-        });
+      await tx.insert(properties).values({
+        id: job.propertyId,
+        contactId,
+        addressLine1: `${index + 1} Local Way`,
+        city: "Atlanta",
+        state: "GA",
+        postalCode: "30301",
+      });
+      await tx.insert(partnerAccountLocations).values({
+        id: job.locationId,
+        partnerAccountId: owner,
+        propertyId: job.propertyId,
+        siteName: `Local site ${index}`,
+        addressLine1: `${index + 1} Local Way`,
+        city: "Atlanta",
+        state: "GA",
+        postalCode: "30301",
+      });
+      await tx.insert(appointments).values({
+        id: job.appointmentId,
+        contactId,
+        propertyId: job.propertyId,
+        partnerAccountId: owner,
+        type: "job",
+        status:
+          index === 2 ? "canceled" : index === 3 ? "requested" : "confirmed",
+        rescheduleToken: randomUUID(),
+      });
+      await tx.insert(partnerBookings).values({
+        id: job.id,
+        orgContactId: contactId,
+        partnerAccountId: owner,
+        appointmentId: job.appointmentId,
+        propertyId: job.propertyId,
+        publicStatus: index === 3 ? "under_review" : "confirmed",
+        arrivalWindowStartAt:
+          index === 3
+            ? null
+            : new Date(
+                now + (index === 0 ? 2 : index === 1 ? 1 : 0.1) * 3600000,
+              ),
+        arrivalWindowEndAt: index === 3 ? null : new Date(now + 4 * 3600000),
+      });
     }
     await tx.insert(partnerMembershipLocationScopes).values(
       people
@@ -285,16 +305,14 @@ async function fixture() {
         expiresAt: new Date(now + 3600000),
       })),
     );
-    await tx
-      .insert(partnerBookingDrafts)
-      .values({
-        partnerAccountId: accountId,
-        createdByMembershipId: people[0]!.membershipId,
-        locationId: jobs[0]!.locationId,
-        state: "draft",
-        expiresAt: new Date(now - 1000),
-        updatedAt: new Date(now + 1000),
-      });
+    await tx.insert(partnerBookingDrafts).values({
+      partnerAccountId: accountId,
+      createdByMembershipId: people[0]!.membershipId,
+      locationId: jobs[0]!.locationId,
+      state: "draft",
+      expiresAt: new Date(now - 1000),
+      updatedAt: new Date(now + 1000),
+    });
   });
   async function selectPerson(index: number) {
     const person = people[index]!;
@@ -321,7 +339,14 @@ async function fixture() {
       availableAccounts: [access],
     };
   }
-  return { jobs, adminDraftId, operationsDraftId, selectPerson };
+  return {
+    accountId,
+    contactId,
+    jobs,
+    adminDraftId,
+    operationsDraftId,
+    selectPerson,
+  };
 }
 suite(
   "real overview SQL with complete balances and role/location visibility",
@@ -368,6 +393,75 @@ suite(
         locationName: "Local site 0",
       });
     });
+    it("shows a new parent before scheduling and the actual next visit afterward", async () => {
+      const current = await fixture();
+      await current.selectPerson(0);
+      const db = getDb(),
+        bookingId = randomUUID(),
+        appointmentId = randomUUID();
+      await db
+        .update(partnerBookings)
+        .set({ publicStatus: "canceled" })
+        .where(eq(partnerBookings.partnerAccountId, current.accountId));
+      await db.insert(partnerBookings).values({
+        id: bookingId,
+        modelVersion: 2,
+        appointmentId: null,
+        partnerAccountId: current.accountId,
+        orgContactId: current.contactId,
+        propertyId: current.jobs[0]!.propertyId,
+        publicStatus: "under_review",
+        scopeSnapshot: { serviceLabel: "Painting, Soft washing" },
+      });
+      expect((await request()).nextJob).toMatchObject({
+        id: bookingId,
+        status: "under_review",
+        startAt: null,
+      });
+      const start = new Date(Date.now() + 86400000),
+        end = new Date(start.getTime() + 7200000);
+      await db.insert(appointments).values({
+        id: appointmentId,
+        contactId: current.contactId,
+        propertyId: current.jobs[0]!.propertyId,
+        partnerAccountId: current.accountId,
+        type: "job",
+        status: "confirmed",
+        rescheduleToken: randomUUID(),
+        startAt: start,
+        durationMinutes: 60,
+        promisedArrivalStartAt: start,
+        promisedArrivalEndAt: end,
+      });
+      await db.insert(partnerBookingVisits).values({
+        partnerAccountId: current.accountId,
+        partnerBookingId: bookingId,
+        appointmentId,
+        status: "scheduled",
+      });
+      await db
+        .update(partnerBookings)
+        .set({ publicStatus: "confirmed" })
+        .where(eq(partnerBookings.id, bookingId));
+      expect((await request()).nextJob).toMatchObject({
+        id: bookingId,
+        startAt: start.toISOString(),
+        endAt: end.toISOString(),
+      });
+      await db
+        .update(partnerBookingVisits)
+        .set({ status: "canceled" })
+        .where(eq(partnerBookingVisits.partnerBookingId, bookingId));
+      await db
+        .update(partnerBookings)
+        .set({ publicStatus: "under_review" })
+        .where(eq(partnerBookings.id, bookingId));
+      expect((await request()).nextJob).toMatchObject({
+        id: bookingId,
+        startAt: null,
+        endAt: null,
+      });
+    });
     it("uses real relational location grants for the Billing/Approver's 120 invoices and next job", async () => {
       await f.selectPerson(1);
       const body = await request();
@@ -393,32 +487,44 @@ suite(
     });
     it("removes an additional-service resume link after original-job access is revoked while the draft location remains permitted", async () => {
       await f.selectPerson(2);
-      const accountId = principal!.accountId!, membershipId = principal!.membershipId!;
+      const accountId = principal!.accountId!,
+        membershipId = principal!.membershipId!;
       const additionalDraftId = randomUUID();
       await getDb().insert(partnerMembershipLocationScopes).values({
         membershipId,
         partnerAccountId: accountId,
         locationId: f.jobs[1]!.locationId,
       });
-      await getDb().insert(partnerBookingDrafts).values({
-        id: additionalDraftId,
-        partnerAccountId: accountId,
-        createdByMembershipId: membershipId,
-        additionalServiceFromPartnerBookingId: f.jobs[1]!.id,
-        locationId: f.jobs[0]!.locationId,
-        state: "draft",
-        updatedAt: new Date(),
-        expiresAt: new Date(Date.now() + 3600000),
-      });
+      await getDb()
+        .insert(partnerBookingDrafts)
+        .values({
+          id: additionalDraftId,
+          partnerAccountId: accountId,
+          createdByMembershipId: membershipId,
+          additionalServiceFromPartnerBookingId: f.jobs[1]!.id,
+          locationId: f.jobs[0]!.locationId,
+          state: "draft",
+          updatedAt: new Date(),
+          expiresAt: new Date(Date.now() + 3600000),
+        });
       await f.selectPerson(2);
       expect((await request()).savedRequest?.id).toBe(additionalDraftId);
-      await getDb().delete(partnerMembershipLocationScopes).where(and(
-        eq(partnerMembershipLocationScopes.membershipId, membershipId),
-        eq(partnerMembershipLocationScopes.partnerAccountId, accountId),
-        eq(partnerMembershipLocationScopes.locationId, f.jobs[1]!.locationId),
-      ));
+      await getDb()
+        .delete(partnerMembershipLocationScopes)
+        .where(
+          and(
+            eq(partnerMembershipLocationScopes.membershipId, membershipId),
+            eq(partnerMembershipLocationScopes.partnerAccountId, accountId),
+            eq(
+              partnerMembershipLocationScopes.locationId,
+              f.jobs[1]!.locationId,
+            ),
+          ),
+        );
       await f.selectPerson(2);
-      expect(principal!.accessScope.locationIds).toEqual([f.jobs[0]!.locationId]);
+      expect(principal!.accessScope.locationIds).toEqual([
+        f.jobs[0]!.locationId,
+      ]);
       const body = await request();
       expect(body.savedRequest?.id).toBe(f.operationsDraftId);
       expect(JSON.stringify(body)).not.toContain(additionalDraftId);

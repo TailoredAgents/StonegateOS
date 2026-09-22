@@ -1,8 +1,11 @@
-import { and, desc, eq, inArray } from "drizzle-orm";
+import { getPartnerServiceDefinition } from "@myst-os/pricing";
+import { resolveMultiServiceApproval } from "./partner-multi-service-domain";
+import { and, asc, desc, eq, inArray } from "drizzle-orm";
 import {
   partnerAccountLocations,
   partnerApprovalRequests,
   partnerBookingDrafts,
+  partnerBookingServiceLines,
   partnerBookings,
 } from "@/db";
 import {
@@ -21,6 +24,8 @@ type QuoteApprovalTargetContext = Readonly<{
   id: string;
   requestedByMembershipId: string;
   serviceKey: string;
+  modelVersion: number;
+  serviceKeys: string[];
   locationId: string;
   poNumber: string | null;
   costCenter: string | null;
@@ -91,6 +96,7 @@ export function partnerQuoteApprovalEvidenceMatches(input: {
     partnerAccountId: string;
   }>;
   evidence: PartnerQuoteApprovalEvidence;
+  serviceKeys?: readonly string[];
 }): boolean {
   if (
     input.evidence.requestedByMembershipId !==
@@ -122,9 +128,38 @@ export function partnerQuoteApprovalEvidenceMatches(input: {
     const expectedValue = expectedRequest[key] ?? null;
     if (actualValue !== expectedValue) return false;
   }
+  if (input.serviceKeys) {
+    const keys = request["serviceKeys"];
+    if (
+      request["modelVersion"] !== 2 ||
+      !Array.isArray(keys) ||
+      keys.length !== input.serviceKeys.length ||
+      new Set(keys).size !== keys.length ||
+      keys.some(
+        (key) => typeof key !== "string" || !input.serviceKeys!.includes(key),
+      )
+    )
+      return false;
+  }
   const actualRules = canonicalJson(input.evidence.ruleSnapshot);
   const expectedRules = canonicalJson(expected.ruleSnapshot);
   return actualRules !== null && actualRules === expectedRules;
+}
+
+function validServiceKeys(
+  keys: readonly string[],
+  modelVersion: number,
+): boolean {
+  return (
+    keys.length > 0 &&
+    keys.length <= 8 &&
+    new Set(keys).size === keys.length &&
+    keys.every(
+      (key) =>
+        typeof key === "string" &&
+        (modelVersion !== 2 || Boolean(getPartnerServiceDefinition(key))),
+    )
+  );
 }
 
 async function loadTargetContext(
@@ -142,6 +177,7 @@ async function loadTargetContext(
         id: partnerBookings.id,
         requestedByMembershipId: partnerBookings.requestedByMembershipId,
         serviceKey: partnerBookings.serviceKey,
+        modelVersion: partnerBookings.modelVersion,
         locationId: partnerAccountLocations.id,
         poNumber: partnerBookings.poNumber,
         costCenter: partnerBookings.costCenter,
@@ -166,16 +202,37 @@ async function loadTargetContext(
       .limit(1);
     if (
       !booking?.requestedByMembershipId ||
-      !booking.serviceKey ||
+      (booking.modelVersion !== 2 && !booking.serviceKey) ||
       !booking.locationId
     ) {
       return null;
     }
+    const serviceKeys =
+      booking.modelVersion === 2
+        ? (
+            await tx
+              .select({ key: partnerBookingServiceLines.serviceKey })
+              .from(partnerBookingServiceLines)
+              .where(
+                and(
+                  eq(
+                    partnerBookingServiceLines.partnerAccountId,
+                    input.accountId,
+                  ),
+                  eq(partnerBookingServiceLines.partnerBookingId, booking.id),
+                ),
+              )
+              .orderBy(asc(partnerBookingServiceLines.position))
+          ).map((line) => line.key)
+        : [booking.serviceKey!];
+    if (!validServiceKeys(serviceKeys, booking.modelVersion)) return null;
     return {
       kind: "booking",
       id: booking.id,
       requestedByMembershipId: booking.requestedByMembershipId,
-      serviceKey: booking.serviceKey,
+      serviceKey: serviceKeys[0]!,
+      serviceKeys,
+      modelVersion: booking.modelVersion,
       locationId: booking.locationId,
       poNumber: booking.poNumber,
       costCenter: booking.costCenter,
@@ -186,6 +243,8 @@ async function loadTargetContext(
       id: partnerBookingDrafts.id,
       requestedByMembershipId: partnerBookingDrafts.createdByMembershipId,
       serviceKey: partnerBookingDrafts.serviceKey,
+      modelVersion: partnerBookingDrafts.modelVersion,
+      serviceLines: partnerBookingDrafts.serviceLines,
       locationId: partnerBookingDrafts.locationId,
       commercial: partnerBookingDrafts.commercial,
     })
@@ -207,12 +266,20 @@ async function loadTargetContext(
       ),
     )
     .limit(1);
-  if (!draft?.serviceKey || !draft.locationId) return null;
+  if (!draft?.locationId || (draft.modelVersion !== 2 && !draft.serviceKey))
+    return null;
+  const serviceKeys =
+    draft.modelVersion === 2
+      ? draft.serviceLines.map((line) => line.serviceKey)
+      : [draft.serviceKey!];
+  if (!validServiceKeys(serviceKeys, draft.modelVersion)) return null;
   return {
     kind: "booking_draft",
     id: draft.id,
     requestedByMembershipId: draft.requestedByMembershipId,
-    serviceKey: draft.serviceKey,
+    serviceKey: serviceKeys[0]!,
+    serviceKeys,
+    modelVersion: draft.modelVersion,
     locationId: draft.locationId,
     poNumber: optionalCommercialString(draft.commercial, "poNumber"),
     costCenter: optionalCommercialString(draft.commercial, "costCenter"),
@@ -247,14 +314,18 @@ export async function partnerQuoteApprovalAllowsAcceptance(
     return false;
   }
   const target = await loadTargetContext(tx, input);
-  if (!target) return false;
+  if (
+    !target ||
+    (target.modelVersion === 2 && input.totalMinCents !== input.totalMaxCents)
+  )
+    return false;
   const amountMinor =
     input.totalMinCents === input.totalMaxCents
       ? Number(input.totalMinCents)
       : null;
   let resolution: PartnerApprovalRequirementResolution;
   try {
-    resolution = await resolvePartnerApprovalRequirement({
+    const context = {
       tx,
       partnerAccountId: input.accountId,
       requestedByMembershipId: target.requestedByMembershipId,
@@ -264,7 +335,14 @@ export async function partnerQuoteApprovalAllowsAcceptance(
       currency: input.currency,
       poNumber: target.poNumber,
       costCenter: target.costCenter,
-    });
+    };
+    resolution =
+      target.modelVersion === 2
+        ? await resolveMultiServiceApproval({
+            ...context,
+            serviceKeys: target.serviceKeys,
+          })
+        : await resolvePartnerApprovalRequirement(context);
   } catch (error) {
     if (error instanceof PartnerApprovalRuleResolutionError) return false;
     throw error;
@@ -308,6 +386,7 @@ export async function partnerQuoteApprovalAllowsAcceptance(
         partnerAccountId: input.accountId,
       },
       evidence,
+      ...(target.modelVersion === 2 ? { serviceKeys: target.serviceKeys } : {}),
     }),
   );
 }

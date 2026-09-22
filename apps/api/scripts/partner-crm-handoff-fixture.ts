@@ -1,3 +1,4 @@
+import { isLocalPartnerRehearsalDatabase } from "../../../scripts/lib/partner-local-rehearsal";
 import { randomUUID } from "node:crypto";
 import { and, eq } from "drizzle-orm";
 import {
@@ -34,11 +35,10 @@ async function main() {
   const endpoint = new URL(process.env["DATABASE_URL"] ?? "http://invalid");
   if (
     process.env["NODE_ENV"] !== "test" ||
-    !["127.0.0.1", "localhost"].includes(endpoint.hostname) ||
-    endpoint.pathname !== "/portal_access_browser"
+    !isLocalPartnerRehearsalDatabase(endpoint)
   )
     throw Error(
-      "Only the disposable local portal_access_browser database is allowed",
+      "Only an allowlisted disposable local partner rehearsal database is allowed",
     );
   const chunks: Buffer[] = [];
   for await (const chunk of process.stdin) {

@@ -207,6 +207,11 @@ services:
         value: "true"
       - key: PARTNER_PORTAL_V2_WRITES_ENABLED
         value: "true"
+      # Enable only after the eight-service production journey passes.
+      - key: PARTNER_MULTI_SERVICE_REQUESTS_ENABLED
+        sync: false
+      - key: PARTNER_MULTI_SERVICE_ACCOUNT_IDS
+        sync: false
       - key: PARTNER_PORTAL_PURPOSE_AUTH_ENABLED
         value: "true"
       - key: PARTNER_PORTAL_ROUTINE_MAGIC_LOGIN_ENABLED
@@ -458,6 +463,11 @@ services:
         value: "true"
       - key: PARTNER_PORTAL_V2_WRITES_ENABLED
         value: "true"
+      # Enable only after the eight-service production journey passes.
+      - key: PARTNER_MULTI_SERVICE_REQUESTS_ENABLED
+        sync: false
+      - key: PARTNER_MULTI_SERVICE_ACCOUNT_IDS
+        sync: false
       - key: PARTNER_PORTAL_PURPOSE_AUTH_ENABLED
         value: "true"
       - key: PARTNER_PORTAL_ROUTINE_MAGIC_LOGIN_ENABLED

@@ -67,6 +67,15 @@ export type PartnerProofPackageRenderInput = Readonly<{
   job: Readonly<{
     status: "completed";
     serviceKey: string | null;
+    serviceLabel?: string | null;
+    services?: readonly { label: string; status: string }[];
+    visits?: readonly {
+      serviceLabels: readonly string[];
+      status: string;
+      startAt: string;
+      endAt: string | null;
+      timezone: string;
+    }[];
     tierKey: string | null;
     projectReference: string | null;
     locationName: string | null;
@@ -181,6 +190,9 @@ function completionRecord(
       service: {
         key: text(input.job.serviceKey, 100),
         tier: text(input.job.tierKey, 100),
+        ...(input.job.serviceLabel
+          ? { label: text(input.job.serviceLabel, 500) }
+          : {}),
       },
       projectReference: text(input.job.projectReference, 160),
       location: {
@@ -197,6 +209,27 @@ function completionRecord(
             }
           : null,
       completedAt: input.job.completedAt,
+      ...(input.job.services
+        ? {
+            services: input.job.services.map((service) => ({
+              label: text(service.label, 100),
+              status: text(service.status, 30),
+            })),
+          }
+        : {}),
+      ...(input.job.visits
+        ? {
+            visits: input.job.visits.map((visit) => ({
+              serviceLabels: visit.serviceLabels.map((value) =>
+                text(value, 100),
+              ),
+              status: text(visit.status, 30),
+              startAt: visit.startAt,
+              endAt: visit.endAt,
+              timezone: text(visit.timezone, 100),
+            })),
+          }
+        : {}),
     },
     proof: {
       requirements: input.requirements.map((requirement) => ({
@@ -368,7 +401,9 @@ async function renderPdf(
         <View style={styles.summary}>
           <View style={styles.summaryCard}>
             <Text style={styles.label}>Service</Text>
-            <Text style={styles.value}>{label(input.job.serviceKey)}</Text>
+            <Text style={styles.value}>
+              {text(input.job.serviceLabel, 500) ?? label(input.job.serviceKey)}
+            </Text>
           </View>
           <View style={styles.summaryCard}>
             <Text style={styles.label}>Completed</Text>
@@ -379,6 +414,34 @@ async function renderPdf(
             <Text style={styles.value}>Complete</Text>
           </View>
         </View>
+        {input.job.services?.length ? (
+          <View style={styles.section}>
+            <Text style={styles.sectionTitle}>Service outcomes</Text>
+            {input.job.services.map((service, index) => (
+              <Text key={index}>
+                {text(service.label, 100)} · {label(service.status)}
+              </Text>
+            ))}
+          </View>
+        ) : null}
+        {input.job.visits?.length ? (
+          <View style={styles.section}>
+            <Text style={styles.sectionTitle}>Visits</Text>
+            {input.job.visits.map((visit, index) => (
+              <View key={index} wrap={false} style={{ marginBottom: 8 }}>
+                <Text>
+                  {formatInstant(visit.startAt, visit.timezone)} ·{" "}
+                  {label(visit.status)}
+                </Text>
+                <Text>
+                  {visit.serviceLabels
+                    .map((value) => text(value, 100))
+                    .join(", ")}
+                </Text>
+              </View>
+            ))}
+          </View>
+        ) : null}
         {input.job.projectReference ? (
           <View style={styles.section}>
             <Text style={styles.sectionTitle}>Project reference</Text>

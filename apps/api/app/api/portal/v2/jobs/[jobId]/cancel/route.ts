@@ -1,7 +1,10 @@
+import { queuePartnerVisitCalendarCancellations } from "@/lib/partner-visit-calendar-cancellation";
+import { cancelPartnerMultiServiceRequest } from "@/lib/partner-multi-service";
+import { lockPartnerRequestFinancials } from "@/lib/partner-request-financials";
 import { createHash, randomUUID } from "node:crypto";
 import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
-import { and, eq } from "drizzle-orm";
+import { and, eq, sql } from "drizzle-orm";
 import { z } from "zod";
 import {
   appointments,
@@ -153,15 +156,30 @@ export async function POST(
   try {
     const db = getDb();
     const result = await db.transaction(async (tx) => {
+      const [identity] = await tx
+        .select({ modelVersion: partnerBookings.modelVersion })
+        .from(partnerBookings)
+        .where(
+          and(
+            eq(partnerBookings.id, jobId),
+            eq(partnerBookings.partnerAccountId, principal.accountId!),
+          ),
+        )
+        .limit(1);
+      if (identity?.modelVersion === 2)
+        await lockPartnerRequestFinancials(tx, principal.accountId!, jobId);
       await acquireScheduleConflictLock(tx);
+      if (identity?.modelVersion !== 2)
+        await lockPartnerRequestFinancials(tx, principal.accountId!, jobId);
       await acquirePartnerJobMutationLock(tx, principal.accountId!, jobId);
       const [row] = await tx
         .select({
           bookingId: partnerBookings.id,
+          modelVersion: partnerBookings.modelVersion,
           bookingVersion: partnerBookings.version,
           bookingUpdatedAt: partnerBookings.updatedAt,
           publicStatus: partnerBookings.publicStatus,
-          arrivalWindowStartAt: partnerBookings.arrivalWindowStartAt,
+          arrivalWindowStartAt: sql<Date | null>`coalesce(${partnerBookings.arrivalWindowStartAt},(select min(ap.promised_arrival_start_at) from partner_booking_visits v join appointments ap on ap.id=v.appointment_id where v.partner_booking_id=${partnerBookings.id} and v.partner_account_id=${partnerBookings.partnerAccountId} and v.status in ('scheduled','in_progress')))`,
           arrivalWindowEndAt: partnerBookings.arrivalWindowEndAt,
           requestedReviewReasons: partnerBookings.requestedReviewReasons,
           cancelOperationKeyHash: partnerBookings.cancelOperationKeyHash,
@@ -178,12 +196,14 @@ export async function POST(
             partnerAccountCancellationPolicies.revision,
           notificationMembershipId: partnerAccountMemberships.id,
           appointmentId: appointments.id,
-          appointmentStatus: appointments.status,
+          appointmentStatus: sql<
+            (typeof appointments.$inferSelect)["status"]
+          >`coalesce(${appointments.status}::text,case when ${partnerBookings.publicStatus}='confirmed' then 'confirmed' else 'requested' end)`,
           calendarEventId: appointments.calendarEventId,
           timezone: partnerAccountLocations.timezone,
         })
         .from(partnerBookings)
-        .innerJoin(
+        .leftJoin(
           appointments,
           eq(partnerBookings.appointmentId, appointments.id),
         )
@@ -603,16 +623,28 @@ export async function POST(
         }
       }
 
-      const [updatedAppointment] = await tx
-        .update(appointments)
-        .set({ status: "canceled", updatedAt: now })
-        .where(
-          and(
-            eq(appointments.id, row.appointmentId),
-            eq(appointments.status, row.appointmentStatus),
-          ),
-        )
-        .returning({ id: appointments.id, updatedAt: appointments.updatedAt });
+      if (row.modelVersion === 2)
+        await cancelPartnerMultiServiceRequest(
+          tx,
+          principal.accountId!,
+          row.bookingId,
+          now,
+        );
+      const [updatedAppointment] = row.appointmentId
+        ? await tx
+            .update(appointments)
+            .set({ status: "canceled", updatedAt: now })
+            .where(
+              and(
+                eq(appointments.id, row.appointmentId),
+                eq(appointments.status, row.appointmentStatus),
+              ),
+            )
+            .returning({
+              id: appointments.id,
+              updatedAt: appointments.updatedAt,
+            })
+        : [{ id: row.bookingId, updatedAt: now }];
       if (!updatedAppointment) return { kind: "status_conflict" as const };
       const [updatedBooking] = await tx
         .update(partnerBookings)
@@ -715,6 +747,13 @@ export async function POST(
           reason: parsed.data.reason,
         }),
       });
+      if (row.modelVersion === 2)
+        await queuePartnerVisitCalendarCancellations(tx, {
+          accountId: principal.accountId!,
+          bookingId: row.bookingId,
+          changedAt: now,
+          sourceAuditEventId: auditId,
+        });
       await tx.insert(outboxEvents).values({
         type: "estimate.status_changed",
         payload: {

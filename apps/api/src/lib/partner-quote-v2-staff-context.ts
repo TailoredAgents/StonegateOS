@@ -1,3 +1,7 @@
+import {
+  formatPartnerServiceRate,
+  PartnerServiceRateSchema,
+} from "@myst-os/pricing";
 import { and, asc, desc, eq, inArray, isNull, notInArray } from "drizzle-orm";
 import {
   contactProperties,
@@ -6,8 +10,60 @@ import {
   partnerAccountLocations,
   partnerAccounts,
   partnerBookings,
+  partnerBookingServiceLines,
   properties,
 } from "@/db";
+
+export type PartnerCommercialLineSeed = Readonly<{
+  id: string;
+  serviceKey: string;
+  title: string;
+  description: string;
+  amountCents: number | null;
+  rateReferences: string[];
+}>;
+
+export function partnerServiceCommercialSeed(
+  line: Pick<
+    typeof partnerBookingServiceLines.$inferSelect,
+    | "id"
+    | "serviceKey"
+    | "serviceLabel"
+    | "description"
+    | "priceDescription"
+    | "quotedAmountCents"
+    | "pricingSnapshot"
+    | "rateSnapshot"
+  >,
+  priced: boolean,
+): PartnerCommercialLineSeed {
+  const snapshot = line.pricingSnapshot ?? line.rateSnapshot;
+  const currency = snapshot?.["currency"];
+  const rates = snapshot?.["rates"];
+  const rateReferences =
+    typeof currency === "string" &&
+    /^[A-Z]{3}$/.test(currency) &&
+    Array.isArray(rates)
+      ? rates.map((rate) => {
+          const parsed = PartnerServiceRateSchema.safeParse(rate);
+          if (!parsed.success || parsed.data.serviceKey !== line.serviceKey)
+            throw new Error("partner_commercial_rate_invalid");
+          return `${parsed.data.label}: ${formatPartnerServiceRate(parsed.data, currency)} — ${parsed.data.measurement}`;
+        })
+      : [];
+  return {
+    id: line.id,
+    serviceKey: line.serviceKey,
+    title: line.serviceLabel,
+    description:
+      line.priceDescription &&
+      line.priceDescription.trim() !== line.description.trim()
+        ? `${line.description}\n\nReviewed work: ${line.priceDescription}`
+        : line.description,
+    amountCents: priced ? line.quotedAmountCents : null,
+    rateReferences,
+  };
+}
 
 export type PartnerQuoteV2StaffContext = Readonly<{
   account: Readonly<{ id: string; name: string }>;
@@ -20,6 +76,7 @@ export type PartnerQuoteV2StaffContext = Readonly<{
     contactId: string;
     contactName: string;
     contactEmail: string | null;
+    serviceLines: readonly PartnerCommercialLineSeed[];
   }>[];
   truncated: boolean;
 }>;
@@ -106,6 +163,9 @@ export async function loadPartnerQuoteV2StaffContext(input: {
     .select({
       bookingId: partnerBookings.id,
       serviceKey: partnerBookings.serviceKey,
+      modelVersion: partnerBookings.modelVersion,
+      pricedAt: partnerBookings.pricedAt,
+      scopeSnapshot: partnerBookings.scopeSnapshot,
       addressLine1: properties.addressLine1,
       addressLine2: properties.addressLine2,
       city: properties.city,
@@ -140,12 +200,33 @@ export async function loadPartnerQuoteV2StaffContext(input: {
     .orderBy(desc(partnerBookings.updatedAt), desc(partnerBookings.id))
     .limit(limit + 1);
 
+  const combinedIds = bookingRows
+    .filter((row) => row.modelVersion === 2)
+    .map((row) => row.bookingId);
+  const serviceLines = combinedIds.length
+    ? await db
+        .select()
+        .from(partnerBookingServiceLines)
+        .where(
+          and(
+            eq(partnerBookingServiceLines.partnerAccountId, input.accountId),
+            inArray(partnerBookingServiceLines.partnerBookingId, combinedIds),
+          ),
+        )
+        .orderBy(asc(partnerBookingServiceLines.position))
+    : [];
+
   const targets = [
     ...bookingRows.map((row) =>
       Object.freeze({
         type: "booking" as const,
+        serviceLines: serviceLines
+          .filter((line) => line.partnerBookingId === row.bookingId)
+          .map((line) =>
+            partnerServiceCommercialSeed(line, Boolean(row.pricedAt)),
+          ),
         id: row.bookingId,
-        label: `Partner job · ${row.serviceKey || "Service review"}`,
+        label: `Partner job · ${typeof row.scopeSnapshot?.["serviceLabel"] === "string" ? row.scopeSnapshot["serviceLabel"] : row.serviceKey || "Service review"}`,
         address: [
           [row.addressLine1, row.addressLine2].filter(Boolean).join(" "),
           row.city,
@@ -165,6 +246,7 @@ export async function loadPartnerQuoteV2StaffContext(input: {
     ...locationRows.map((row) =>
       Object.freeze({
         type: "location" as const,
+        serviceLines: [],
         id: row.locationId,
         label: row.siteName,
         address: [

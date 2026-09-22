@@ -62,6 +62,7 @@ export function resolveAppointmentCalendarContent(input: {
   leadServices: unknown;
   leadNotes: unknown;
   partnerServiceKey: unknown;
+  partnerServiceLabel?: unknown;
   quotedScopeText: unknown;
   bookingDetails?: AppointmentBookingDetails | null;
 }): AppointmentCalendarContent {
@@ -73,14 +74,20 @@ export function resolveAppointmentCalendarContent(input: {
         .slice(0, 20)
     : [];
   const partnerServiceKey = boundedCalendarText(input.partnerServiceKey, 120);
+  const partnerServiceLabel = boundedCalendarText(
+    input.partnerServiceLabel,
+    400,
+  );
   const isMoving = input.bookingDetails?.serviceType === "moving";
   const services = isMoving
     ? ["Moving Job"]
-    : leadServices.length > 0
-      ? leadServices
-      : partnerServiceKey
-        ? [partnerServiceKey]
-        : [];
+    : partnerServiceLabel
+      ? [partnerServiceLabel]
+      : leadServices.length > 0
+        ? leadServices
+        : partnerServiceKey
+          ? [partnerServiceKey]
+          : [];
 
   const destination = isMoving
     ? boundedCalendarText(input.bookingDetails?.moving?.destinationAddress, 240)

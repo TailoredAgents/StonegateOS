@@ -24,10 +24,12 @@ const money = z.object({
   minorUnit: z.number().int().min(0).max(6),
 });
 const jobSchema = z.object({
+  modelVersion: z.union([z.literal(1), z.literal(2)]).optional(),
   id: text.min(1),
   status: text.min(1),
   confirmationMode: text,
   service: z.object({
+    label: z.string().optional(),
     key: nullableText,
     tierKey: nullableText,
     addOns: z.array(

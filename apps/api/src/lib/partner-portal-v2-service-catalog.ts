@@ -21,7 +21,11 @@ import {
   projectPartnerAccountServiceAgreement,
 } from "@/lib/partner-account-service-agreement-service";
 import { MAX_PARTNER_SERVICE_ADD_ONS } from "@/lib/partner-portal-v2-service-add-ons";
-import { isPartnerAddOnTierKey } from "@myst-os/pricing";
+import {
+  isPartnerAddOnTierKey,
+  PARTNER_SERVICE_DEFINITIONS,
+} from "@myst-os/pricing";
+import { arePartnerMultiServiceRequestsEnabled } from "./partner-portal-feature-flags";
 import { normalizePartnerAccountWorkflow } from "@/lib/partner-account-workflows";
 import { GENERAL_PARTNER_SERVICE_REQUEST } from "@/lib/partner-service-requestability";
 
@@ -106,6 +110,7 @@ function normalizedMoney(
 export async function listPartnerServiceCatalog(input: {
   accountId: string;
   revealPrices: boolean;
+  requestModelVersion?: 1;
   now?: Date;
 }): Promise<readonly PartnerServiceCatalogItemDto[]> {
   const now = input.now ?? new Date();
@@ -134,6 +139,35 @@ export async function listPartnerServiceCatalog(input: {
     .where(eq(partnerAccounts.id, input.accountId))
     .limit(1);
   const workflow = normalizePartnerAccountWorkflow(account?.config);
+  if (
+    input.requestModelVersion !== 1 &&
+    arePartnerMultiServiceRequestsEnabled(input.accountId)
+  ) {
+    // Requesting review is independent of a negotiated rate or a capacity profile.
+    // Explicit company restrictions still remove the affected choices.
+    return PARTNER_SERVICE_DEFINITIONS.filter(
+      (service) => !workflow.disabledServiceKeys.includes(service.key),
+    ).map((service) => ({
+      key: service.key,
+      label: service.label,
+      description: service.description,
+      requiredScopeFields: [],
+      defaultProofRequirements: {},
+      bookable: true,
+      priceState: "quote_required" as const,
+      agreement: null,
+      inclusions: [...service.inclusions],
+      exclusions: [],
+      quoteRule:
+        "Stonegate reviews the work and confirms the total and visits.",
+      pricingStatus: input.revealPrices
+        ? ("review_required" as const)
+        : ("hidden" as const),
+      basePrice: null,
+      baseOptions: [],
+      addOns: [],
+    }));
+  }
   const entitlementKeys = [
     ...new Set([
       GENERAL_PARTNER_SERVICE_REQUEST,

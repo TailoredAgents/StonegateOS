@@ -100,7 +100,7 @@ export async function sendStaffPartnerJobMessageInTransaction(
       partnerAccounts,
       eq(partnerAccounts.id, partnerBookings.partnerAccountId),
     )
-    .innerJoin(appointments, eq(appointments.id, partnerBookings.appointmentId))
+    .leftJoin(appointments, eq(appointments.id, partnerBookings.appointmentId))
     .where(
       and(
         eq(partnerBookings.id, thread.partnerBookingId),

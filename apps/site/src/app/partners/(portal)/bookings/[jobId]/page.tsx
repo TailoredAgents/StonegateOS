@@ -1,3 +1,8 @@
+import {
+  partnerMultiServiceRequestSchema,
+  type PartnerMultiServiceRequest,
+} from "@myst-os/sdk";
+import { PartnerMultiServiceRequestDetails } from "@/app/partners/components/PartnerMultiServiceRequestDetails";
 import type { Metadata, Route } from "next";
 import Link from "next/link";
 import {
@@ -50,11 +55,14 @@ import {
 } from "@/app/partners/components/PartnerPortalUi";
 
 type JobDetail = {
+  modelVersion?: 1 | 2;
+  multiService?: PartnerMultiServiceRequest;
   id: string;
   pendingRescheduleRequest?: { id: string } | null;
   status: string;
   confirmationMode: string;
   service: {
+    label?: string;
     key: string | null;
     tierKey: string | null;
     addOns: Array<{
@@ -409,6 +417,32 @@ export async function generateMetadata({
 function isJobDetail(value: unknown): value is JobDetail {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
   const record = value as Record<string, unknown>;
+  if (
+    record["modelVersion"] !== undefined &&
+    record["modelVersion"] !== 1 &&
+    record["modelVersion"] !== 2
+  )
+    return false;
+  if (record["modelVersion"] === 2) {
+    const parsed = partnerMultiServiceRequestSchema.safeParse(
+      record["multiService"],
+    );
+    if (!parsed.success) return false;
+    const ids = new Set(parsed.data.serviceLines.map((line) => line.id));
+    if (
+      ids.size !== parsed.data.serviceLines.length ||
+      parsed.data.visits.some((visit) =>
+        visit.serviceLineIds.some((id) => !ids.has(id)),
+      )
+    )
+      return false;
+    try {
+      for (const visit of parsed.data.visits)
+        new Intl.DateTimeFormat("en-US", { timeZone: visit.timezone });
+    } catch {
+      return false;
+    }
+  }
   const notification = record["notificationDestination"];
   const notificationRecord =
     notification &&
@@ -608,6 +642,8 @@ function jobNextStep(status: string): string {
       return "An authorized person on your account needs to review this request.";
     case "under_review":
       return "Stonegate is reviewing the details before confirming the work.";
+    case "partially_scheduled":
+      return "Review the confirmed visits below. Stonegate still needs to schedule the remaining services.";
     case "confirmed":
       return "Check the arrival window, on-site contact, and access details before service.";
     case "en_route":
@@ -665,6 +701,11 @@ export default async function PartnerJobDetailPage({
       />
     );
   const job = result.value;
+  const multiService = job.modelVersion === 2 ? job.multiService : undefined;
+  const serviceLabel =
+    job.service.label ??
+    multiService?.serviceLines.map((line) => line.label).join(", ") ??
+    humanize(job.service.key);
   const etag = result.response.headers.get("etag");
   const allowedActions = portalContext.availability.writes
     ? job.allowedActions
@@ -692,9 +733,10 @@ export default async function PartnerJobDetailPage({
         .filter(Boolean)
         .join(", ")
     : job.location.name?.trim() || "Stonegate service location";
-  const calendarWindow = ["canceled", "declined"].includes(job.status)
-    ? null
-    : job.schedule.arrivalWindow;
+  const calendarWindow =
+    multiService || ["canceled", "declined"].includes(job.status)
+      ? null
+      : job.schedule.arrivalWindow;
   const calendarWindowConfirmed = [
     "confirmed",
     "en_route",
@@ -822,12 +864,12 @@ export default async function PartnerJobDetailPage({
       />
       <PartnerPageHeader
         eyebrow={`Job ${job.id.slice(0, 8).toUpperCase()}`}
-        title={
-          job.location.name?.trim() ||
-          address?.line1 ||
-          humanize(job.service.key)
+        title={job.location.name?.trim() || address?.line1 || serviceLabel}
+        description={
+          multiService
+            ? serviceLabel
+            : `${serviceLabel} · ${formatPartnerArrivalWindow(job.schedule.arrivalWindow)}`
         }
-        description={`${humanize(job.service.key)} · ${formatPartnerArrivalWindow(job.schedule.arrivalWindow)}`}
         breadcrumbs={[
           { label: "Overview", href: "/partners/overview" },
           { label: "Jobs", href: "/partners/bookings" },
@@ -844,7 +886,9 @@ export default async function PartnerJobDetailPage({
             <strong>{humanize(job.status)}</strong>.
           </PartnerNotice>
         ) : null}
-        {job.reviewReasons.length ? (
+        {job.reviewReasons.length &&
+        (!multiService ||
+          !multiService.visits.some((visit) => visit.status !== "canceled")) ? (
           <PartnerNotice
             tone="warning"
             className={query.created === "1" ? "mt-3" : undefined}
@@ -894,7 +938,10 @@ export default async function PartnerJobDetailPage({
       ) : null}
 
       <PartnerNotice tone={job.status === "completed" ? "success" : "info"}>
-        <strong>Next:</strong> {jobNextStep(job.status)}
+        <strong>Next:</strong>{" "}
+        {multiService && ["confirmed", "in_progress"].includes(job.status)
+          ? "Review the service visits and progress below. Each visit lists the work scheduled for that date."
+          : jobNextStep(job.status)}
       </PartnerNotice>
       {job.pendingRescheduleRequest && etag ? (
         <PartnerRescheduleRequestActions
@@ -910,47 +957,77 @@ export default async function PartnerJobDetailPage({
       ) : null}
 
       <div className="grid gap-5 xl:grid-cols-[minmax(0,1.45fr)_minmax(20rem,0.75fr)]">
-        <div className="space-y-5">
+        <div className="min-w-0 space-y-5">
+          {multiService ? (
+            <PartnerMultiServiceRequestDetails
+              request={multiService}
+              jobId={job.id}
+              currency={job.financial?.currency ?? "USD"}
+              etag={etag}
+              canChangeVisits={
+                portalContext.status === "authenticated" &&
+                portalContext.availability.writes &&
+                portalContext.permissions.updateJobs &&
+                allowedActions.includes("reschedule") &&
+                !job.pendingRescheduleRequest
+              }
+            />
+          ) : null}
           <PartnerPanel>
             <h2 className="text-lg font-semibold text-slate-950">
-              Service details
+              {multiService ? "Shared request details" : "Service details"}
             </h2>
             <dl className="mt-4 grid gap-4 sm:grid-cols-2">
               <DetailItem
                 icon={CalendarClock}
-                label="Arrival window"
+                label={multiService ? "Requested timing" : "Arrival window"}
                 value={
-                  job.schedule.arrivalWindow
-                    ? `${formatDateTime(job.schedule.arrivalWindow.startAt, timezone)} – ${formatDateTime(job.schedule.arrivalWindow.endAt, timezone)}`
-                    : preferredWindows.length
+                  multiService
+                    ? preferredWindows.length
                       ? preferredWindows
-                          .map((window) =>
-                            formatPreferredDate(
-                              window.localDate,
-                              window.timezone,
-                            ),
+                          .map(
+                            (window) =>
+                              `${formatPreferredDate(window.localDate, window.timezone)} · ${humanize(window.timeOfDay)}`,
                           )
-                          .join(" · ")
-                      : "Scheduling pending"
+                          .join("; ")
+                      : "No preferred dates recorded"
+                    : job.schedule.arrivalWindow
+                      ? `${formatDateTime(job.schedule.arrivalWindow.startAt, timezone)} – ${formatDateTime(job.schedule.arrivalWindow.endAt, timezone)}`
+                      : preferredWindows.length
+                        ? preferredWindows
+                            .map((window) =>
+                              formatPreferredDate(
+                                window.localDate,
+                                window.timezone,
+                              ),
+                            )
+                            .join(" · ")
+                        : "Scheduling pending"
                 }
                 detail={
-                  !job.schedule.arrivalWindow && preferredWindows.length
-                    ? `${humanize(preferredWindows[0]?.timeOfDay)} preferred · Not reserved`
-                    : null
+                  multiService
+                    ? "Original preferences; confirmed dates appear under Service visits."
+                    : !job.schedule.arrivalWindow && preferredWindows.length
+                      ? `${humanize(preferredWindows[0]?.timeOfDay)} preferred · Not reserved`
+                      : null
                 }
               />
-              <DetailItem
-                icon={Clock3}
-                label="Latest arrival estimate"
-                value={operationalEtaValue}
-                detail={operationalEtaDetail}
-              />
-              <DetailItem
-                icon={UserRound}
-                label="Assigned team"
-                value={assignedTeamValue}
-                detail={assignedTeamDetail}
-              />
+              {!multiService ? (
+                <>
+                  <DetailItem
+                    icon={Clock3}
+                    label="Latest arrival estimate"
+                    value={operationalEtaValue}
+                    detail={operationalEtaDetail}
+                  />
+                  <DetailItem
+                    icon={UserRound}
+                    label="Assigned team"
+                    value={assignedTeamValue}
+                    detail={assignedTeamDetail}
+                  />
+                </>
+              ) : null}
               <DetailItem
                 icon={MapPin}
                 label="Location"
@@ -984,8 +1061,11 @@ export default async function PartnerJobDetailPage({
               />
             </dl>
             <div className="mt-5 space-y-4 border-t border-slate-200 pt-5">
-              <TextBlock label="Work description" value={description} />
-              {job.service.addOns.length ? (
+              <TextBlock
+                label={multiService ? "Project notes" : "Work description"}
+                value={description}
+              />
+              {!multiService && job.service.addOns.length ? (
                 <div>
                   <h3 className="text-xs font-semibold uppercase tracking-[0.14em] text-slate-500">
                     Add-ons
@@ -1237,6 +1317,17 @@ export default async function PartnerJobDetailPage({
                     <p className="mt-2 break-all text-sm text-slate-600">
                       {evidence.filename}
                     </p>
+                    {multiService ? (
+                      <p className="mt-2 text-xs font-medium text-slate-700">
+                        For:{" "}
+                        {multiService.serviceLines
+                          .filter((line) =>
+                            line.photoEvidenceIds?.includes(evidence.id),
+                          )
+                          .map((line) => line.label)
+                          .join(", ") || "Whole request"}
+                      </p>
+                    ) : null}
                     {evidence.caption ? (
                       <p className="mt-1 text-sm text-slate-600">
                         {evidence.caption}
@@ -1278,8 +1369,18 @@ export default async function PartnerJobDetailPage({
                   portalContext.tools?.["templates"] === true
                 }
                 etag={etag}
-                allowedActions={allowedActions}
-                actionAvailability={actionAvailability}
+                allowedActions={
+                  multiService
+                    ? allowedActions.filter((action) => action !== "reschedule")
+                    : allowedActions
+                }
+                actionAvailability={
+                  multiService
+                    ? actionAvailability.filter(
+                        (entry) => entry.action !== "reschedule",
+                      )
+                    : actionAvailability
+                }
                 cancellation={job.cancellation}
                 references={job.references}
               />
@@ -1291,7 +1392,7 @@ export default async function PartnerJobDetailPage({
               <div className="mt-3">
                 <PartnerJobReceiptActions
                   jobId={job.id}
-                  serviceLabel={humanize(job.service.key)}
+                  serviceLabel={serviceLabel}
                   locationLabel={locationLabel}
                   arrivalWindow={calendarWindow}
                   confirmed={calendarWindowConfirmed}

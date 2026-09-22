@@ -1,3 +1,5 @@
+import { cancelPartnerMultiServiceRequest } from "./partner-multi-service";
+import { lockPartnerRequestFinancials } from "./partner-request-financials";
 import { and, eq, sql } from "drizzle-orm";
 import {
   appointmentTasks,
@@ -127,13 +129,23 @@ export async function decidePartnerCancellationRequestAsStaff(
     now?: Date;
   },
 ): Promise<StaffCancellationRequestDecisionResult> {
-  await acquireScheduleConflictLock(tx);
   const [identity] = await tx
     .select({
       accountId: partnerCancellationRequests.partnerAccountId,
       bookingId: partnerCancellationRequests.partnerBookingId,
+      modelVersion: partnerBookings.modelVersion,
     })
     .from(partnerCancellationRequests)
+    .innerJoin(
+      partnerBookings,
+      and(
+        eq(partnerBookings.id, partnerCancellationRequests.partnerBookingId),
+        eq(
+          partnerBookings.partnerAccountId,
+          partnerCancellationRequests.partnerAccountId,
+        ),
+      ),
+    )
     .where(eq(partnerCancellationRequests.id, input.requestId))
     .limit(1);
   if (!identity) {
@@ -143,6 +155,19 @@ export async function decidePartnerCancellationRequestAsStaff(
       { status: 404 },
     );
   }
+  if (identity.modelVersion === 2)
+    await lockPartnerRequestFinancials(
+      tx,
+      identity.accountId,
+      identity.bookingId,
+    );
+  await acquireScheduleConflictLock(tx);
+  if (identity.modelVersion !== 2)
+    await lockPartnerRequestFinancials(
+      tx,
+      identity.accountId,
+      identity.bookingId,
+    );
   await acquirePartnerJobMutationLock(
     tx,
     identity.accountId,
@@ -161,12 +186,15 @@ export async function decidePartnerCancellationRequestAsStaff(
       requestReason: partnerCancellationRequests.reason,
       requestSnapshot: partnerCancellationRequests.requestSnapshot,
       requestCreatedAt: partnerCancellationRequests.createdAt,
+      modelVersion: partnerBookings.modelVersion,
       bookingVersion: partnerBookings.version,
       publicStatus: partnerBookings.publicStatus,
       requestedByBookingMembershipId: partnerBookings.requestedByMembershipId,
       arrivalWindowStartAt: partnerBookings.arrivalWindowStartAt,
       appointmentId: partnerBookings.appointmentId,
-      appointmentStatus: appointments.status,
+      appointmentStatus: sql<
+        (typeof appointments.$inferSelect)["status"]
+      >`coalesce(${appointments.status}::text,case when ${partnerBookings.publicStatus}='confirmed' then 'confirmed' else 'requested' end)`,
       calendarEventId: appointments.calendarEventId,
     })
     .from(partnerCancellationRequests)
@@ -180,9 +208,9 @@ export async function decidePartnerCancellationRequestAsStaff(
         eq(partnerBookings.id, partnerCancellationRequests.partnerBookingId),
       ),
     )
-    .innerJoin(appointments, eq(appointments.id, partnerBookings.appointmentId))
+    .leftJoin(appointments, eq(appointments.id, partnerBookings.appointmentId))
     .where(eq(partnerCancellationRequests.id, input.requestId))
-    .for("update")
+    .for("update", { of: partnerCancellationRequests })
     .limit(1);
   if (!current) {
     throw new TeamMutationFailure(
@@ -266,19 +294,28 @@ export async function decidePartnerCancellationRequestAsStaff(
       supersededRescheduleRequestId = superseded.id;
     }
 
-    const [appointment] = await tx
-      .update(appointments)
-      .set({ status: "canceled", updatedAt: now })
-      .where(
-        and(
-          eq(appointments.id, current.appointmentId),
-          eq(appointments.status, current.appointmentStatus),
-        ),
-      )
-      .returning({
-        status: appointments.status,
-        updatedAt: appointments.updatedAt,
-      });
+    if (current.modelVersion === 2)
+      await cancelPartnerMultiServiceRequest(
+        tx,
+        current.partnerAccountId,
+        current.partnerBookingId,
+        now,
+      );
+    const [appointment] = current.appointmentId
+      ? await tx
+          .update(appointments)
+          .set({ status: "canceled", updatedAt: now })
+          .where(
+            and(
+              eq(appointments.id, current.appointmentId),
+              eq(appointments.status, current.appointmentStatus),
+            ),
+          )
+          .returning({
+            status: appointments.status,
+            updatedAt: appointments.updatedAt,
+          })
+      : [{ status: "canceled" as const, updatedAt: now }];
     if (!appointment) {
       throw new TeamMutationFailure(
         "conflict",
@@ -482,7 +519,9 @@ export async function decidePartnerCancellationRequestAsStaff(
     .set({ status: "completed", updatedAt: now })
     .where(
       and(
-        eq(appointmentTasks.appointmentId, current.appointmentId),
+        current.appointmentId
+          ? eq(appointmentTasks.appointmentId, current.appointmentId)
+          : sql`false`,
         eq(appointmentTasks.status, "open"),
         eq(appointmentTasks.title, reviewTaskTitle),
       ),

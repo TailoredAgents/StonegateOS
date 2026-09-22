@@ -55,6 +55,7 @@ jobs:
           pnpm exec tsx --test scripts/test-partner-home-recovery.mts scripts/test-partner-booking-recovery.mts scripts/test-partner-template-proof-recovery.mts scripts/test-partner-communications-browser.mts
           pnpm exec tsx --test scripts/test-partner-address-autocomplete.mts
           pnpm exec tsx --test scripts/test-partner-service-details.mts
+          pnpm exec tsx --test scripts/test-partner-multi-service-components.mts scripts/test-partner-multi-service-review-components.mts
           pnpm exec tsx --test scripts/test-partner-draft-photo-upload.mts
           pnpm exec tsx --test apps/site/test/partner-billing-csp.test.mjs scripts/test-partner-billing-media-csp.mts
           pnpm exec tsx --test scripts/test-partner-request-details.mts
@@ -66,6 +67,8 @@ jobs:
           pnpm exec tsx --test scripts/test-staff-schedule-resources.mts scripts/test-schedule-capacity-actions.mts scripts/test-mobile-booking-actions.mjs
       - name: Portal PostgreSQL integration tests
         run: pnpm test:partner-portal:postgres
+      - name: Prepare trusted loopback TLS for browser uploads
+        run: pnpm exec tsx scripts/run-partner-access-https.mts --prepare
       - name: Build production API
         run: pnpm exec tsx scripts/run-partner-access-local.mts api build
       - name: Build production website

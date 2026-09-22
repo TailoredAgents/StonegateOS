@@ -1,5 +1,5 @@
 import type { PartnerRequestDetails } from "@myst-os/sdk";
-import { and, count, eq, inArray, isNull } from "drizzle-orm";
+import { and, count, eq, inArray, isNull, sql } from "drizzle-orm";
 import { alias } from "drizzle-orm/pg-core";
 import {
   appointments,
@@ -8,15 +8,33 @@ import {
   partnerAccounts,
   partnerBookingDrafts,
   partnerBookings,
+  partnerBookingVisits,
   partnerJobEvidence,
   partnerServiceCatalog,
 } from "@/db";
+import { getPartnerMultiServiceRequest } from "./partner-multi-service";
 import { buildPartnerRequestDetails } from "./partner-request-details";
 
 /** Batch reads stay inside the already authorized appointment set and account joins. */
 export async function loadPartnerRequestDetailsForAppointments(
   appointmentIds: readonly string[],
   visibility: PartnerRequestDetails["visibility"],
+) {
+  return loadDetails(appointmentIds, visibility);
+}
+
+export async function loadPartnerRequestDetailsForBookings(
+  accountId: string,
+  bookingIds: readonly string[],
+  visibility: PartnerRequestDetails["visibility"],
+) {
+  return loadDetails(bookingIds, visibility, accountId);
+}
+
+async function loadDetails(
+  appointmentIds: readonly string[],
+  visibility: PartnerRequestDetails["visibility"],
+  accountId?: string,
 ): Promise<Map<string, PartnerRequestDetails>> {
   const result = new Map<string, PartnerRequestDetails>();
   const ids = [...new Set(appointmentIds)];
@@ -26,6 +44,7 @@ export async function loadPartnerRequestDetailsForAppointments(
     const rows = await db
       .select({
         appointmentId: appointments.id,
+        modelVersion: partnerBookings.modelVersion,
         jobId: partnerBookings.id,
         accountId: partnerAccounts.id,
         accountName: partnerAccounts.name,
@@ -55,10 +74,29 @@ export async function loadPartnerRequestDetailsForAppointments(
           partnerBookingDrafts.scheduleAssistancePreference,
       })
       .from(partnerBookings)
-      .innerJoin(
+      .leftJoin(
+        partnerBookingVisits,
+        and(
+          eq(partnerBookingVisits.partnerBookingId, partnerBookings.id),
+          eq(
+            partnerBookingVisits.partnerAccountId,
+            partnerBookings.partnerAccountId,
+          ),
+          accountId
+            ? sql`false`
+            : inArray(
+                partnerBookingVisits.appointmentId,
+                ids.slice(offset, offset + 500),
+              ),
+        ),
+      )
+      .leftJoin(
         appointments,
         and(
-          eq(appointments.id, partnerBookings.appointmentId),
+          eq(
+            appointments.id,
+            sql`coalesce(${partnerBookings.appointmentId}, ${partnerBookingVisits.appointmentId})`,
+          ),
           eq(appointments.partnerAccountId, partnerBookings.partnerAccountId),
         ),
       )
@@ -90,7 +128,14 @@ export async function loadPartnerRequestDetailsForAppointments(
           eq(original.partnerAccountId, partnerBookings.partnerAccountId),
         ),
       )
-      .where(inArray(appointments.id, ids.slice(offset, offset + 500)));
+      .where(
+        accountId
+          ? and(
+              eq(partnerBookings.partnerAccountId, accountId),
+              inArray(partnerBookings.id, ids.slice(offset, offset + 500)),
+            )
+          : inArray(appointments.id, ids.slice(offset, offset + 500)),
+      );
     if (!rows.length) continue;
     const counts = await db
       .select({ jobId: partnerJobEvidence.partnerBookingId, total: count() })
@@ -124,11 +169,27 @@ export async function loadPartnerRequestDetailsForAppointments(
       )
       .groupBy(partnerJobEvidence.partnerBookingId);
     const byJob = new Map(counts.map((row) => [row.jobId, row.total]));
-    for (const row of rows)
-      result.set(
-        row.appointmentId,
-        buildPartnerRequestDetails(row, visibility, byJob.get(row.jobId) ?? 0),
+    for (const row of rows) {
+      const key = accountId ? row.jobId : row.appointmentId;
+      if (!key) continue;
+      const details = buildPartnerRequestDetails(
+        row,
+        visibility,
+        byJob.get(row.jobId) ?? 0,
       );
+      if (row.modelVersion === 2) {
+        const multi = await getPartnerMultiServiceRequest(
+          db,
+          row.accountId,
+          row.jobId,
+          { ...visibility, currentRates: visibility.financials },
+        );
+        if (!multi)
+          throw new Error("partner_multi_service_details_unavailable");
+        details.multiService = multi;
+      }
+      result.set(key, details);
+    }
   }
   return result;
 }

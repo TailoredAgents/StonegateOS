@@ -1,4 +1,8 @@
 "use client";
+import {
+  partnerInvoiceRowsForJob,
+  type PartnerInvoiceDraftRow,
+} from "../lib/partner-invoice-lines";
 import { useRef, useState, type FormEvent } from "react";
 import { formEntryText } from "@/lib/form-entry-text";
 import {
@@ -52,13 +56,14 @@ function InvoiceEditor({
   run: RunCommand;
   report: (message: string) => void;
 }) {
-  const [rows, setRows] = useState(
+  const linesDirty = useRef(false);
+  const [rows, setRows] = useState<PartnerInvoiceDraftRow[]>(
     invoice?.lines.map((line, index) => ({ key: String(index), ...line })) ?? [
       {
         key: "0",
-        description: "Junk removal service",
+        description: "",
         quantity: "1",
-        unitAmountCents: 0,
+        unitAmountCents: null,
       },
     ],
   );
@@ -109,7 +114,31 @@ function InvoiceEditor({
             required
             className={`${INPUT} mt-1`}
             value={selectedJob}
-            onChange={(event) => setSelectedJob(event.target.value)}
+            disabled={busy}
+            onChange={(event) => {
+              const id = event.target.value;
+              if (
+                id === selectedJob ||
+                (linesDirty.current &&
+                  !window.confirm(
+                    "Replace these edited invoice lines with the selected job's services?",
+                  ))
+              )
+                return;
+              const next = data.jobs.find((entry) => entry.id === id);
+              setSelectedJob(id);
+              if (next) setRows(partnerInvoiceRowsForJob(next));
+              else
+                setRows([
+                  {
+                    key: crypto.randomUUID(),
+                    description: "",
+                    quantity: "1",
+                    unitAmountCents: null,
+                  },
+                ]);
+              linesDirty.current = false;
+            }}
           >
             <option value="">Choose a job</option>
             {data.jobs.map((row) => (
@@ -129,7 +158,21 @@ function InvoiceEditor({
         job total{job?.totalCents != null ? ` of ${money(job.totalCents)}` : ""}
         . Change the job or approved change order first if its price is wrong.
       </p>
-      <fieldset className="space-y-3">
+      {job?.serviceLines?.some(
+        (line) => `${line.title}\n${line.description}`.length > 1000,
+      ) ? (
+        <p className="text-sm text-slate-600">
+          Detailed work descriptions remain in the request. Review the concise
+          service descriptions below for this invoice.
+        </p>
+      ) : null}
+      <fieldset
+        className="space-y-3"
+        disabled={busy}
+        onChange={() => {
+          linesDirty.current = true;
+        }}
+      >
         <legend className="mb-2 text-sm font-semibold">Invoice lines</legend>
         {rows.map((row, index) => (
           <div
@@ -163,7 +206,11 @@ function InvoiceEditor({
                 required
                 inputMode="decimal"
                 name={`unit-${row.key}`}
-                defaultValue={(row.unitAmountCents / 100).toFixed(2)}
+                defaultValue={
+                  row.unitAmountCents === null
+                    ? ""
+                    : (row.unitAmountCents / 100).toFixed(2)
+                }
                 className={INPUT}
               />
             </label>
@@ -171,11 +218,12 @@ function InvoiceEditor({
               type="button"
               className={`${BUTTON} self-end`}
               disabled={rows.length === 1 || busy}
-              onClick={() =>
+              onClick={() => {
+                linesDirty.current = true;
                 setRows((current) =>
                   current.filter((item) => item.key !== row.key),
-                )
-              }
+                );
+              }}
               aria-label={`Remove line ${index + 1}`}
             >
               Remove
@@ -186,17 +234,18 @@ function InvoiceEditor({
           type="button"
           className={BUTTON}
           disabled={rows.length >= 100 || busy}
-          onClick={() =>
+          onClick={() => {
+            linesDirty.current = true;
             setRows((current) => [
               ...current,
               {
                 key: crypto.randomUUID(),
                 description: "",
                 quantity: "1",
-                unitAmountCents: 0,
+                unitAmountCents: null,
               },
-            ])
-          }
+            ]);
+          }}
         >
           Add line
         </button>
@@ -318,25 +367,29 @@ function CorrectionForm({
   return (
     <form
       className="mt-3 space-y-3"
-      onSubmit={(event) => void (async () => {
-        event.preventDefault();
-        const form = new FormData(event.currentTarget);
-        try {
-          await run(
-            {
-              action: kind,
-              invoiceId: invoice.id,
-              reason: formEntryText(form.get("reason")),
-              ...(kind === "credit_invoice"
-                ? { amountCents: cents(form.get("amount")) }
-                : {}),
-            },
-            invoice.version,
-          );
-        } catch (error) {
-          report(error instanceof Error ? error.message : "Check the amount.");
-        }
-      })()}
+      onSubmit={(event) =>
+        void (async () => {
+          event.preventDefault();
+          const form = new FormData(event.currentTarget);
+          try {
+            await run(
+              {
+                action: kind,
+                invoiceId: invoice.id,
+                reason: formEntryText(form.get("reason")),
+                ...(kind === "credit_invoice"
+                  ? { amountCents: cents(form.get("amount")) }
+                  : {}),
+              },
+              invoice.version,
+            );
+          } catch (error) {
+            report(
+              error instanceof Error ? error.message : "Check the amount.",
+            );
+          }
+        })()
+      }
     >
       {kind === "credit_invoice" && (
         <label className="block text-sm">
@@ -380,38 +433,42 @@ function RefundForm({
   return (
     <form
       className="mt-3 space-y-3"
-      onSubmit={(event) => void (async () => {
-        event.preventDefault();
-        if (!payment) return;
-        const values = new FormData(event.currentTarget);
-        try {
-          await run(
-            {
-              action:
-                payment.provider === "manual"
-                  ? "record_manual_refund"
-                  : "refund_payment",
-              invoiceId: invoice.id,
-              paymentId,
-              amountCents: cents(values.get("amount")),
-              reason: formEntryText(values.get("reason")),
-              ...(payment.provider === "manual"
-                ? {
-                    confirmation:
-                      values.get("confirmation") === "on"
-                        ? "REFUND ALREADY GIVEN"
-                        : "",
-                  }
-                : {}),
-            },
-            invoice.version,
-          );
-        } catch (error) {
-          report(
-            error instanceof Error ? error.message : "Check the refund amount.",
-          );
-        }
-      })()}
+      onSubmit={(event) =>
+        void (async () => {
+          event.preventDefault();
+          if (!payment) return;
+          const values = new FormData(event.currentTarget);
+          try {
+            await run(
+              {
+                action:
+                  payment.provider === "manual"
+                    ? "record_manual_refund"
+                    : "refund_payment",
+                invoiceId: invoice.id,
+                paymentId,
+                amountCents: cents(values.get("amount")),
+                reason: formEntryText(values.get("reason")),
+                ...(payment.provider === "manual"
+                  ? {
+                      confirmation:
+                        values.get("confirmation") === "on"
+                          ? "REFUND ALREADY GIVEN"
+                          : "",
+                    }
+                  : {}),
+              },
+              invoice.version,
+            );
+          } catch (error) {
+            report(
+              error instanceof Error
+                ? error.message
+                : "Check the refund amount.",
+            );
+          }
+        })()
+      }
     >
       <p className="text-sm text-slate-600">
         Online refunds return money to its original method. Recording a
@@ -475,12 +532,124 @@ function RefundForm({
   );
 }
 
+function ManualPaymentForm({
+  invoice,
+  busy,
+  run,
+  report,
+}: {
+  invoice: BillingInvoice;
+  busy: boolean;
+  run: RunCommand;
+  report: (message: string) => void;
+}) {
+  const clientRequestId = useRef<string | null>(null);
+  return (
+    <form
+      className="mt-3 space-y-3"
+      onSubmit={(event) => {
+        event.preventDefault();
+        if (busy || !event.currentTarget.reportValidity()) return;
+        const values = new FormData(event.currentTarget);
+        try {
+          clientRequestId.current ??= crypto.randomUUID();
+          void run(
+            {
+              action: "record_manual_payment",
+              invoiceId: invoice.id,
+              clientRequestId: clientRequestId.current,
+              method: formEntryText(values.get("method")),
+              amountCents: cents(values.get("amount")),
+              reference: formEntryText(values.get("reference")).trim() || null,
+              reason: formEntryText(values.get("reason")),
+              confirmation: "PAYMENT ALREADY RECEIVED",
+            },
+            invoice.version,
+          );
+        } catch (error) {
+          report(
+            error instanceof Error
+              ? error.message
+              : "Check the received payment.",
+          );
+        }
+      }}
+    >
+      <p className="text-sm text-slate-600">
+        Record money Stonegate has already received. This updates the invoice
+        and creates a receipt.
+      </p>
+      <fieldset disabled={busy} className="grid gap-3 sm:grid-cols-2">
+        <label className="text-sm" htmlFor="partner-manual-payment-method">
+          Payment method
+          <select
+            id="partner-manual-payment-method"
+            name="method"
+            className={INPUT}
+            defaultValue="cash"
+          >
+            <option value="cash">Cash</option>
+            <option value="check">Check</option>
+          </select>
+        </label>
+        <label className="text-sm" htmlFor="partner-manual-payment-amount">
+          Amount received ($)
+          <input
+            id="partner-manual-payment-amount"
+            name="amount"
+            required
+            inputMode="decimal"
+            className={INPUT}
+            placeholder="0.00"
+          />
+        </label>
+        <label
+          className="text-sm sm:col-span-2"
+          htmlFor="partner-manual-payment-reference"
+        >
+          Check number or reference (optional)
+          <input
+            id="partner-manual-payment-reference"
+            name="reference"
+            maxLength={120}
+            className={INPUT}
+          />
+        </label>
+        <label
+          className="text-sm sm:col-span-2"
+          htmlFor="partner-manual-payment-reason"
+        >
+          Payment note
+          <input
+            id="partner-manual-payment-reason"
+            name="reason"
+            required
+            minLength={3}
+            maxLength={192}
+            className={INPUT}
+            placeholder="Who received it and when"
+          />
+        </label>
+        <label className="flex min-h-11 items-center gap-3 text-sm sm:col-span-2">
+          <input type="checkbox" required className="h-5 w-5" />I confirm
+          Stonegate has already received this payment.
+        </label>
+        <button className={PRIMARY} disabled={busy}>
+          Record received payment
+        </button>
+      </fieldset>
+    </form>
+  );
+}
+
 export function PartnerBillingAdministrationClient({
   initial,
   canManage,
+  canCollect = false,
 }: {
   initial: BillingAdministrationData;
   canManage: boolean;
+  canCollect?: boolean;
 }) {
   const [data, setData] = useState(initial);
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -490,7 +659,12 @@ export function PartnerBillingAdministrationClient({
   const keys = useRef(new Map<string, string>());
   const selected = data.invoices.find((row) => row.id === selectedId);
   async function load(
-    options: { cursor?: string; jobCursor?: string; statementCursor?: string; invoiceId?: string } = {},
+    options: {
+      cursor?: string;
+      jobCursor?: string;
+      statementCursor?: string;
+      invoiceId?: string;
+    } = {},
     append = false,
   ) {
     const result = await loadPartnerBillingAdministration(
@@ -521,11 +695,21 @@ export function PartnerBillingAdministrationClient({
                 ]),
               ).values(),
             ],
-            statements: [...new Map([...current.statements, ...result.data.statements].map((row) => [row.id, row])).values()],
-            nextStatementCursor: options.cursor || options.invoiceId || options.jobCursor ? current.nextStatementCursor : result.data.nextStatementCursor,
-            nextCursor: options.jobCursor || options.statementCursor
-              ? current.nextCursor
-              : result.data.nextCursor,
+            statements: [
+              ...new Map(
+                [...current.statements, ...result.data.statements].map(
+                  (row) => [row.id, row],
+                ),
+              ).values(),
+            ],
+            nextStatementCursor:
+              options.cursor || options.invoiceId || options.jobCursor
+                ? current.nextStatementCursor
+                : result.data.nextStatementCursor,
+            nextCursor:
+              options.jobCursor || options.statementCursor
+                ? current.nextCursor
+                : result.data.nextCursor,
             nextJobCursor:
               options.cursor || options.invoiceId || options.statementCursor
                 ? current.nextJobCursor
@@ -664,7 +848,14 @@ export function PartnerBillingAdministrationClient({
           aria-label="Selected invoice"
         >
           <h4 className="break-all font-semibold">{selected.number}</h4>
-          {selected.jobId && <PartnerAllocationReconciliation key={selected.jobId} accountId={data.account.id} jobId={selected.jobId} canManage={canManage} />}
+          {selected.jobId && (
+            <PartnerAllocationReconciliation
+              key={selected.jobId}
+              accountId={data.account.id}
+              jobId={selected.jobId}
+              canManage={canManage}
+            />
+          )}
           <dl className="grid grid-cols-2 gap-3 text-sm sm:grid-cols-4">
             {[
               ["Invoice total", selected.totalCents],
@@ -689,7 +880,14 @@ export function PartnerBillingAdministrationClient({
               </li>
             ))}
           </ul>
-          <PartnerBillingHistory key={`documents:${data.account.id}:${selected.id}:${selected.version}`} accountId={data.account.id} invoiceId={selected.id} currency={selected.currency} kind="documents" download={download} />
+          <PartnerBillingHistory
+            key={`documents:${data.account.id}:${selected.id}:${selected.version}`}
+            accountId={data.account.id}
+            invoiceId={selected.id}
+            currency={selected.currency}
+            kind="documents"
+            download={download}
+          />
           {selected.payments.length > 0 && (
             <div>
               <h5 className="text-sm font-semibold">Payment history</h5>
@@ -706,7 +904,14 @@ export function PartnerBillingAdministrationClient({
               </ul>
             </div>
           )}
-          <PartnerBillingHistory key={`refunds:${data.account.id}:${selected.id}:${selected.version}`} accountId={data.account.id} invoiceId={selected.id} currency={selected.currency} kind="refunds" download={download} />
+          <PartnerBillingHistory
+            key={`refunds:${data.account.id}:${selected.id}:${selected.version}`}
+            accountId={data.account.id}
+            invoiceId={selected.id}
+            currency={selected.currency}
+            kind="refunds"
+            download={download}
+          />
           {canManage && selected.status === "draft" && (
             <>
               <details>
@@ -740,6 +945,24 @@ export function PartnerBillingAdministrationClient({
               </details>
             </>
           )}
+          {canManage &&
+          canCollect &&
+          selected.requestModelVersion === 2 &&
+          ["issued", "partially_paid", "overdue"].includes(selected.status) &&
+          selected.balanceCents > 0 ? (
+            <details>
+              <summary className="min-h-11 cursor-pointer py-3 font-medium">
+                Record cash or check received
+              </summary>
+              <ManualPaymentForm
+                key={`${selected.id}:${selected.version}`}
+                invoice={selected}
+                busy={busy}
+                run={run}
+                report={setFeedback}
+              />
+            </details>
+          ) : null}
           {canManage && selected.status !== "void" && (
             <details>
               <summary className="min-h-11 cursor-pointer py-3 font-medium">
@@ -794,16 +1017,18 @@ export function PartnerBillingAdministrationClient({
         {canManage && (
           <form
             className="grid gap-3 sm:grid-cols-2"
-            onSubmit={(event) => void (async () => {
-              event.preventDefault();
-              const values = new FormData(event.currentTarget);
-              await run({
-                action: "generate_statement",
-                periodStart: formEntryText(values.get("start")),
-                periodEnd: formEntryText(values.get("end")),
-                reason: formEntryText(values.get("reason")),
-              });
-            })()}
+            onSubmit={(event) =>
+              void (async () => {
+                event.preventDefault();
+                const values = new FormData(event.currentTarget);
+                await run({
+                  action: "generate_statement",
+                  periodStart: formEntryText(values.get("start")),
+                  periodEnd: formEntryText(values.get("end")),
+                  reason: formEntryText(values.get("reason")),
+                });
+              })()
+            }
           >
             <label className="text-sm">
               From
@@ -856,7 +1081,17 @@ export function PartnerBillingAdministrationClient({
             settlement.
           </p>
         )}
-        {data.nextStatementCursor ? <button className={BUTTON} disabled={busy} onClick={() => void load({ statementCursor: data.nextStatementCursor! }, true)}>Load more statements</button> : null}
+        {data.nextStatementCursor ? (
+          <button
+            className={BUTTON}
+            disabled={busy}
+            onClick={() =>
+              void load({ statementCursor: data.nextStatementCursor! }, true)
+            }
+          >
+            Load more statements
+          </button>
+        ) : null}
       </details>
     </div>
   );

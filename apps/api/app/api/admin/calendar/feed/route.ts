@@ -1,3 +1,7 @@
+import {
+  partnerAppointmentBindingSql,
+  partnerVisitServiceLabelSql,
+} from "@/lib/partner-appointment-binding";
 import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
 import {
@@ -398,14 +402,13 @@ export async function GET(request: NextRequest): Promise<Response> {
             contactFirstName: contacts.firstName,
             contactLastName: contacts.lastName,
             partnerServiceKey: partnerBookings.serviceKey,
-            partnerServiceLabel: partnerServiceCatalog.label,
+            partnerServiceLabel: sql<
+              string | null
+            >`coalesce(${partnerVisitServiceLabelSql},${partnerServiceCatalog.label})`,
           })
           .from(appointments)
           .leftJoin(contacts, eq(appointments.contactId, contacts.id))
-          .leftJoin(
-            partnerBookings,
-            eq(partnerBookings.appointmentId, appointments.id),
-          )
+          .leftJoin(partnerBookings, partnerAppointmentBindingSql())
           .leftJoin(
             legacyPartner,
             eq(partnerBookings.orgContactId, legacyPartner.id),

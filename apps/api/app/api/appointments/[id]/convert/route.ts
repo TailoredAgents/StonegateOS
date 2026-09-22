@@ -1,3 +1,4 @@
+import { assertAppointmentHasIndependentFinancials } from "@/lib/partner-request-financials";
 import type {
   ActionPolicy,
   MutationResult,
@@ -478,6 +479,7 @@ export async function POST(
     claim = claimed.claim;
 
     const outcome = await database.transaction(async (tx) => {
+      await assertAppointmentHasIndependentFinancials(tx, appointmentId);
       // Match the lock order used by booking and rescheduling so concurrent
       // schedule changes cannot both observe available capacity or deadlock.
       await acquireScheduleConflictLock(tx);

@@ -1,3 +1,4 @@
+import { partnerBookingVisits } from "@/db";
 import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
 import { z } from "zod";
@@ -212,6 +213,21 @@ export async function POST(
         { status: 403 },
       );
   }
+
+  const [partnerVisit] = await db
+    .select({ id: partnerBookingVisits.id })
+    .from(partnerBookingVisits)
+    .where(eq(partnerBookingVisits.appointmentId, appointmentId))
+    .limit(1);
+  if (partnerVisit)
+    return NextResponse.json(
+      {
+        error: "partner_visit_review_required",
+        message:
+          "Open the partner request to change this visit. Its services, price and approval must stay linked.",
+      },
+      { status: 409 },
+    );
 
   const leadFormPayload = existing.leadFormPayload;
   const existingFormPayload = isRecord(leadFormPayload)

@@ -79,7 +79,7 @@ export function calculatePartnerInvoiceSettlement(input: {
  */
 export async function reconcilePartnerAppointmentInvoices(
   tx: TeamMutationTransaction,
-  appointmentId: string,
+  appointmentId: string | { bookingId: string; accountId: string },
   options: { explicitlyReconciledInvoiceIds?: ReadonlySet<string> } = {},
 ): Promise<void> {
   const invoices = await tx
@@ -113,7 +113,12 @@ export async function reconcilePartnerAppointmentInvoices(
     )
     .where(
       and(
-        eq(partnerBookings.appointmentId, appointmentId),
+        typeof appointmentId === "string"
+          ? eq(partnerBookings.appointmentId, appointmentId)
+          : and(
+              eq(partnerBookings.id, appointmentId.bookingId),
+              eq(partnerBookings.partnerAccountId, appointmentId.accountId),
+            ),
         inArray(partnerInvoices.status, PAYABLE_STATES),
       ),
     )
@@ -133,7 +138,14 @@ export async function reconcilePartnerAppointmentInvoices(
       createdAt: payments.createdAt,
     })
     .from(payments)
-    .where(eq(payments.appointmentId, appointmentId))
+    .where(
+      typeof appointmentId === "string"
+        ? eq(payments.appointmentId, appointmentId)
+        : and(
+            eq(payments.partnerBookingId, appointmentId.bookingId),
+            eq(payments.partnerAccountId, appointmentId.accountId),
+          ),
+    )
     .orderBy(asc(payments.id))
     .for("update");
   const paymentIds = paymentRows.map((payment) => payment.id);
@@ -307,7 +319,11 @@ export async function reconcilePartnerAppointmentInvoices(
         "partner_invoice_historical_payment_reconciliation_required",
       );
     }
-    if (settledAllocations.some(row => allocatedRefund(invoice.id, row.paymentId) > row.amountCents))
+    if (
+      settledAllocations.some(
+        (row) => allocatedRefund(invoice.id, row.paymentId) > row.amountCents,
+      )
+    )
       throw new Error("partner_refund_allocation_reconciliation_required");
     const settlement = calculatePartnerInvoiceSettlement({
       totalCents: invoice.totalCents,

@@ -21,15 +21,34 @@ export async function GET(
       { ok: false, error: "invalid_fields" },
       { status: 422, headers: { "Cache-Control": "private, no-store" } },
     );
+  const canPrice =
+    (await requirePermission(request, "partners.commercial.manage")) === null;
+  const canManageVisits =
+    (await requirePermission(request, "appointments.update")) === null;
   const result = await getPartnerServiceReview(
     params.get("accountId") ?? "",
     (await context.params).jobId,
     {
-      financials: (await requirePermission(request, "payments.read")) === null,
+      financials:
+        canPrice ||
+        (await requirePermission(request, "payments.read")) === null,
       photos: true,
     },
   );
-  return NextResponse.json(result ?? { ok: false, error: "not_found" }, {
+  const mutable =
+    result &&
+    !["canceled", "declined", "completed"].includes(result.request.status);
+  const response = result
+    ? {
+        ...result,
+        request: {
+          ...result.request,
+          canPrice: Boolean(mutable && canPrice),
+          canManageVisits: Boolean(mutable && canManageVisits),
+        },
+      }
+    : null;
+  return NextResponse.json(response ?? { ok: false, error: "not_found" }, {
     status: result ? 200 : 404,
     headers: {
       "Cache-Control": "private, no-store",

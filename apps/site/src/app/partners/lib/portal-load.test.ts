@@ -355,3 +355,47 @@ void test("saved-tool histories require complete lists and preserve empty succes
     null,
   );
 });
+
+void test("saved multi-service templates preserve normalized lines with no singular service fallback", () => {
+  const line = {
+    id: "11111111-1111-4111-8111-111111111111",
+    serviceKey: "painting",
+    description: "Paint the lobby",
+    scope: { workArea: "interior" },
+  };
+  const item = {
+    id: "template",
+    name: "Saved work",
+    active: true,
+    serviceKey: null,
+    locationId: null,
+    updatedAt: "2026-09-21T00:00:00Z",
+    etag: '"template-1"',
+    reusable: { modelVersion: 2, serviceLines: [line] },
+  };
+  const parsed = parsePortalTemplates({
+    ok: true,
+    templates: [item],
+    nextCursor: null,
+  });
+  assert.ok(parsed);
+  assert.deepEqual(parsed.templates[0]?.reusable?.serviceLines, [
+    { ...line, selectedAddOns: [], proofRequirements: {} },
+  ]);
+  assert.equal(
+    parsePortalTemplates({
+      ok: true,
+      templates: [{ ...item, reusable: { modelVersion: 2 } }],
+      nextCursor: null,
+    }),
+    null,
+  );
+  assert.equal(
+    parsePortalTemplates({
+      ok: true,
+      templates: [{ ...item, serviceKey: "painting" }],
+      nextCursor: null,
+    }),
+    null,
+  );
+});

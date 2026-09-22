@@ -1,3 +1,4 @@
+import { partnerRequestCompletedAtSql } from "./partner-request-schedule";
 import { createHash } from "node:crypto";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -28,6 +29,7 @@ import { renderPartnerProofPackageToFile } from "@/lib/partner-proof-package-ren
 import { readPartnerJobLocationSnapshot } from "@/lib/partner-job-location";
 import { evaluatePartnerProofCompletion } from "@/lib/partner-proof-completion";
 import { partnerMediaCountsAllowed } from "@/lib/partner-media-limits";
+import { getPartnerMultiServiceRequest } from "@/lib/partner-multi-service";
 
 function hash(value: unknown): string {
   return createHash("sha256").update(JSON.stringify(value)).digest("hex");
@@ -41,6 +43,7 @@ async function readCompletionSnapshot(
   const [job] = await tx
     .select({
       id: partnerBookings.id,
+      modelVersion: partnerBookings.modelVersion,
       serviceKey: partnerBookings.serviceKey,
       tierKey: partnerBookings.tierKey,
       appointmentId: partnerBookings.appointmentId,
@@ -53,11 +56,12 @@ async function readCompletionSnapshot(
       city: partnerAccountLocations.city,
       state: partnerAccountLocations.state,
       timezone: partnerAccountLocations.timezone,
-      completedAt: appointments.completedAt,
-      status: appointments.status,
+      completedAt: partnerRequestCompletedAtSql,
+      status: sql<string>`case when ${partnerBookings.modelVersion}=2 then ${partnerBookings.publicStatus} else ${appointments.status}::text end`,
+      unfinished: sql<boolean>`exists(select 1 from partner_booking_service_lines where partner_booking_id=${partnerBookings.id} and partner_account_id=${partnerBookings.partnerAccountId} and status not in ('completed','canceled')) or exists(select 1 from partner_booking_visits where partner_booking_id=${partnerBookings.id} and partner_account_id=${partnerBookings.partnerAccountId} and status not in ('completed','canceled'))`,
     })
     .from(partnerBookings)
-    .innerJoin(appointments, eq(appointments.id, partnerBookings.appointmentId))
+    .leftJoin(appointments, eq(appointments.id, partnerBookings.appointmentId))
     .leftJoin(partnerAccountLocations, createPartnerJobLocationJoinCondition())
     .where(
       and(
@@ -67,10 +71,15 @@ async function readCompletionSnapshot(
     )
     .for("update", { of: partnerBookings })
     .limit(1);
-  if (!job || job.status !== "completed" || !job.completedAt) return null;
+  if (!job || job.status !== "completed" || !job.completedAt || job.unfinished)
+    return null;
   if (
-    (await evaluatePartnerProofCompletion(tx, job.appointmentId)).kind !==
-    "satisfied"
+    (
+      await evaluatePartnerProofCompletion(
+        tx,
+        job.appointmentId ?? { accountId, bookingId: jobId },
+      )
+    ).kind !== "satisfied"
   )
     return null;
   const site = readPartnerJobLocationSnapshot(job.scopeSnapshot);
@@ -195,10 +204,36 @@ async function readCompletionSnapshot(
     )
   )
     throw new Error("partner_completion_media_invalid");
+  const project =
+    job.modelVersion === 2
+      ? await getPartnerMultiServiceRequest(tx, accountId, jobId, {})
+      : null;
+  const services =
+    project?.serviceLines.map((line) => ({
+      label: line.label,
+      status: line.status,
+    })) ?? [];
+  const visits =
+    project?.visits.map((visit) => ({
+      serviceLabels: project.serviceLines
+        .filter((line) => visit.serviceLineIds.includes(line.id))
+        .map((line) => line.label),
+      status: visit.status,
+      startAt: visit.startAt,
+      endAt: visit.endAt,
+      timezone: visit.timezone,
+    })) ?? [];
   const publicJob = {
     id: job.id,
     status: "completed",
-    service: { key: job.serviceKey, tierKey: job.tierKey },
+    service: {
+      key: job.serviceKey,
+      tierKey: job.tierKey,
+      label:
+        typeof job.scopeSnapshot?.["serviceLabel"] === "string"
+          ? job.scopeSnapshot?.["serviceLabel"]
+          : null,
+    },
     projectReference: job.projectReference,
     location: { name: job.siteName, city: job.city, state: job.state },
     promisedArrivalWindow:
@@ -210,6 +245,7 @@ async function readCompletionSnapshot(
           }
         : null,
     completedAt: job.completedAt.toISOString(),
+    ...(project ? { services, visits } : {}),
   };
   const proof = {
     requirements,
@@ -281,6 +317,9 @@ export async function preparePartnerCompletionRecord(
         job: {
           status: "completed",
           serviceKey: snapshot.job.serviceKey,
+          serviceLabel: snapshot.publicJob.service.label,
+          services: snapshot.publicJob.services,
+          visits: snapshot.publicJob.visits,
           tierKey: snapshot.job.tierKey,
           projectReference: snapshot.job.projectReference,
           locationName: snapshot.job.siteName,

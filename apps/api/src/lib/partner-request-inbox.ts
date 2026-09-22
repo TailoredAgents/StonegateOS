@@ -183,16 +183,18 @@ function sourceSql(context: PermissionContext): SQL {
   if (partnerInboxCanRead(context, "service"))
     branches.push(sql`
     select b.id,'service'::text kind,b.partner_account_id account_id,a.name account_name,b.id job_id,
-      coalesce(sc.label,replace(b.service_key,'_',' '),'Service request') service,
+      coalesce(nullif(b.scope_snapshot->>'serviceLabel',''),sc.label,replace(b.service_key,'_',' '),'Service request') service,
       coalesce(b.scope_snapshot->>'description','') description,b.scope_snapshot scope,
       coalesce(b.scope_snapshot->'preferredWindows','[]'::jsonb) preferred_windows,
       coalesce(u.name,'') requester_name,b.created_at,b.public_status state,
       case when ap.status <> 'requested' or ap.start_at is not null or b.public_status in ('canceled','declined','completed') then 'handled'
+        when b.model_version=2 and b.quoted_total_cents is null then 'needs_attention'
         when b.public_status='approval_needed' or exists(select 1 from partner_approval_requests ar where ar.partner_account_id=b.partner_account_id and ar.partner_booking_id=b.id and ar.state='pending') then 'waiting_on_client'
-        when b.public_status in ('requested','requested_review','under_review') and not exists(select 1 from partner_approval_requests ar where ar.partner_account_id=b.partner_account_id and ar.partner_booking_id=b.id and ar.state in ('declined','expired')) then 'needs_attention'
+        when b.model_version=2 and exists(select 1 from partner_booking_service_lines line where line.partner_account_id=b.partner_account_id and line.partner_booking_id=b.id and line.status not in ('completed','canceled') and not exists(select 1 from partner_booking_visit_lines covered join partner_booking_visits visit on visit.id=covered.visit_id and visit.partner_account_id=covered.partner_account_id and visit.partner_booking_id=covered.partner_booking_id where covered.partner_account_id=b.partner_account_id and covered.partner_booking_id=b.id and covered.service_line_id=line.id and visit.status in ('scheduled','in_progress'))) then 'needs_attention'
+        when b.public_status in ('requested','requested_review','under_review','partially_scheduled') and not exists(select 1 from partner_approval_requests ar where ar.partner_account_id=b.partner_account_id and ar.partner_booking_id=b.id and ar.state in ('declined','expired')) then 'needs_attention'
         else 'handled' end stage
     from partner_bookings b join partner_accounts a on a.id=b.partner_account_id
-    join appointments ap on ap.id=b.appointment_id and ap.partner_account_id=b.partner_account_id
+    left join appointments ap on ap.id=b.appointment_id and ap.partner_account_id=b.partner_account_id
     left join partner_service_catalog sc on sc.key=b.service_key
     left join partner_account_memberships m on m.id=b.requested_by_membership_id and m.partner_account_id=b.partner_account_id
     left join partner_users u on u.id=m.partner_user_id
@@ -334,7 +336,7 @@ function scopeFilter(query: ReturnType<typeof parsePartnerInboxQuery>): SQL {
     ${query.alertGroupId ? sql`and s.kind='service' and exists(select 1 from partner_owner_alert_members gm where gm.group_id=${query.alertGroupId}::uuid and gm.partner_booking_id=s.job_id and gm.partner_account_id=s.account_id)` : sql``}`;
 }
 function alertJoin(context: PermissionContext): SQL {
-  return sql`left join partner_owner_alert_members am on s.kind='service' and am.partner_booking_id=s.job_id and am.partner_account_id=s.account_id and am.owner_team_member_id=${context.principalId}::uuid left join partner_owner_request_opens ro on s.kind='service' and ro.partner_booking_id=s.job_id and ro.partner_account_id=s.account_id and ro.owner_team_member_id=${context.principalId}::uuid`;
+  return sql`left join partner_owner_alert_members am on s.kind='service' and am.partner_booking_id=s.job_id and am.partner_account_id=s.account_id and am.owner_team_member_id=${context.principalId}::uuid and am.stage=(select case when b.model_version=2 and b.quoted_total_cents is null then 'pricing_review' else 'ready_to_schedule' end from partner_bookings b where b.id=s.job_id) left join partner_owner_request_opens ro on s.kind='service' and ro.partner_booking_id=s.job_id and ro.partner_account_id=s.account_id and ro.owner_team_member_id=${context.principalId}::uuid and ro.stage=(select case when b.model_version=2 and b.quoted_total_cents is null then 'pricing_review' else 'ready_to_schedule' end from partner_bookings b where b.id=s.job_id)`;
 }
 function blankCounts(): PartnerRequestInboxCounts {
   return {

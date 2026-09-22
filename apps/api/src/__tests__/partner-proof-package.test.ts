@@ -38,6 +38,56 @@ function zipEntries(zip: Buffer): Map<string, Buffer> {
 }
 
 describe("partner proof-package artifacts", () => {
+  it("preserves saved multi-service names and separate visit outcomes in the completion record", async () => {
+    const services = [
+      { label: "Pressure washing", status: "completed" },
+      { label: "Demolition and hauloff", status: "canceled" },
+    ];
+    const visits = [
+      {
+        serviceLabels: ["Pressure washing"],
+        status: "completed",
+        startAt: "2026-09-09T12:00:00Z",
+        endAt: "2026-09-09T13:00:00Z",
+        timezone: "America/New_York",
+      },
+    ];
+    const result = await renderPartnerProofPackageArtifacts({
+      version: 1,
+      generatedAt: "2026-09-09T14:00:00Z",
+      manifestChecksumSha256: "a".repeat(64),
+      job: {
+        status: "completed",
+        serviceKey: null,
+        serviceLabel: "Pressure washing, Demolition and hauloff",
+        services,
+        visits,
+        tierKey: null,
+        projectReference: null,
+        locationName: "Test site",
+        city: "Atlanta",
+        state: "GA",
+        promisedArrivalStartAt: null,
+        promisedArrivalEndAt: null,
+        timezone: "America/New_York",
+        completedAt: "2026-09-09T14:00:00Z",
+      },
+      requirements: [],
+      evidence: [],
+    });
+    expect(result.pdf.body.subarray(0, 5).toString("ascii")).toBe("%PDF-");
+    expect(result.publicRecord["job"]).toMatchObject({
+      services,
+      visits,
+      service: { label: "Pressure washing, Demolition and hauloff" },
+    });
+    const archivedRecord: unknown = JSON.parse(
+      zipEntries(result.zip.body)
+        .get("completion-record.json")!
+        .toString("utf8"),
+    );
+    expect(archivedRecord).toMatchObject({ job: { services, visits } });
+  });
   it("creates a completion record when the job legitimately requires no media", async () => {
     const directory = await mkdtemp(
       join(tmpdir(), "stonegate-empty-proof-test-"),

@@ -43,6 +43,7 @@ import {
   reconcilePartnerAppointmentInvoices,
 } from "@/lib/partner-invoice-ledger";
 import { queuePartnerPaymentLifecycle } from "@/lib/partner-payment-lifecycle";
+import { lockPartnerRequestFinancials } from "@/lib/partner-request-financials";
 import {
   finalizePartnerPortalPaymentReconciliation,
   parsePartnerPaymentAttemptMetadata,
@@ -1140,6 +1141,8 @@ async function reconcileSquareRefund(refund: SquareRefund): Promise<{
     .select({
       id: payments.id,
       appointmentId: payments.appointmentId,
+      partnerAccountId: payments.partnerAccountId,
+      partnerBookingId: payments.partnerBookingId,
       paymentAttemptId: payments.paymentAttemptId,
       jobAmountCents: payments.jobAmountCents,
       amount: payments.amount,
@@ -1170,6 +1173,8 @@ async function reconcileSquareRefund(refund: SquareRefund): Promise<{
     paymentRow = {
       id: unmatchedPaymentId,
       appointmentId: null,
+      partnerAccountId: null,
+      partnerBookingId: null,
       paymentAttemptId: null,
       jobAmountCents: normalized.jobAmountCents,
       amount: normalized.totalAmountCents,
@@ -1183,7 +1188,7 @@ async function reconcileSquareRefund(refund: SquareRefund): Promise<{
   if (amountCents == null || amountCents <= 0 || currency !== "USD") {
     throw new Error("square_refund_payload_invalid");
   }
-  const providerRefundedAmountCents =
+  let providerRefundedAmountCents =
     parseSquareMoneyAmount(squarePayment.refunded_money) ?? 0;
   const paymentTotal =
     paymentRow.totalAmountCents ?? Math.max(paymentRow.amount, 0);
@@ -1191,11 +1196,61 @@ async function reconcileSquareRefund(refund: SquareRefund): Promise<{
     paymentRow.jobAmountCents ??
     Math.max(paymentTotal - Math.max(paymentRow.tipCents, 0), 0);
   const isCompleted = refund.status?.trim().toUpperCase() === "COMPLETED";
-  const isPartial = isCompleted && providerRefundedAmountCents < paymentTotal;
+  const parent =
+    !paymentRow.appointmentId &&
+    paymentRow.partnerAccountId &&
+    paymentRow.partnerBookingId
+      ? {
+          accountId: paymentRow.partnerAccountId,
+          bookingId: paymentRow.partnerBookingId,
+        }
+      : null;
+  if (
+    !paymentRow.appointmentId &&
+    !parent &&
+    (paymentRow.partnerAccountId || paymentRow.partnerBookingId)
+  )
+    throw new Error("square_refund_parent_binding_invalid");
   const now = new Date();
 
   await db.transaction(async (tx) => {
-    if (paymentRow.appointmentId) {
+    if (parent) {
+      // Match the parent billing/collection lock order before touching the
+      // payment, refund operation, or invoice. Provider reads happen above,
+      // outside the transaction, so network time never holds this lock.
+      const binding = await lockPartnerRequestFinancials(
+        tx,
+        parent.accountId,
+        parent.bookingId,
+      );
+      if (binding.modelVersion !== 2 || binding.appointmentId)
+        throw new Error("square_refund_parent_binding_invalid");
+      const [lockedPayment] = await tx
+        .select()
+        .from(payments)
+        .where(eq(payments.id, paymentRow.id))
+        .for("update")
+        .limit(1);
+      if (
+        !lockedPayment ||
+        lockedPayment.appointmentId ||
+        lockedPayment.partnerAccountId !== parent.accountId ||
+        lockedPayment.partnerBookingId !== parent.bookingId ||
+        lockedPayment.provider !== "square" ||
+        lockedPayment.providerPaymentId !== refund.payment_id ||
+        lockedPayment.amount !== paymentRow.amount ||
+        lockedPayment.jobAmountCents !== paymentRow.jobAmountCents ||
+        lockedPayment.tipCents !== paymentRow.tipCents ||
+        lockedPayment.totalAmountCents !== paymentRow.totalAmountCents
+      )
+        throw new Error("square_refund_parent_payment_changed");
+      // An older provider read must not undo a refund another event already
+      // recorded while this event waited for the parent's lock.
+      providerRefundedAmountCents = Math.max(
+        providerRefundedAmountCents,
+        lockedPayment.refundedAmountCents,
+      );
+    } else if (paymentRow.appointmentId) {
       await lockAppointmentInvoiceCollection(tx, paymentRow.appointmentId);
     }
     await tx
@@ -1328,6 +1383,8 @@ async function reconcileSquareRefund(refund: SquareRefund): Promise<{
     if (paymentRow.appointmentId) {
       await syncAppointmentCardTipCents(tx, paymentRow.appointmentId);
       await reconcilePartnerAppointmentInvoices(tx, paymentRow.appointmentId);
+    } else if (parent) {
+      await reconcilePartnerAppointmentInvoices(tx, parent);
     }
   });
 
@@ -1336,7 +1393,10 @@ async function reconcileSquareRefund(refund: SquareRefund): Promise<{
     paymentId: paymentRow.id,
     paymentAttemptId: paymentRow.paymentAttemptId,
     status:
-      isPartial || !paymentRow.appointmentId ? "needs_review" : "processed",
+      (isCompleted && providerRefundedAmountCents < paymentTotal) ||
+      (!paymentRow.appointmentId && !parent)
+        ? "needs_review"
+        : "processed",
   };
 }
 

@@ -50,7 +50,7 @@ describe("partner V2 scheduling-safe service catalog", () => {
     expect(page).not.toContain("/api/portal/rates");
     expect(page).not.toContain("mergeServices(");
     expect(page).toMatch(
-      /loadPartnerPortalResource\(\s*\(\) => callPartnerApi\("\/api\/portal\/v2\/service-catalog"\),\s*parseCatalogServices/u,
+      /loadPartnerPortalResource\(\s*\(\) => callPartnerApi\("\/api\/portal\/v2\/service-catalog"\),\s*parseBookingCatalog/u,
     );
     expect(parser).toContain(
       "baseOptions: parseCatalogBaseOptions(item.baseOptions)",

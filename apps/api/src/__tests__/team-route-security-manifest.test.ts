@@ -156,6 +156,114 @@ function partnerDelegatedGuard(routeMethod: RouteMethodSource): {
   verify: () => void;
 } | null {
   const prefix = "app/api/admin/partner-management/v1/";
+  const structuredRoutes: Record<
+    string,
+    { helper: string; file: string; operation?: string; permissions: string[] }
+  > = {
+    [`GET ${prefix}accounts/[accountId]/service-rates/route.ts`]: {
+      helper: "getPartnerServiceRates",
+      file: "partner-structured-rates-route",
+      permissions: ["partners.accounts.read", "partners.commercial.read"],
+    },
+    [`PATCH ${prefix}accounts/[accountId]/service-rates/route.ts`]: {
+      helper: "mutatePartnerServiceRates",
+      file: "partner-structured-rates-route",
+      permissions: ["partners.rates", "partners.accounts.manage"],
+    },
+    ...Object.fromEntries(
+      [
+        ["POST", "price", "price"],
+        ["POST", "visits", "visit"],
+        ["PATCH", "visits/[visitId]", "visit_status"],
+        ["POST", "visits/[visitId]/schedule", "visit_reschedule"],
+      ].map(([method, path, operation]) => [
+        `${method} ${prefix}service-requests/[jobId]/${path}/route.ts`,
+        {
+          helper: "partnerMultiServiceMutationRoute",
+          file: "partner-multi-service-route",
+          operation,
+          permissions: [
+            "partners.accounts.read",
+            "appointments.read",
+            operation === "price"
+              ? "partners.commercial.manage"
+              : "appointments.update",
+          ],
+        },
+      ]),
+    ),
+  };
+  const structured =
+    structuredRoutes[`${routeMethod.method} ${routeMethod.route}`];
+  if (structured) {
+    const helperFile = fs.readFileSync(
+      path.resolve(API_ROOT, `src/lib/${structured.file}.ts`),
+      "utf8",
+    );
+    const start = helperFile.indexOf(`function ${structured.helper}(`);
+    const rest = helperFile.slice(start);
+    const next = /\n(?:export )?(?:async )?function /u.exec(rest);
+    const helper = rest.slice(0, next?.index ?? rest.length);
+    const read = routeMethod.method === "GET";
+    const marker = read ? "requirePermission(" : "beginTeamMutation(";
+    return {
+      index: routeMethod.methodSource.indexOf(`${structured.helper}(`),
+      permissions: structured.permissions,
+      verify: () => {
+        expect(start).toBeGreaterThanOrEqual(0);
+        expect(routeMethod.fileSource).toContain(
+          `from "@/lib/${structured.file}"`,
+        );
+        const signature = structured.operation
+          ? `context: { params: Promise<{ jobId?: string${structured.operation.startsWith("visit_") ? "; visitId?: string" : ""} }> }, )`
+          : "context: Context, ): Promise<Response>";
+        const argumentsText = structured.operation
+          ? `request, context, "${structured.operation}"`
+          : "request, (await context.params).accountId";
+        expect(routeMethod.methodSource.replace(/\s+/gu, " ").trim()).toBe(
+          `export async function ${routeMethod.method}( request: NextRequest, ${signature} { return ${structured.helper}(${argumentsText}); }`,
+        );
+        const guardIndex = helper.indexOf(marker);
+        expect(guardIndex).toBeGreaterThanOrEqual(0);
+        expect(
+          helper.slice(0, guardIndex).replace(/await\s*$/u, ""),
+        ).not.toMatch(/\bawait\b/u);
+        expect(guardIndex).toBeLessThan(firstSensitiveBoundary(helper)!);
+        for (const permission of structured.permissions)
+          expect(helper).toContain(`"${permission}"`);
+        expect(helper).toContain(
+          read
+            ? "if (denied) return denied;"
+            : "if (!boundary.ok) return boundary.response;",
+        );
+        if (read) expect(helper).toContain('{ mode: "all" }');
+        else {
+          expect(helper).toContain('principalTypes: ["human"]');
+          expect(helper).toContain("requiresIdempotency: true");
+          expect(helper).toContain("claimTeamMutationIdempotency(");
+          expect(helper).toContain("completeTeamMutationIdempotency(");
+          expect(helper).toContain("mutation.audit.insertSuccess(");
+          if (structured.operation) {
+            expect(helper).toContain("mutation.expectedVersion");
+            expect(helper).toContain(
+              'risk: operation === "price" ? "financial" : "external"',
+            );
+            expect(helper).toContain("maxAuthenticationAgeSeconds: 15 * 60");
+          } else {
+            expect(helper).toContain('risk: "financial"');
+            const writer = fs.readFileSync(
+              path.resolve(API_ROOT, "src/lib/partner-structured-rates.ts"),
+              "utf8",
+            );
+            expect(helper).toContain("savePartnerServiceRates(");
+            expect(writer).toContain(
+              "assertTeamMutationExpectedVersion(mutation, account.portalRateRevision)",
+            );
+          }
+        }
+      },
+    };
+  }
   const delegates: Record<string, string> = {
     [`GET ${prefix}request-inbox/route.ts`]: "listPartnerRequestInbox",
     [`GET ${prefix}request-inbox/[kind]/[requestId]/route.ts`]:

@@ -1,3 +1,5 @@
+import { completeLocalPartnerRateSetup } from "./lib/partner-service-rate-browser-setup";
+import { localPartnerRehearsalDatabaseUrl } from "./lib/partner-local-rehearsal";
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
 import { randomUUID } from "node:crypto";
@@ -33,8 +35,7 @@ function fixture(input: Record<string, unknown>, crm = false): Promise<any> {
           NODE_ENV: "test",
           DOTENV_CONFIG_PATH: "/dev/null",
           DATABASE_SSL: "false",
-          DATABASE_URL:
-            "postgresql://portal_test:portal_local_only@127.0.0.1:55443/portal_access_browser",
+          DATABASE_URL: localPartnerRehearsalDatabaseUrl(),
         },
       },
       (error, stdout, stderr) => {
@@ -305,15 +306,11 @@ async function createCompany(staffPage: Page, page: Page, suffix: string) {
     );
   await staffPage
     .getByRole("button", {
-      name: "Create company & invite Administrator",
+      name: "Create company and continue",
       exact: true,
     })
     .click();
-  await expect(
-    staffPage.locator(
-      'section[aria-labelledby="partner-relationship-setup-heading"] [role="status"]',
-    ),
-  ).toBeVisible({ timeout: 30_000 });
+  await completeLocalPartnerRateSetup(staffPage);
   const invitation = await fixture({ action: "invitation", email });
   try {
     await page.goto(invitation.url);
@@ -664,7 +661,26 @@ for (const width of [1440, 375])
         );
         configured = { accountId, profileId };
         expected.serviceLabel = serviceLabel;
-        await page.goto(`${base}/partners/book`);
+        const legacyDraft = await page.evaluate(async () => {
+          const response = await fetch("/api/partners/portal/booking-drafts", {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              "Idempotency-Key": crypto.randomUUID(),
+            },
+            body: JSON.stringify({ modelVersion: 1 }),
+          });
+          return { status: response.status, body: await response.json() };
+        });
+        assert.equal(
+          legacyDraft.body.ok,
+          true,
+          "Legacy request remains available with the multi-service gate enabled",
+        );
+        assert.equal(legacyDraft.body.draft.modelVersion ?? 1, 1);
+        await page.goto(
+          `${base}/partners/book?draftId=${legacyDraft.body.draft.id}`,
+        );
         await requestStep(page, "Service address");
         await page
           .getByLabel("Street address", { exact: true })

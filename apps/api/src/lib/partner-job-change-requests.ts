@@ -222,7 +222,7 @@ export function partnerJobChangeSnapshotStillMatches(
   currentScopeSnapshot: Readonly<Record<string, unknown>> | null,
 ): boolean {
   return (
-    JSON.stringify(snapshot.current) ===
+    JSON.stringify(projectPartnerJobPublicChangeFields(snapshot.current)) ===
     JSON.stringify(projectPartnerJobPublicChangeFields(currentScopeSnapshot))
   );
 }

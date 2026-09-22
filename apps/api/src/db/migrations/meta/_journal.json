@@ -1130,54 +1130,122 @@
       "breakpoints": true
     },
     {
-      "idx": 161, "version": "7", "when": 1795046400000,
-      "tag": "0164_partner_review_service_requests", "breakpoints": true
+      "idx": 161,
+      "version": "7",
+      "when": 1795046400000,
+      "tag": "0164_partner_review_service_requests",
+      "breakpoints": true
     },
     {
-      "idx": 162, "version": "7", "when": 1795132800000,
-      "tag": "0165_partner_relationship_workflows", "breakpoints": true
+      "idx": 162,
+      "version": "7",
+      "when": 1795132800000,
+      "tag": "0165_partner_relationship_workflows",
+      "breakpoints": true
     },
     {
-      "idx": 163, "version": "7", "when": 1795219200000,
-      "tag": "0166_partner_relationship_invitations", "breakpoints": true
+      "idx": 163,
+      "version": "7",
+      "when": 1795219200000,
+      "tag": "0166_partner_relationship_invitations",
+      "breakpoints": true
     },
     {
-      "idx": 164, "version": "7", "when": 1795305600000,
-      "tag": "0167_partner_crm_billing", "breakpoints": true
+      "idx": 164,
+      "version": "7",
+      "when": 1795305600000,
+      "tag": "0167_partner_crm_billing",
+      "breakpoints": true
     },
     {
-      "idx": 165, "version": "7", "when": 1795392000000,
-      "tag": "0168_partner_service_notifications", "breakpoints": true
+      "idx": 165,
+      "version": "7",
+      "when": 1795392000000,
+      "tag": "0168_partner_service_notifications",
+      "breakpoints": true
     },
     {
-      "idx": 166, "version": "7", "when": 1795478400000,
-      "tag": "0169_partner_advanced_service_workflows", "breakpoints": true
+      "idx": 166,
+      "version": "7",
+      "when": 1795478400000,
+      "tag": "0169_partner_advanced_service_workflows",
+      "breakpoints": true
     },
     {
-      "idx": 167, "version": "7", "when": 1795564800000,
-      "tag": "0170_partner_draft_invoice_line_editing", "breakpoints": true
+      "idx": 167,
+      "version": "7",
+      "when": 1795564800000,
+      "tag": "0170_partner_draft_invoice_line_editing",
+      "breakpoints": true
     },
     {
-      "idx": 168, "version": "7", "when": 1795651200000,
-      "tag": "0171_partner_payment_allocation_reconciliation", "breakpoints": true
+      "idx": 168,
+      "version": "7",
+      "when": 1795651200000,
+      "tag": "0171_partner_payment_allocation_reconciliation",
+      "breakpoints": true
     },
     {
-      "idx": 169, "version": "7", "when": 1795737600000,
-      "tag": "0172_partner_additional_service_jobs", "breakpoints": true
+      "idx": 169,
+      "version": "7",
+      "when": 1795737600000,
+      "tag": "0172_partner_additional_service_jobs",
+      "breakpoints": true
     },
     {
-      "idx": 170, "version": "7", "when": 1795824000000,
-      "tag": "0173_moving_hourly_labor", "breakpoints": true
+      "idx": 170,
+      "version": "7",
+      "when": 1795824000000,
+      "tag": "0173_moving_hourly_labor",
+      "breakpoints": true
     },
     {
-      "idx": 171, "version": "7", "when": 1795910400000,
-      "tag": "0174_dynamic_crew_labor", "breakpoints": true
+      "idx": 171,
+      "version": "7",
+      "when": 1795910400000,
+      "tag": "0174_dynamic_crew_labor",
+      "breakpoints": true
     },
     {
       "idx": 172,
       "version": "7",
       "when": 1795996800000,
       "tag": "0175_partner_owner_request_alerts",
+      "breakpoints": true
+    },
+    {
+      "idx": 173,
+      "version": "7",
+      "when": 1796083200000,
+      "tag": "0176_partner_multi_service_requests",
+      "breakpoints": true
+    },
+    {
+      "idx": 174,
+      "version": "7",
+      "when": 1796169600000,
+      "tag": "0177_partner_owner_alert_stages",
+      "breakpoints": true
+    },
+    {
+      "idx": 175,
+      "version": "7",
+      "when": 1796256000000,
+      "tag": "0178_partner_owner_alert_stage_integrity",
+      "breakpoints": true
+    },
+    {
+      "idx": 176,
+      "version": "7",
+      "when": 1796342400000,
+      "tag": "0179_partner_visit_change_requests",
+      "breakpoints": true
+    },
+    {
+      "idx": 177,
+      "version": "7",
+      "when": 1796428800000,
+      "tag": "0180_partner_parent_refund_allocation_scope",
       "breakpoints": true
     }
   ]

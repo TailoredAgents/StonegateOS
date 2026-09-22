@@ -38,6 +38,7 @@ const JOB_STATUS_OPTIONS = [
   ["approval_needed", "Approval needed"],
   ["under_review", "Under review"],
   ["confirmed", "Confirmed"],
+  ["partially_scheduled", "Partially scheduled"],
   ["en_route", "En route"],
   ["in_progress", "In progress"],
   ["completed", "Completed"],
@@ -50,12 +51,17 @@ const JOB_VIEWS = [
   {
     key: "upcoming",
     label: "Upcoming",
-    statuses: ["confirmed", "en_route", "in_progress"],
+    statuses: ["confirmed", "partially_scheduled", "en_route", "in_progress"],
   },
   {
     key: "attention",
     label: "Needs attention",
-    statuses: ["requested", "approval_needed", "under_review"],
+    statuses: [
+      "requested",
+      "approval_needed",
+      "under_review",
+      "partially_scheduled",
+    ],
   },
   {
     key: "history",
@@ -104,6 +110,8 @@ function nextStep(status: string): string {
       return "An account approval is needed";
     case "under_review":
       return "Stonegate is reviewing the details";
+    case "partially_scheduled":
+      return "Review confirmed visits; some services still need a date";
     case "confirmed":
       return "Check the arrival window and site contact";
     case "en_route":
@@ -356,11 +364,14 @@ export default async function PartnerBookingsPage({
                         <PartnerStatusBadge status={job.status} />
                       </div>
                       <p className="mt-1 text-sm font-medium text-slate-700">
-                        {humanize(job.service.key)}
+                        {job.service.label ?? humanize(job.service.key)}
                       </p>
                       <p className="mt-2 text-sm text-primary-800">
                         <span className="font-semibold">Next:</span>{" "}
-                        {nextStep(job.status)}
+                        {job.modelVersion === 2 &&
+                        ["confirmed", "in_progress"].includes(job.status)
+                          ? "Review service visits and progress"
+                          : nextStep(job.status)}
                       </p>
                       <div className="mt-3 flex flex-col gap-2 text-sm text-slate-600 sm:flex-row sm:flex-wrap sm:gap-x-5">
                         <span className="inline-flex items-center gap-2">
@@ -369,7 +380,9 @@ export default async function PartnerBookingsPage({
                             aria-hidden="true"
                           />
                           <time dateTime={window?.startAt}>
-                            {formatPartnerArrivalWindow(window)}
+                            {job.modelVersion === 2
+                              ? "Open request for service visits"
+                              : formatPartnerArrivalWindow(window)}
                           </time>
                         </span>
                         {job.location.address ? (

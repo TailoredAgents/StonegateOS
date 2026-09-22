@@ -44,6 +44,7 @@ const WRITER_INVENTORY = {
   "apps/api/src/lib/partner-portal-v2-approvals.ts": "capacity_locked",
   "apps/api/src/lib/partner-portal-v2-scheduling/service.ts": "capacity_locked",
   "apps/api/src/lib/partner-staff-schedule.ts": "capacity_locked",
+  "apps/api/src/lib/partner-multi-service.ts": "capacity_locked",
   "apps/api/src/lib/partner-repeat-work.ts": "capacity_locked",
   "apps/api/src/lib/partner-relationship-management.ts": "capacity_locked",
   "apps/api/src/lib/payment-ledger.ts": "metadata_only",
@@ -59,6 +60,21 @@ type LockedBoundary = Readonly<{
 }>;
 
 const LOCKED_BOUNDARIES: readonly LockedBoundary[] = [
+  {
+    path: "apps/api/src/lib/partner-multi-service.ts",
+    anchor: "export async function createPartnerMultiServiceVisit(",
+    protectedOperation: "inspectScheduleConflicts(tx",
+  },
+  {
+    path: "apps/api/src/lib/partner-multi-service.ts",
+    anchor: "export async function updatePartnerMultiServiceVisit(",
+    protectedOperation: ".update(appointments)",
+  },
+  {
+    path: "apps/api/src/lib/partner-multi-service.ts",
+    anchor: "export async function cancelPartnerMultiServiceRequest(",
+    protectedOperation: ".update(appointments)",
+  },
   {
     path: "apps/api/src/lib/partner-repeat-work.ts",
     anchor: "export async function mutatePartnerRecurringSeriesLifecycle(",
@@ -260,8 +276,8 @@ describe("schedule writer inventory", () => {
     expect(mutation).not.toMatch(
       /startAt|status|duration|travelBuffer|capacity|resource|finalTotalCents|completedAt|commission/iu,
     );
-    expect(source).toContain(
-      "lockAppointmentInvoiceCollection(tx, input.appointmentId)",
+    expect(source).toMatch(
+      /lockPartnerRequestFinancials\(\s*tx,\s*input\.accountId,\s*input\.jobId,?\s*\)/u,
     );
   });
 });

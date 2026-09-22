@@ -1,3 +1,4 @@
+import { lockMultiServiceRequestIfApplicable } from "./partner-request-financials";
 import { randomUUID } from "node:crypto";
 import { and, eq, sql } from "drizzle-orm";
 import {
@@ -162,6 +163,7 @@ export async function createPartnerJobChangeRequest(
       "The job was not found.",
     );
   }
+  await lockMultiServiceRequestIfApplicable(tx, accountId, input.jobId);
   await acquireScheduleConflictLock(tx);
   await acquirePartnerJobMutationLock(tx, accountId, input.jobId);
   const [job] = await tx
@@ -171,10 +173,10 @@ export async function createPartnerJobChangeRequest(
       scopeSnapshot: partnerBookings.scopeSnapshot,
       version: partnerBookings.version,
       updatedAt: partnerBookings.updatedAt,
-      appointmentStatus: appointments.status,
+      appointmentStatus: sql<string>`coalesce(${appointments.status}::text, ${partnerBookings.publicStatus})`,
     })
     .from(partnerBookings)
-    .innerJoin(appointments, eq(partnerBookings.appointmentId, appointments.id))
+    .leftJoin(appointments, eq(partnerBookings.appointmentId, appointments.id))
     .innerJoin(
       partnerAccountMemberships,
       and(
@@ -489,6 +491,7 @@ export async function supersedePendingPartnerJobChangeRequestForCancellation(
   ) {
     throw new Error("partner_job_change_cancellation_revision_invalid");
   }
+  await lockMultiServiceRequestIfApplicable(tx, input.accountId, input.jobId);
   await acquireScheduleConflictLock(tx);
   await acquirePartnerJobMutationLock(tx, input.accountId, input.jobId);
   const [pending] = await tx
@@ -664,6 +667,11 @@ export async function decidePartnerJobChangeRequestAsStaff(
       },
     );
   }
+  await lockMultiServiceRequestIfApplicable(
+    tx,
+    identity.accountId,
+    identity.bookingId,
+  );
   await acquireScheduleConflictLock(tx);
   await acquirePartnerJobMutationLock(
     tx,
@@ -684,7 +692,7 @@ export async function decidePartnerJobChangeRequestAsStaff(
       publicStatus: partnerBookings.publicStatus,
       scopeSnapshot: partnerBookings.scopeSnapshot,
       bookingRevision: partnerBookings.version,
-      appointmentStatus: appointments.status,
+      appointmentStatus: sql<string>`coalesce(${appointments.status}::text, ${partnerBookings.publicStatus})`,
     })
     .from(partnerJobChangeRequests)
     .innerJoin(
@@ -697,9 +705,9 @@ export async function decidePartnerJobChangeRequestAsStaff(
         eq(partnerBookings.id, partnerJobChangeRequests.partnerBookingId),
       ),
     )
-    .innerJoin(appointments, eq(appointments.id, partnerBookings.appointmentId))
+    .leftJoin(appointments, eq(appointments.id, partnerBookings.appointmentId))
     .where(eq(partnerJobChangeRequests.id, input.requestId))
-    .for("update")
+    .for("update", { of: partnerJobChangeRequests })
     .limit(1);
   if (!current) {
     throw new TeamMutationFailure(
@@ -1037,6 +1045,7 @@ export async function updatePartnerJobReferences(
       "The job was not found.",
     );
   }
+  await lockMultiServiceRequestIfApplicable(tx, accountId, input.jobId);
   await acquireScheduleConflictLock(tx);
   await acquirePartnerJobMutationLock(tx, accountId, input.jobId);
   const [job] = await tx
@@ -1048,10 +1057,10 @@ export async function updatePartnerJobReferences(
       poNumber: partnerBookings.poNumber,
       costCenter: partnerBookings.costCenter,
       projectReference: partnerBookings.projectReference,
-      appointmentStatus: appointments.status,
+      appointmentStatus: sql<string>`coalesce(${appointments.status}::text, ${partnerBookings.publicStatus})`,
     })
     .from(partnerBookings)
-    .innerJoin(appointments, eq(partnerBookings.appointmentId, appointments.id))
+    .leftJoin(appointments, eq(partnerBookings.appointmentId, appointments.id))
     .innerJoin(
       partnerAccountMemberships,
       and(

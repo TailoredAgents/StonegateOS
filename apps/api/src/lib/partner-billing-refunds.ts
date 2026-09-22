@@ -6,7 +6,7 @@ import {
   partnerBookings,
   payments,
 } from "@/db";
-import { lockAppointmentInvoiceCollection } from "@/lib/partner-invoice-ledger";
+import { lockPartnerRequestFinancials } from "./partner-request-financials";
 import { refundSquarePayment } from "@/lib/square-client";
 import { reconcileSquareRefundEvent } from "@/lib/square-payments";
 import { getTeamOperationKillSwitchForRisk } from "@/lib/team-operation-kill-switch";
@@ -20,6 +20,9 @@ export async function processPartnerBillingRefundOperation(
     .select({
       request: partnerBillingRefundRequests,
       appointmentId: partnerBookings.appointmentId,
+      bookingId: partnerBookings.id,
+      paymentBookingId: payments.partnerBookingId,
+      paymentAccountId: payments.partnerAccountId,
       providerPaymentId: payments.providerPaymentId,
       provider: payments.provider,
       paymentAppointmentId: payments.appointmentId,
@@ -53,7 +56,10 @@ export async function processPartnerBillingRefundOperation(
   if (
     operation.provider !== "square" ||
     !operation.providerPaymentId ||
-    operation.appointmentId !== operation.paymentAppointmentId
+    (operation.appointmentId
+      ? operation.appointmentId !== operation.paymentAppointmentId
+      : operation.paymentBookingId !== operation.bookingId ||
+        operation.paymentAccountId !== operation.request.partnerAccountId)
   )
     throw new Error("partner_refund_binding_invalid");
   if (getTeamOperationKillSwitchForRisk("financial"))
@@ -72,7 +78,11 @@ export async function processPartnerBillingRefundOperation(
   const providerRefundId = operation.request.providerRefundId ?? refund!.id;
   if (!providerRefundId) throw new Error("partner_refund_provider_id_missing");
   await db.transaction(async (tx) => {
-    await lockAppointmentInvoiceCollection(tx, operation.appointmentId);
+    await lockPartnerRequestFinancials(
+      tx,
+      operation.request.partnerAccountId,
+      operation.bookingId,
+    );
     const [current] = await tx
       .select()
       .from(partnerBillingRefundRequests)

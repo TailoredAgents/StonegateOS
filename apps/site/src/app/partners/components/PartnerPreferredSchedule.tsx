@@ -15,6 +15,7 @@ export type PartnerPreferredScheduleFormValues =
   };
 
 type Props = {
+  multiService?: boolean;
   value: PartnerPreferredScheduleFormValues;
   onChange: <K extends keyof PartnerPreferredScheduleFormValues>(
     key: K,
@@ -129,6 +130,7 @@ function ScheduleDetails({
 }
 
 export function PartnerPreferredSchedule({
+  multiService = false,
   value,
   onChange,
   fieldErrors,
@@ -295,8 +297,9 @@ export function PartnerPreferredSchedule({
   return (
     <div className="space-y-4">
       <p className="text-sm leading-6 text-slate-600">
-        Choose a date and time that work for you. Stonegate will review your
-        request and confirm the appointment.
+        {multiService
+          ? "Choose preferred timing for your project. Stonegate will confirm the date and time of each visit."
+          : "Choose a date and time that work for you. Stonegate will review your request and confirm the appointment."}
       </p>
       <ErrorMessages
         id="partner-book-preferred-error"

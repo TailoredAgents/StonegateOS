@@ -1,3 +1,9 @@
+import {
+  partnerRequestNextArrivalStartSql,
+  partnerRequestNextArrivalEndSql,
+  partnerRequestCompletedAtSql,
+} from "@/lib/partner-request-schedule";
+import { getPartnerMultiServiceRequest } from "@/lib/partner-multi-service";
 import type { NextRequest } from "next/server";
 import { partnerJobContact } from "@/lib/partner-job-contact";
 import { partnerAdditionalServiceEligibilitySql } from "@/lib/partner-additional-service";
@@ -146,13 +152,16 @@ export async function GET(
     const [job] = await db
       .select({
         id: partnerBookings.id,
+        modelVersion: partnerBookings.modelVersion,
         appointmentId: partnerBookings.appointmentId,
         status: partnerBookings.publicStatus,
         confirmationMode: partnerBookings.confirmationMode,
         serviceKey: partnerBookings.serviceKey,
         tierKey: partnerBookings.tierKey,
         addOns: partnerBookings.addOnsSnapshot,
-        amountCents: partnerBookings.amountCents,
+        amountCents: sql<
+          number | null
+        >`case when ${partnerBookings.modelVersion}=2 then coalesce(${partnerBookings.finalTotalCents},${partnerBookings.quotedTotalCents}) else ${partnerBookings.amountCents} end`,
         currency: partnerBookings.currency,
         rateSnapshot: partnerBookings.rateSnapshot,
         scope: partnerBookings.scopeSnapshot,
@@ -171,14 +180,14 @@ export async function GET(
         cancellationAutomaticFeeMinor:
           partnerAccountCancellationPolicies.automaticFeeMinor,
         cancellationPolicyRevision: partnerAccountCancellationPolicies.revision,
-        arrivalStartAt: partnerBookings.arrivalWindowStartAt,
-        arrivalEndAt: partnerBookings.arrivalWindowEndAt,
+        arrivalStartAt: partnerRequestNextArrivalStartSql,
+        arrivalEndAt: partnerRequestNextArrivalEndSql,
         version: partnerBookings.version,
         createdAt: partnerBookings.createdAt,
         updatedAt: partnerBookings.updatedAt,
         appointmentStatus: appointments.status,
         additionalServiceEligible: partnerAdditionalServiceEligibilitySql(),
-        appointmentCompletedAt: appointments.completedAt,
+        appointmentCompletedAt: partnerRequestCompletedAtSql,
         locationId: partnerAccountLocations.id,
         siteName: partnerAccountLocations.siteName,
         externalPropertyId: partnerAccountLocations.externalPropertyId,
@@ -194,7 +203,7 @@ export async function GET(
         timezone: partnerAccountLocations.timezone,
       })
       .from(partnerBookings)
-      .innerJoin(
+      .leftJoin(
         appointments,
         eq(partnerBookings.appointmentId, appointments.id),
       )
@@ -546,7 +555,9 @@ export async function GET(
         .from(etaMessageDrafts)
         .where(
           and(
-            eq(etaMessageDrafts.appointmentId, job.appointmentId),
+            job.appointmentId
+              ? eq(etaMessageDrafts.appointmentId, job.appointmentId)
+              : sql`false`,
             eq(etaMessageDrafts.status, "sent"),
             isNotNull(etaMessageDrafts.sentAt),
             isNotNull(etaMessageDrafts.etaStartAt),
@@ -559,7 +570,11 @@ export async function GET(
       db
         .select({ count: sql<number>`count(*)::int` })
         .from(appointmentCrewMembers)
-        .where(eq(appointmentCrewMembers.appointmentId, job.appointmentId))
+        .where(
+          job.appointmentId
+            ? eq(appointmentCrewMembers.appointmentId, job.appointmentId)
+            : sql`false`,
+        )
         .then((rows) => rows[0]?.count ?? 0),
       db
         .select({
@@ -608,9 +623,21 @@ export async function GET(
     const cancellationReviewPending = Boolean(
       pendingCancellationRequest || cancellationReconciliationCase,
     );
+    const multiService =
+      job.modelVersion === 2
+        ? await getPartnerMultiServiceRequest(db, principal.accountId, job.id, {
+            financials: canReadRates,
+            photos: canReadProof,
+          })
+        : null;
+    const nextVisit = multiService?.visits.find(
+      (visit) => visit.status === "scheduled" || visit.status === "in_progress",
+    );
     const cancellation = evaluatePartnerCancellation({
       status: job.status,
-      promisedArrivalStartAt: job.arrivalStartAt,
+      promisedArrivalStartAt: nextVisit
+        ? new Date(nextVisit.arrivalStartAt ?? nextVisit.startAt)
+        : job.arrivalStartAt,
       now: new Date(),
       canCancel: hasPartnerCapability(principal, "bookings.cancel"),
       reviewPending: cancellationReviewPending,
@@ -634,9 +661,16 @@ export async function GET(
     });
     const actionAvailability = resolvePartnerJobActionAvailability({
       additionalServiceEligible: job.additionalServiceEligible,
-      status: job.status,
-      appointmentStatus: job.appointmentStatus,
-      hasPromisedWindow: Boolean(job.arrivalStartAt && job.arrivalEndAt),
+      status:
+        multiService &&
+        !["canceled", "completed", "declined"].includes(job.status) &&
+        nextVisit
+          ? "confirmed"
+          : job.status,
+      appointmentStatus: job.appointmentStatus ?? "requested",
+      hasPromisedWindow: Boolean(
+        nextVisit || (job.arrivalStartAt && job.arrivalEndAt),
+      ),
       proofAvailable: proofPackages.length > 0,
       revisionAvailable: true,
       changeRequestPending: Boolean(pendingChangeRequest),
@@ -667,10 +701,16 @@ export async function GET(
         correlationId,
         job: {
           id: job.id,
+          modelVersion: job.modelVersion,
+          ...(multiService ? { multiService } : {}),
           status: job.status,
           confirmationMode: job.confirmationMode,
           service: {
             key: job.serviceKey,
+            label:
+              typeof job.scope?.["serviceLabel"] === "string"
+                ? job.scope["serviceLabel"]
+                : undefined,
             tierKey: job.tierKey,
             addOns: projectPartnerAddOnSnapshots(job.addOns).map((addOn) => ({
               key: addOn.key,

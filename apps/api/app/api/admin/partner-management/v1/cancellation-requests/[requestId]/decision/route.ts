@@ -1,3 +1,4 @@
+import { queuePartnerVisitCalendarCancellations } from "@/lib/partner-visit-calendar-cancellation";
 import type { NextRequest } from "next/server";
 import { z } from "zod";
 import { getDb } from "@/db";
@@ -160,6 +161,13 @@ export async function POST(
         },
         committedAt: decided.resolvedAt,
       });
+      if (decided.state === "approved")
+        await queuePartnerVisitCalendarCancellations(tx, {
+          accountId: decided.partnerAccountId,
+          bookingId: decided.partnerBookingId,
+          changedAt: decided.resolvedAt,
+          sourceAuditEventId: audit.auditEventId,
+        });
       const mutationResult = teamMutationSuccessResult(
         mutation,
         {

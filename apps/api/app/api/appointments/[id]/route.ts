@@ -1,3 +1,4 @@
+import { assertAppointmentHasIndependentFinancials } from "@/lib/partner-request-financials";
 import type { ActionPolicy, MutationResult } from "@myst-os/sdk";
 import type { NextRequest } from "next/server";
 import { and, eq } from "drizzle-orm";
@@ -252,6 +253,7 @@ export async function PATCH(
     claim = claimed.claim;
 
     const outcome = await database.transaction(async (tx) => {
+      await assertAppointmentHasIndependentFinancials(tx, appointmentId);
       const [appointment] = await tx
         .select({
           id: appointments.id,

@@ -3,6 +3,7 @@ import test from "node:test";
 import {
   parseLocations,
   parseCatalogServices,
+  parseBookingCatalog,
   parseProofDefaults,
   parseBookingDraft,
   parseBookingAvailability,
@@ -289,6 +290,91 @@ void test("request validation and scheduling responses must be complete before r
     parseBookingAvailability({
       ok: true,
       availability: { ...availability, pricing: { status: "review_required" } },
+    }),
+    null,
+  );
+});
+
+void test("multi-service drafts preserve normalized service lines without singular legacy scope", () => {
+  const line = {
+    id: "11111111-1111-4111-8111-111111111111",
+    serviceKey: "painting",
+    description: "Paint the lobby",
+    scope: { workArea: "interior" },
+  };
+  const draft = { ...validDraft, modelVersion: 2, serviceLines: [line] };
+  const parsed = parseBookingDraft({ ok: true, draft });
+  assert.ok(parsed);
+  assert.deepEqual(parsed.serviceLines, [
+    { ...line, selectedAddOns: [], proofRequirements: {} },
+  ]);
+  for (const patch of [
+    { serviceKey: "painting" },
+    { tierKey: "standard" },
+    { selectedAddOns: [{ key: "stairs", quantity: 1 }] },
+    { serviceLines: undefined },
+    { serviceLines: [line, line] },
+    { serviceLines: [{ ...line, scope: { itemCount: "3" } }] },
+  ])
+    assert.equal(
+      parseBookingDraft({ ok: true, draft: { ...draft, ...patch } }),
+      null,
+    );
+  assert.ok(
+    parseBookingDraft({ ok: true, draft: { ...draft, serviceLines: [] } }),
+    "An empty selection can be autosaved",
+  );
+});
+
+void test("catalog capability and structured rates fail closed without hiding valid unpriced services", () => {
+  const catalog = {
+    ok: true,
+    services: [{ key: "painting", label: "Painting", bookable: true }],
+    requestModelVersion: 2,
+    structuredRatesStatus: "missing",
+    structuredRates: null,
+  };
+  assert.equal(parseBookingCatalog(catalog)?.multiServiceRequestsEnabled, true);
+  assert.equal(
+    parseBookingCatalog({ ...catalog, requestModelVersion: undefined })
+      ?.multiServiceRequestsEnabled,
+    false,
+  );
+  assert.equal(
+    parseBookingCatalog({ ...catalog, requestModelVersion: 3 }),
+    null,
+  );
+  assert.equal(
+    parseBookingCatalog({ ...catalog, structuredRatesStatus: "published" }),
+    null,
+  );
+  const card = {
+    versionId: "22222222-2222-4222-8222-222222222222",
+    currency: "USD",
+    visitMinimum: "125.50",
+    rates: [],
+  };
+  assert.deepEqual(
+    parseBookingCatalog({
+      ...catalog,
+      structuredRatesStatus: "published",
+      structuredRates: card,
+    })?.structuredRates,
+    card,
+  );
+  assert.equal(
+    parseBookingCatalog({
+      ...catalog,
+      structuredRatesStatus: "hidden",
+      structuredRates: card,
+    }),
+    null,
+  );
+  assert.equal(
+    parseBookingCatalog({
+      ...catalog,
+      structuredRatesStatus: "published",
+      structuredRates: { ...card, visitMinimum: "invalid" },
     }),
     null,
   );

@@ -182,7 +182,7 @@ function assets() {
               builder.onResolve(
                 {
                   filter:
-                    /^(?:next\/(?:link|navigation)|\.\.\/actions\/(?:partner-request-inbox|partner-service-reviews|partner-reschedule-reviews|partner-administration|scheduling-resources))$/,
+                    /^(?:next\/(?:link|navigation)|\.\.\/actions\/(?:partner-request-inbox|partner-service-reviews|partner-multi-service|partner-reschedule-reviews|partner-administration|scheduling-resources))$/,
                 },
                 (args: any) => ({ path: args.path, namespace: "fixture" }),
               );
@@ -198,13 +198,17 @@ function assets() {
                         ? "export const useRouter=()=>({refresh(){}});"
                         : args.path.endsWith("partner-request-inbox")
                           ? `import{parsePartnerRequestInbox,parsePartnerRequestInboxDetail}from'${repo}/packages/sdk/src/partner-request-inbox.ts';${send}const read=async(name,input,parse)=>{const response=await call(name,input);if(response.ok===false)return response;const data=parse(response);return data?{ok:true,data}:{ok:false,message:'The response could not be verified. Try again.'}};export const loadPartnerRequestInbox=input=>read('list',input,parsePartnerRequestInbox);export const loadPartnerRequestDetail=(key,accountId)=>read('detail',{key,accountId},parsePartnerRequestInboxDetail);export const markPartnerRequestOpened=input=>call('opened',input).then(r=>r.ok===true&&r.opened===true);`
-                          : args.path.endsWith("partner-service-reviews")
-                            ? `${send}export const loadPartnerServiceReviews=input=>call('service',input);export const previewPartnerServiceArrival=input=>call('preview',input);`
-                            : args.path.endsWith("scheduling-resources")
-                              ? `${send}export const loadStaffAppointmentResources=input=>call('resources',input);`
-                              : args.path.endsWith("partner-reschedule-reviews")
-                                ? `${send}export const loadPartnerRescheduleReviews=input=>call('reschedule',input);export const decidePartnerRescheduleReview=input=>call('decision',input);`
-                                : `${send}export const partnerBillingDisputeDecisionAction=input=>call('decision',Object.fromEntries(input));export const partnerCancellationRequestDecisionAction=partnerBillingDisputeDecisionAction;export const partnerJobChangeRequestDecisionAction=partnerBillingDisputeDecisionAction;export const partnerLocationAddressReviewDecisionAction=partnerBillingDisputeDecisionAction;`;
+                          : args.path.endsWith("partner-multi-service")
+                            ? `${send}export const changePartnerServiceRequest=input=>call('multi-service',input);export const loadPartnerVisitResources=input=>call('visit-resources',input);`
+                            : args.path.endsWith("partner-service-reviews")
+                              ? `${send}export const loadPartnerServiceReviews=input=>call('service',input);export const previewPartnerServiceArrival=input=>call('preview',input);`
+                              : args.path.endsWith("scheduling-resources")
+                                ? `${send}export const loadStaffAppointmentResources=input=>call('resources',input);`
+                                : args.path.endsWith(
+                                      "partner-reschedule-reviews",
+                                    )
+                                  ? `${send}export const loadPartnerRescheduleReviews=input=>call('reschedule',input);export const decidePartnerRescheduleReview=input=>call('decision',input);`
+                                  : `${send}export const partnerBillingDisputeDecisionAction=input=>call('decision',Object.fromEntries(input));export const partnerCancellationRequestDecisionAction=partnerBillingDisputeDecisionAction;export const partnerJobChangeRequestDecisionAction=partnerBillingDisputeDecisionAction;export const partnerLocationAddressReviewDecisionAction=partnerBillingDisputeDecisionAction;`;
                   return {
                     contents,
                     loader: "js",

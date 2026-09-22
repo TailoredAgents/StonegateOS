@@ -1,4 +1,6 @@
 import { randomUUID } from "node:crypto";
+import { savePartnerServiceRates } from "@/lib/partner-structured-rates";
+import { completeTestPartnerRateCard } from "./fixtures/partner-service-rates";
 import { and, eq } from "drizzle-orm";
 import { NextRequest } from "next/server";
 import { POST as acceptInvitationRoute } from "../../app/api/portal/v2/invitations/accept/route";
@@ -34,7 +36,10 @@ import {
   PartnerWorkflowUpdateSchema,
 } from "@/lib/partner-relationship-management";
 import type { TeamMutationContext } from "@/lib/team-mutation";
-import { requirePartnerSession, revokePartnerSession } from "@/lib/partner-portal-auth";
+import {
+  requirePartnerSession,
+  revokePartnerSession,
+} from "@/lib/partner-portal-auth";
 
 const local =
   process.env["DATABASE_URL"] &&
@@ -67,6 +72,7 @@ async function fixture(existingEmail?: string) {
       name: "Local invitation test",
       permissions: [
         "partners.accounts.manage",
+        "partners.rates",
         "partners.invitations.send",
         "partners.invitations.revoke",
       ],
@@ -99,6 +105,25 @@ async function fixture(existingEmail?: string) {
       persona: "other",
       reason: "Existing relationship confirmed for isolated testing.",
     }),
+  );
+  await db().transaction((tx) =>
+    savePartnerServiceRates(
+      tx,
+      { ...mutation, expectedVersion: "1" },
+      result.accountId,
+      {
+        action: "publish",
+        portalVisible: true,
+        card: completeTestPartnerRateCard(),
+      },
+    ),
+  );
+  await db().transaction((tx) =>
+    enablePartnerRelationshipAsStaff(
+      tx,
+      { ...mutation, expectedVersion: "1" },
+      result.accountId,
+    ),
   );
   const [invitation] = await db()
     .select()
@@ -176,28 +201,103 @@ suite("relationship invitations / real PostgreSQL", () => {
     process.env["PUBLIC_SITE_URL"] = "https://stonegate.example";
   });
   afterAll(async () => closeDbForTests());
-  it("reports unavailable invitation configuration honestly and rolls back company setup", async () => {
+  it("preserves staged company details but rolls back activation when invitation configuration is unavailable", async () => {
     const f = await fixture();
-    const saved = { node: process.env["NODE_ENV"], site: process.env["SITE_URL"], publicSite: process.env["NEXT_PUBLIC_SITE_URL"] };
+    const saved = {
+      node: process.env["NODE_ENV"],
+      site: process.env["SITE_URL"],
+      publicSite: process.env["NEXT_PUBLIC_SITE_URL"],
+    };
     const companyName = "Failed local invitation configuration " + randomUUID();
     try {
       process.env["NODE_ENV"] = "production";
       process.env["SITE_URL"] = "http://localhost:3110";
       process.env["NEXT_PUBLIC_SITE_URL"] = "http://localhost:3000";
-      await expect(db().transaction((tx) => createPartnerRelationship(tx, f.mutation, {
-        companyName, contactName: "Local contact", contactEmail: randomUUID() + "@example.test", persona: "other",
-        reason: "Local failure containment verification only.",
-      }))).rejects.toMatchObject({ status: 503, code: "internal", retryable: true });
-      expect(await db().select({ id: partnerAccounts.id }).from(partnerAccounts).where(eq(partnerAccounts.name, companyName))).toHaveLength(0);
-      await expect(db().transaction((tx) => invitePartnerAsStaff(tx, f.mutation, {
-        accountId: f.accountId, invitation: { email: randomUUID() + "@example.test", name: "Local additional contact", roleKey: "administrator",
-          persona: "other", accessLevel: "account", locationIds: [], costCenterIds: [] },
-      }))).rejects.toMatchObject({ status: 503, code: "internal", retryable: true });
-      expect(await db().select({ id: partnerAccountInvitations.id }).from(partnerAccountInvitations)
-        .where(eq(partnerAccountInvitations.partnerAccountId, f.accountId))).toHaveLength(1);
+      const created = await db().transaction((tx) =>
+        createPartnerRelationship(tx, f.mutation, {
+          companyName,
+          contactName: "Local contact",
+          contactEmail: randomUUID() + "@example.test",
+          persona: "other",
+          reason: "Local failure containment verification only.",
+        }),
+      );
+      expect(created.deliveryStatus).toBe("not_sent");
+      await db().transaction((tx) =>
+        savePartnerServiceRates(
+          tx,
+          { ...f.mutation, expectedVersion: "1" },
+          created.accountId,
+          {
+            action: "publish",
+            portalVisible: true,
+            card: completeTestPartnerRateCard(),
+          },
+        ),
+      );
+      await expect(
+        db().transaction((tx) =>
+          enablePartnerRelationshipAsStaff(
+            tx,
+            { ...f.mutation, expectedVersion: "1" },
+            created.accountId,
+          ),
+        ),
+      ).rejects.toMatchObject({
+        status: 503,
+        code: "internal",
+        retryable: true,
+      });
+      const [pending] = await db()
+        .select()
+        .from(partnerAccounts)
+        .where(eq(partnerAccounts.id, created.accountId));
+      expect(pending).toMatchObject({
+        portalAccessEnabled: false,
+        portalSetupStatus: "rates_required",
+      });
+      expect(
+        await db()
+          .select()
+          .from(partnerAccountInvitations)
+          .where(
+            eq(partnerAccountInvitations.partnerAccountId, created.accountId),
+          ),
+      ).toHaveLength(0);
+      await expect(
+        db().transaction((tx) =>
+          invitePartnerAsStaff(tx, f.mutation, {
+            accountId: f.accountId,
+            invitation: {
+              email: randomUUID() + "@example.test",
+              name: "Local additional contact",
+              roleKey: "administrator",
+              persona: "other",
+              accessLevel: "account",
+              locationIds: [],
+              costCenterIds: [],
+            },
+          }),
+        ),
+      ).rejects.toMatchObject({
+        status: 503,
+        code: "internal",
+        retryable: true,
+      });
+      expect(
+        await db()
+          .select({ id: partnerAccountInvitations.id })
+          .from(partnerAccountInvitations)
+          .where(eq(partnerAccountInvitations.partnerAccountId, f.accountId)),
+      ).toHaveLength(1);
     } finally {
-      for (const [key, value] of [["NODE_ENV", saved.node], ["SITE_URL", saved.site], ["NEXT_PUBLIC_SITE_URL", saved.publicSite]] as const) {
-        if (value === undefined) delete process.env[key]; else process.env[key] = value;
+      for (const [key, value] of [
+        ["NODE_ENV", saved.node],
+        ["SITE_URL", saved.site],
+        ["NEXT_PUBLIC_SITE_URL", saved.publicSite],
+      ] as const) {
+        if (value === undefined) delete process.env[key];
+        else process.env[key] = value;
       }
     }
   });
@@ -250,15 +350,23 @@ suite("relationship invitations / real PostgreSQL", () => {
       request: request(),
     });
     expect(completed.kind).toBe("success");
-    if (completed.kind !== "success") throw Error("Expected a usable activation session");
-    const authenticatedRequest = new NextRequest("https://stonegate.example/api/portal/v2/me", {
-      headers: { authorization: `Bearer ${completed.sessionToken}` },
-    });
+    if (completed.kind !== "success")
+      throw Error("Expected a usable activation session");
+    const authenticatedRequest = new NextRequest(
+      "https://stonegate.example/api/portal/v2/me",
+      {
+        headers: { authorization: `Bearer ${completed.sessionToken}` },
+      },
+    );
     expect(await requirePartnerSession(authenticatedRequest)).toMatchObject({
-      ok: true, session: { activePartnerAccountId: f.accountId, authMethod: "password" },
+      ok: true,
+      session: { activePartnerAccountId: f.accountId, authMethod: "password" },
     });
     await revokePartnerSession(completed.sessionToken);
-    expect(await requirePartnerSession(authenticatedRequest)).toMatchObject({ ok: false, status: 401 });
+    expect(await requirePartnerSession(authenticatedRequest)).toMatchObject({
+      ok: false,
+      status: 401,
+    });
     expect((await invitation(f.invitationId)).activatedAt).not.toBeNull();
     expect((await change(f, "resend")).status).toBe(409);
     expect((await change(f, "revoke")).status).toBe(409);
@@ -363,7 +471,15 @@ suite("relationship invitations / real PostgreSQL", () => {
     expect(retry.status).toBe(202);
     const a: unknown = await first.json(),
       b: unknown = await retry.json();
-    if (!a || typeof a !== "object" || !("activationExpiresAt" in a) || !b || typeof b !== "object" || !("activationExpiresAt" in b)) throw Error("Missing activation expiry in invitation response");
+    if (
+      !a ||
+      typeof a !== "object" ||
+      !("activationExpiresAt" in a) ||
+      !b ||
+      typeof b !== "object" ||
+      !("activationExpiresAt" in b)
+    )
+      throw Error("Missing activation expiry in invitation response");
     expect(a.activationExpiresAt).toBe(b.activationExpiresAt);
     for (const body of [a, b]) {
       expect(body).not.toHaveProperty("sessionToken");

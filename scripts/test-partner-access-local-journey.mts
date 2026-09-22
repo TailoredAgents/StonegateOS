@@ -1,3 +1,5 @@
+import { localPartnerRehearsalDatabaseUrl } from "./lib/partner-local-rehearsal";
+import { completeLocalPartnerRateSetup } from "./lib/partner-service-rate-browser-setup";
 import assert from "node:assert/strict";
 import { createRequire } from "node:module";
 import { execFile } from "node:child_process";
@@ -28,8 +30,7 @@ function fixture(input: Record<string, unknown>): Promise<any> {
           TMPDIR: process.env.TMPDIR,
           NODE_ENV: "test",
           DOTENV_CONFIG_PATH: "/dev/null",
-          DATABASE_URL:
-            "postgresql://portal_test:portal_local_only@127.0.0.1:55443/portal_access_browser",
+          DATABASE_URL: localPartnerRehearsalDatabaseUrl(),
           DATABASE_SSL: "false",
         },
       },
@@ -55,9 +56,7 @@ function fixture(input: Record<string, unknown>): Promise<any> {
 async function company(staffPage: any, email: string, name: string) {
   staffPage.setDefaultTimeout(15_000);
   await staffPage.goto(`${base}/team/partners?p_admin=accounts`);
-  await staffPage
-    .getByText("Create a company and invite its Administrator", { exact: true })
-    .click();
+  await staffPage.getByText("Company details", { exact: true }).click();
   await staffPage.getByLabel("Company name", { exact: true }).fill(name);
   await staffPage
     .getByLabel("Administrator name", { exact: true })
@@ -72,19 +71,11 @@ async function company(staffPage: any, email: string, name: string) {
     );
   await staffPage
     .getByRole("button", {
-      name: "Create company & invite Administrator",
+      name: "Create company and continue",
       exact: true,
     })
     .click();
-  const feedback = staffPage.locator(
-    'section[aria-labelledby="partner-relationship-setup-heading"] [role="status"], section[aria-labelledby="partner-relationship-setup-heading"] [role="alert"]',
-  );
-  await feedback.waitFor({ timeout: 30_000 });
-  assert.equal(
-    await feedback.getAttribute("role"),
-    "status",
-    await feedback.innerText(),
-  );
+  await completeLocalPartnerRateSetup(staffPage);
   return fixture({ action: "invitation", email });
 }
 async function activate(

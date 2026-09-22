@@ -1,6 +1,7 @@
 "use client";
 
 import * as React from "react";
+import { getPartnerServiceDefinition } from "@myst-os/pricing";
 import {
   parsePartnerRequestDetails,
   parsePartnerRequestPhotos,
@@ -628,14 +629,68 @@ export function PartnerRequestDetailsPanel({
           </p>
         </div>
       ) : null}
-      <div className="mb-4">
-        <h5 className={`text-xs font-medium ${muted}`}>Requested work</h5>
-        <p
-          className={`mt-1 whitespace-pre-wrap break-words text-sm leading-6 [overflow-wrap:anywhere] ${text}`}
+      {data.multiService ? (
+        <section
+          aria-label="Requested services"
+          className="mb-5 divide-y divide-slate-200"
         >
-          {data.description || "A description was not provided."}
-        </p>
-      </div>
+          {data.multiService.serviceLines.map((line, index) => {
+            const definition = getPartnerServiceDefinition(line.serviceKey);
+            return (
+              <details
+                key={line.id}
+                name={`request-services-${data.jobId}`}
+                open={index === 0}
+                className="py-3"
+              >
+                <summary className="cursor-pointer text-sm font-semibold leading-6">
+                  {line.label}
+                  {line.status === "completed"
+                    ? " · Completed"
+                    : line.status === "canceled"
+                      ? " · Canceled"
+                      : ""}
+                </summary>
+                <p className="mt-2 whitespace-pre-wrap text-sm leading-6">
+                  {line.description}
+                </p>
+                <dl className="mt-3 grid gap-3 sm:grid-cols-2">
+                  {definition?.scopeFields.flatMap((field) => {
+                    const value = line.scope[field.key];
+                    if (!value) return [];
+                    return (
+                      <div key={field.key}>
+                        <dt className={`text-xs ${muted}`}>
+                          {field.label.replace(" (optional)", "")}
+                        </dt>
+                        <dd className="mt-1 whitespace-pre-wrap text-sm">
+                          {field.options?.find(
+                            (option) => option.value === value,
+                          )?.label ?? value}
+                        </dd>
+                      </div>
+                    );
+                  })}
+                </dl>
+                {definition?.inclusions.length ? (
+                  <p className={`mt-3 text-xs leading-5 ${muted}`}>
+                    {definition.inclusions.join(" ")}
+                  </p>
+                ) : null}
+              </details>
+            );
+          })}
+        </section>
+      ) : (
+        <div className="mb-4">
+          <h5 className={`text-xs font-medium ${muted}`}>Requested work</h5>
+          <p
+            className={`mt-1 whitespace-pre-wrap break-words text-sm leading-6 [overflow-wrap:anywhere] ${text}`}
+          >
+            {data.description || "A description was not provided."}
+          </p>
+        </div>
+      )}
       {data.originalJob ? (
         <p className={`mb-3 text-xs ${muted}`}>
           Additional service for original job{" "}

@@ -46,7 +46,7 @@ async function main() {
         .where(eq(partnerBookings.partnerAccountId, accountId))
         .orderBy(asc(partnerBookings.createdAt))
         .limit(1);
-      if (!template)
+      if (!template?.appointmentId)
         throw new Error("Run the real request journey before seeding history");
       const [operational] = await tx
         .select()
@@ -59,37 +59,33 @@ async function main() {
         const appointmentId = randomUUID(),
           jobId = randomUUID();
         const createdAt = new Date(Date.now() - (index + 1) * 86_400_000);
-        await tx
-          .insert(appointments)
-          .values({
-            id: appointmentId,
-            contactId: operational.contactId,
-            propertyId: operational.propertyId,
-            partnerAccountId: accountId,
-            type: "job",
-            status: "requested",
-            startAt: null,
-            rescheduleToken: randomUUID().replaceAll("-", ""),
-            createdAt,
-          });
-        await tx
-          .insert(partnerBookings)
-          .values({
-            id: jobId,
-            appointmentId,
-            orgContactId: template.orgContactId,
-            propertyId: template.propertyId,
-            partnerAccountId: accountId,
-            partnerUserId: template.partnerUserId,
-            requestedByMembershipId: template.requestedByMembershipId,
-            serviceKey: "service_request",
-            publicStatus: "under_review",
-            confirmationMode: "review",
-            scopeSnapshot: template.scopeSnapshot,
-            proofRequirementsSnapshot: template.proofRequirementsSnapshot,
-            poNumber: `LOCAL-HISTORY-${String(index).padStart(3, "0")}`,
-            createdAt,
-          });
+        await tx.insert(appointments).values({
+          id: appointmentId,
+          contactId: operational.contactId,
+          propertyId: operational.propertyId,
+          partnerAccountId: accountId,
+          type: "job",
+          status: "requested",
+          startAt: null,
+          rescheduleToken: randomUUID().replaceAll("-", ""),
+          createdAt,
+        });
+        await tx.insert(partnerBookings).values({
+          id: jobId,
+          appointmentId,
+          orgContactId: template.orgContactId,
+          propertyId: template.propertyId,
+          partnerAccountId: accountId,
+          partnerUserId: template.partnerUserId,
+          requestedByMembershipId: template.requestedByMembershipId,
+          serviceKey: "service_request",
+          publicStatus: "under_review",
+          confirmationMode: "review",
+          scopeSnapshot: template.scopeSnapshot,
+          proofRequirementsSnapshot: template.proofRequirementsSnapshot,
+          poNumber: `LOCAL-HISTORY-${String(index).padStart(3, "0")}`,
+          createdAt,
+        });
         oldestJobId = jobId;
       }
       return { accountId, oldestJobId };

@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import { formEntryText } from "@/lib/form-entry-text";
 import { StaffScheduleResourcePicker } from "./StaffScheduleResourcePicker";
+import { previewPartnerServiceArrival } from "../actions/partner-service-reviews";
 import {
   loadPartnerRescheduleReviews,
   decidePartnerRescheduleReview,
@@ -48,6 +49,62 @@ export function PartnerRescheduleReviews({
   const [detail, setDetail] = useState<RescheduleReviewDetail | null>(null),
     [busy, setBusy] = useState(false),
     [message, setMessage] = useState("");
+  const [replacementDate, setReplacementDate] = useState("");
+  const [replacementTime, setReplacementTime] = useState("09:00");
+  const [previewAttempt, setPreviewAttempt] = useState(0);
+  const [replacementPreview, setReplacementPreview] = useState<{
+    key: string;
+    startAt: string;
+    arrivalStartAt: string;
+    arrivalEndAt: string;
+    timezone: string;
+  } | null>(null);
+  const [previewError, setPreviewError] = useState("");
+  const previewKey = JSON.stringify([
+    detail?.request.id,
+    detail?.request.accountId,
+    detail?.request.jobId,
+    replacementDate,
+    replacementTime,
+  ]);
+  const validReplacement =
+    replacementPreview?.key === previewKey ? replacementPreview : null;
+  useEffect(() => {
+    setReplacementPreview(null);
+    setPreviewError("");
+    if (!detail?.request.visitId || !replacementDate || !replacementTime)
+      return;
+    let current = true;
+    void previewPartnerServiceArrival({
+      id: detail.request.jobId,
+      accountId: detail.request.accountId,
+      preferredDate: replacementDate,
+      startTime: replacementTime,
+    })
+      .then((result) => {
+        if (!current) return;
+        if (result.ok) setReplacementPreview({ ...result, key: previewKey });
+        else setPreviewError(result.message);
+      })
+      .catch(() => {
+        if (current)
+          setPreviewError(
+            "The arrival window could not be checked. Try again.",
+          );
+      });
+    return () => {
+      current = false;
+    };
+  }, [
+    detail?.request.id,
+    detail?.request.visitId,
+    detail?.request.jobId,
+    detail?.request.accountId,
+    replacementDate,
+    replacementTime,
+    previewKey,
+    previewAttempt,
+  ]);
   const selected = useRef("");
   const generation = useRef(0);
   const pendingDecision = useRef<{ fingerprint: string; key: string } | null>(
@@ -79,6 +136,8 @@ export function PartnerRescheduleReviews({
     setItems([]);
     setCursor(null);
     setDetail(null);
+    setReplacementDate("");
+    setReplacementTime("09:00");
     selected.current = "";
     pendingDecision.current = null;
     if (requestId) void open(requestId);
@@ -94,6 +153,8 @@ export function PartnerRescheduleReviews({
     const requestGeneration = ++generation.current;
     selected.current = id;
     setDetail(null);
+    setReplacementDate("");
+    setReplacementTime("09:00");
     setBusy(true);
     setMessage("");
     pendingDecision.current = null;
@@ -125,6 +186,16 @@ export function PartnerRescheduleReviews({
       reason = formEntryText(data.get("reason"));
     if (decision === "accepted" && !startAt) {
       setMessage("Choose a replacement window before accepting.");
+      return;
+    }
+    if (
+      decision === "accepted" &&
+      detail.request.visitId &&
+      (!validReplacement || validReplacement.startAt !== startAt)
+    ) {
+      setMessage(
+        "Check the selected date and arrival window before accepting.",
+      );
       return;
     }
     const selectedResourceIds = data
@@ -302,26 +373,126 @@ export function PartnerRescheduleReviews({
               onSubmit={(event) => event.preventDefault()}
               className="space-y-3"
             >
-              <label className="block text-sm font-semibold">
-                Replacement arrival window
-                <select name="startAt" className={FIELD} disabled={busy}>
-                  <option value="">Choose a current window</option>
-                  {detail.candidates.map((slot) => (
-                    <option key={slot.startAt} value={slot.startAt}>
+              {detail.request.visitId ? (
+                <div className="space-y-3">
+                  <p className="text-sm text-slate-600">
+                    Change this visit only. Its services, duration, visit
+                    minimum and existing crew stay the same unless you
+                    explicitly select replacement resources.
+                  </p>
+                  {detail.request.preferredWindows
+                    .filter((window) => window.localDate)
+                    .map((window, index) => (
+                      <button
+                        key={index}
+                        type="button"
+                        disabled={busy}
+                        className={BUTTON}
+                        onClick={() => {
+                          setReplacementDate(window.localDate!);
+                          setReplacementTime(
+                            window.timeOfDay === "afternoon"
+                              ? "13:00"
+                              : "09:00",
+                          );
+                        }}
+                      >
+                        Use requested date {window.localDate}
+                        {window.timeOfDay ? ` · ${window.timeOfDay}` : ""}
+                      </button>
+                    ))}
+                  <label className="block text-sm font-semibold">
+                    Replacement date
+                    <input
+                      type="date"
+                      className={FIELD}
+                      disabled={busy}
+                      value={replacementDate}
+                      onChange={(event) =>
+                        setReplacementDate(event.target.value)
+                      }
+                    />
+                  </label>
+                  <label className="block text-sm font-semibold">
+                    Start time (Eastern)
+                    <select
+                      className={FIELD}
+                      disabled={busy}
+                      value={replacementTime}
+                      onChange={(event) =>
+                        setReplacementTime(event.target.value)
+                      }
+                    >
+                      {Array.from({ length: 48 }, (_, index) => {
+                        const hour = Math.floor(index / 2),
+                          minute = index % 2 ? "30" : "00",
+                          value = `${String(hour).padStart(2, "0")}:${minute}`;
+                        return (
+                          <option key={value} value={value}>
+                            {hour % 12 || 12}:{minute} {hour < 12 ? "AM" : "PM"}
+                          </option>
+                        );
+                      })}
+                    </select>
+                  </label>
+                  <input
+                    type="hidden"
+                    name="startAt"
+                    value={validReplacement?.startAt ?? ""}
+                  />
+                  {validReplacement ? (
+                    <p
+                      role="status"
+                      className="rounded-lg bg-slate-50 p-3 text-sm"
+                    >
+                      <strong>Replacement arrival: </strong>
                       {windowLabel(
-                        slot.windowStartAt,
-                        slot.windowEndAt,
-                        detail.request.timezone,
-                      )}{" "}
-                      · planned start{" "}
-                      {new Intl.DateTimeFormat("en-US", {
-                        timeStyle: "short",
-                        timeZone: detail.request.timezone ?? "America/New_York",
-                      }).format(new Date(slot.startAt))}
-                    </option>
-                  ))}
-                </select>
-              </label>
+                        validReplacement.arrivalStartAt,
+                        validReplacement.arrivalEndAt,
+                        validReplacement.timezone,
+                      )}
+                    </p>
+                  ) : previewError ? (
+                    <p role="alert" className="text-sm text-red-700">
+                      {previewError}{" "}
+                      <button
+                        type="button"
+                        className={BUTTON}
+                        disabled={busy}
+                        onClick={() => setPreviewAttempt((value) => value + 1)}
+                      >
+                        Retry arrival check
+                      </button>
+                    </p>
+                  ) : replacementDate ? (
+                    <p role="status" className="text-sm">
+                      Checking the arrival window…
+                    </p>
+                  ) : null}
+                </div>
+              ) : (
+                <label className="block text-sm font-semibold">
+                  Replacement arrival window
+                  <select name="startAt" className={FIELD} disabled={busy}>
+                    <option value="">Choose a current window</option>
+                    {detail.candidates.map((slot) => (
+                      <option key={slot.startAt} value={slot.startAt}>
+                        {windowLabel(
+                          slot.windowStartAt,
+                          slot.windowEndAt,
+                          detail.request.timezone,
+                        )}{" "}
+                        · planned start{" "}
+                        {new Intl.DateTimeFormat("en-US", {
+                          timeStyle: "short",
+                          timeZone:
+                            detail.request.timezone ?? "America/New_York",
+                        }).format(new Date(slot.startAt))}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              )}
               {detail.request.appointmentId ? (
                 <StaffScheduleResourcePicker
                   key={detail.request.appointmentId}
@@ -344,7 +515,12 @@ export function PartnerRescheduleReviews({
                 <button
                   type="button"
                   className={BUTTON}
-                  disabled={busy || !detail.candidates.length}
+                  disabled={
+                    busy ||
+                    (detail.request.visitId
+                      ? !validReplacement
+                      : !detail.candidates.length)
+                  }
                   onClick={(event) =>
                     void decide(event.currentTarget.form!, "accepted")
                   }

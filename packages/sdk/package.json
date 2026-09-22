@@ -11,6 +11,7 @@
     "build": "tsc -p tsconfig.build.json"
   },
   "dependencies": {
+    "@myst-os/pricing": "workspace:*",
     "zod": "^3.24.1"
   }
 }

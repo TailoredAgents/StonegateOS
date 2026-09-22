@@ -1,4 +1,4 @@
-import { and, eq, inArray, isNull, notInArray, or } from "drizzle-orm";
+import { and, eq, inArray, isNull, notInArray, or, sql } from "drizzle-orm";
 import {
   appointments,
   auditLogs,
@@ -7,7 +7,7 @@ import {
   paymentAttempts,
   payments,
 } from "@/db";
-import { lockAppointmentInvoiceCollection } from "@/lib/partner-invoice-ledger";
+import { lockPartnerRequestFinancials } from "./partner-request-financials";
 import { PAYMENT_MUTATION_BLOCKING_ATTEMPT_STATUSES } from "@/lib/payment-ledger";
 import {
   TeamMutationFailure,
@@ -32,7 +32,7 @@ export async function applyPartnerChangeOrderPrice(
   input: {
     accountId: string;
     jobId: string;
-    appointmentId: string;
+    appointmentId: string | null;
     amountCents: number;
     actorMembershipId: string;
     changeOrderId: string;
@@ -41,31 +41,40 @@ export async function applyPartnerChangeOrderPrice(
     now: Date;
   },
 ): Promise<void> {
-  await lockAppointmentInvoiceCollection(tx, input.appointmentId);
+  const binding = await lockPartnerRequestFinancials(
+    tx,
+    input.accountId,
+    input.jobId,
+  );
+  if (binding.appointmentId !== input.appointmentId)
+    throw new PartnerChangeOrderFinancialReviewRequired();
   const [job] = await tx
     .select({
-      id: appointments.id,
-      quotedTotalCents: appointments.quotedTotalCents,
-      finalTotalCents: appointments.finalTotalCents,
-      status: appointments.status,
-      updatedAt: appointments.updatedAt,
+      id: partnerBookings.id,
+      modelVersion: partnerBookings.modelVersion,
+      quotedTotalCents: sql<
+        number | null
+      >`case when ${partnerBookings.modelVersion}=2 then ${partnerBookings.quotedTotalCents} else ${appointments.quotedTotalCents} end`,
+      finalTotalCents: sql<
+        number | null
+      >`case when ${partnerBookings.modelVersion}=2 then ${partnerBookings.finalTotalCents} else ${appointments.finalTotalCents} end`,
+      status: sql<string>`case when ${partnerBookings.modelVersion}=2 then ${partnerBookings.publicStatus} else ${appointments.status}::text end`,
+      updatedAt: partnerBookings.updatedAt,
     })
-    .from(appointments)
-    .innerJoin(
-      partnerBookings,
+    .from(partnerBookings)
+    .leftJoin(
+      appointments,
       and(
-        eq(partnerBookings.appointmentId, appointments.id),
-        eq(partnerBookings.id, input.jobId),
-        eq(partnerBookings.partnerAccountId, input.accountId),
+        eq(appointments.id, partnerBookings.appointmentId),
+        eq(appointments.partnerAccountId, input.accountId),
       ),
     )
     .where(
       and(
-        eq(appointments.id, input.appointmentId),
-        eq(appointments.partnerAccountId, input.accountId),
+        eq(partnerBookings.id, input.jobId),
+        eq(partnerBookings.partnerAccountId, input.accountId),
       ),
     )
-    .for("update", { of: appointments })
     .limit(1);
   if (
     !job ||
@@ -94,7 +103,12 @@ export async function applyPartnerChangeOrderPrice(
     .from(paymentAttempts)
     .where(
       and(
-        eq(paymentAttempts.appointmentId, input.appointmentId),
+        input.appointmentId
+          ? eq(paymentAttempts.appointmentId, input.appointmentId)
+          : and(
+              eq(paymentAttempts.partnerBookingId, input.jobId),
+              eq(paymentAttempts.partnerAccountId, input.accountId),
+            ),
         inArray(paymentAttempts.status, [
           ...PAYMENT_MUTATION_BLOCKING_ATTEMPT_STATUSES,
         ]),
@@ -108,7 +122,12 @@ export async function applyPartnerChangeOrderPrice(
     .from(payments)
     .where(
       and(
-        eq(payments.appointmentId, input.appointmentId),
+        input.appointmentId
+          ? eq(payments.appointmentId, input.appointmentId)
+          : and(
+              eq(payments.partnerBookingId, input.jobId),
+              eq(payments.partnerAccountId, input.accountId),
+            ),
         or(
           isNull(payments.canonicalStatus),
           notInArray(payments.canonicalStatus, ["failed", "canceled"]),
@@ -117,6 +136,7 @@ export async function applyPartnerChangeOrderPrice(
     )
     .limit(1);
   if (
+    (job.modelVersion === 2 && job.quotedTotalCents !== input.amountCents) ||
     job.finalTotalCents !== null ||
     ["completed", "canceled", "no_show"].includes(job.status) ||
     attempt ||
@@ -134,34 +154,33 @@ export async function applyPartnerChangeOrderPrice(
   const updatedAt = new Date(
     Math.max(input.now.getTime(), job.updatedAt.getTime() + 1),
   );
-  await tx
-    .update(appointments)
-    .set({
-      quotedTotalCents: input.amountCents,
-      quotedTotalMaxCents: input.amountCents,
-      updatedAt,
-    })
-    .where(eq(appointments.id, input.appointmentId));
-  await tx
-    .insert(auditLogs)
-    .values({
-      actorType: "human",
-      actorId: input.actorMembershipId,
-      action: "partner.change_order.crm_price_applied",
-      entityType: "appointment",
-      entityId: input.appointmentId,
-      correlationId: input.correlationId,
-      meta: {
-        partnerAccountId: input.accountId,
-        partnerBookingId: input.jobId,
-        changeOrderId: input.changeOrderId,
-        quoteVersionId: input.quoteVersionId,
-        previousQuotedTotalCents: job.quotedTotalCents,
+  if (input.appointmentId)
+    await tx
+      .update(appointments)
+      .set({
         quotedTotalCents: input.amountCents,
-        actorContext: "partner_session",
-        financialAuthority: "crm_quote_before_finalization",
-        correlationId: input.correlationId,
-      },
-      createdAt: input.now,
-    });
+        quotedTotalMaxCents: input.amountCents,
+        updatedAt,
+      })
+      .where(eq(appointments.id, input.appointmentId));
+  await tx.insert(auditLogs).values({
+    actorType: "human",
+    actorId: input.actorMembershipId,
+    action: "partner.change_order.crm_price_applied",
+    entityType: input.appointmentId ? "appointment" : "partner_booking",
+    entityId: input.appointmentId ?? input.jobId,
+    correlationId: input.correlationId,
+    meta: {
+      partnerAccountId: input.accountId,
+      partnerBookingId: input.jobId,
+      changeOrderId: input.changeOrderId,
+      quoteVersionId: input.quoteVersionId,
+      previousQuotedTotalCents: job.quotedTotalCents,
+      quotedTotalCents: input.amountCents,
+      actorContext: "partner_session",
+      financialAuthority: "crm_quote_before_finalization",
+      correlationId: input.correlationId,
+    },
+    createdAt: input.now,
+  });
 }

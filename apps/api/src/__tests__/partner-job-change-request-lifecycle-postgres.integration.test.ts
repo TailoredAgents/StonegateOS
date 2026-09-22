@@ -86,7 +86,7 @@ function deepestDatabaseError(error: unknown): DatabaseError {
   return {};
 }
 
-async function createFixture(): Promise<Fixture> {
+async function createFixture(modelVersion: 1 | 2 = 1): Promise<Fixture> {
   const now = new Date();
   const accountId = randomUUID();
   const appointmentId = randomUUID();
@@ -184,8 +184,9 @@ async function createFixture(): Promise<Fixture> {
       requestedByMembershipId: membershipId,
       partnerUserId,
       propertyId,
-      appointmentId,
-      serviceKey: "junk-removal",
+      appointmentId: modelVersion === 2 ? null : appointmentId,
+      modelVersion,
+      serviceKey: modelVersion === 2 ? null : "junk-removal",
       publicStatus: "confirmed",
       confirmationMode: "instant",
       arrivalWindowStartAt: serviceAt,
@@ -663,6 +664,48 @@ describeWithDatabase("Partner job change request PostgreSQL lifecycle", () => {
 
   afterAll(async () => {
     await closeDbForTests();
+  });
+
+  it("reviews shared access changes and billing references on a multi-service parent without creating an appointment", async () => {
+    const fixture = await createFixture(2);
+    fixtures.push(fixture);
+    const request = await createRequest(fixture, {
+      ifMatch: await currentJobEtag(fixture),
+    });
+    const resolved = await getDb().transaction((tx) =>
+      decidePartnerJobChangeRequestAsStaff(tx, {
+        requestId: request.requestId,
+        decision: "approved",
+        reason: "Verified the shared entrance instructions.",
+        expectedVersion: String(request.requestRevision),
+        teamMemberId: fixture.teamMemberId,
+        correlationId: randomUUID(),
+      }),
+    );
+    expect(resolved.appliedFields).toContain("accessDetails");
+    const currentEtag = await currentJobEtag(fixture);
+    await getDb().transaction((tx) =>
+      updatePartnerJobReferences(tx, {
+        principal: fixture.principal,
+        jobId: fixture.bookingId,
+        payload: { poNumber: "PROJECT-ALL-SERVICES" },
+        operationKeyHash: digest(randomUUID()),
+        ifMatch: currentEtag,
+        correlationId: randomUUID(),
+      }),
+    );
+    const [job] = await getDb()
+      .select()
+      .from(partnerBookings)
+      .where(eq(partnerBookings.id, fixture.bookingId));
+    expect(job).toMatchObject({
+      modelVersion: 2,
+      appointmentId: null,
+      poNumber: "PROJECT-ALL-SERVICES",
+    });
+    expect(job!.scopeSnapshot?.["accessDetails"]).toBe(
+      "Use the rear loading entrance and call on arrival.",
+    );
   });
 
   it("serializes duplicate creation, safely replays the pair, and rejects cross-tenant access", async () => {

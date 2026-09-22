@@ -10,7 +10,7 @@ import {
 import {
   parseLocations,
   wizardLocation,
-  parseCatalogServices,
+  parseBookingCatalog,
   parseProofDefaults,
   parseCancellationPolicy,
   parseBookingDraft,
@@ -116,7 +116,7 @@ export default async function PartnerBookPage({
       ),
       loadPartnerPortalResource(
         () => callPartnerApi("/api/portal/v2/service-catalog"),
-        parseCatalogServices,
+        parseBookingCatalog,
       ),
       loadPartnerPortalResource(
         () => callPartnerApi("/api/portal/v2/proof-requirements"),
@@ -155,7 +155,7 @@ export default async function PartnerBookPage({
   const directory = locationResult.value.directory;
   const canCreateLocation =
     directory.canCreateLocation && context.permissions.manageLocations;
-  const services = catalogResult.value;
+  let catalog = catalogResult.value;
   const defaultProofRequirements = proofResult.value;
   const cancellationPolicy = cancellationResult.value;
 
@@ -186,6 +186,33 @@ export default async function PartnerBookPage({
       );
     initialDraft = result.value;
   }
+
+  // A saved single-service request keeps its negotiated load options and
+  // add-ons when its company moves to the new multi-service request form.
+  if (
+    initialDraft &&
+    initialDraft.modelVersion !== 2 &&
+    catalog.multiServiceRequestsEnabled
+  ) {
+    const legacyCatalogResult = await loadPartnerPortalResource(
+      () =>
+        callPartnerApi("/api/portal/v2/service-catalog?requestModelVersion=1"),
+      parseBookingCatalog,
+    );
+    if (legacyCatalogResult.status === "error")
+      return (
+        <PartnerErrorState
+          title="We couldn’t load this saved request’s service choices"
+          description={portalLoadErrorMessage(
+            legacyCatalogResult,
+            "Please try again. Your saved work and service selections are unchanged.",
+          )}
+          retryHref={retryHref}
+        />
+      );
+    catalog = legacyCatalogResult.value;
+  }
+  const services = catalog.services;
 
   const defaultLocationId =
     typeof params.locationId === "string"
@@ -315,6 +342,9 @@ export default async function PartnerBookPage({
           key={`${context.accountId}:${initialDraft?.id ?? "new"}`}
           locations={sortBookingLocations(locations)}
           services={services}
+          multiServiceRequestsEnabled={catalog.multiServiceRequestsEnabled}
+          structuredRates={catalog.structuredRates}
+          structuredRatesStatus={catalog.structuredRatesStatus}
           initialDraft={initialDraft}
           defaultLocationId={
             locations.some((item) => item.id === requestedLocationId)

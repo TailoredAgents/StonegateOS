@@ -5,6 +5,7 @@ import {
   type PartnerServiceReview,
   type PartnerServiceReviewDetail,
 } from "../actions/partner-service-reviews";
+import { PartnerMultiServiceReview } from "./PartnerMultiServiceReview";
 import { CalendarAppointmentActions } from "./CalendarAppointmentActions";
 import { teamButtonClass } from "./team-ui";
 import { formatCalendarDayKey } from "../lib/calendar-time";
@@ -676,186 +677,214 @@ export function PartnerServiceReviews({
                   : "space-y-4"
               }
             >
-              {embedded &&
-              !detailReceipt &&
-              !SCHEDULED_HEADINGS.get(detail.status) ? (
-                detail.partnerRequest ? (
-                  <PartnerRequestScheduleSummary
-                    details={detail.partnerRequest}
-                    hidePreferredDates={canSchedule && detail.canSchedule}
-                  />
-                ) : canSchedule && detail.canSchedule ? null : (
-                  <div className="space-y-2 border-b border-slate-200 pb-4 text-sm">
-                    <h4 className="font-semibold">Client’s requested timing</h4>
-                    <p>{preferred(detail.preferredWindows)}</p>
-                    <p className="text-xs text-slate-500">
-                      Awaiting Stonegate confirmation.
-                    </p>
-                  </div>
-                )
-              ) : null}
-              {canSchedule && detail.canSchedule && !detailReceipt ? (
-                <CalendarAppointmentActions
-                  appointmentId={detail.appointment.id}
-                  appointmentType={detail.appointment.type}
-                  start={detail.appointment.startAt ?? ""}
-                  version={detail.appointment.version}
-                  quotedTotalCents={null}
-                  finalTotalCents={null}
-                  isQuoteOnly={false}
-                  canEditStatus={false}
-                  canUpdateAppointments
-                  canCollectPayments={false}
-                  canSendCustomerMessages={false}
-                  canManageAppointmentMedia={false}
-                  canOverrideScheduleConflicts={false}
-                  teamMembers={[]}
-                  scheduleOnly
-                  confirmPartnerService={embedded}
-                  partnerPreferredWindows={
-                    detail.partnerRequest
-                      ? detail.partnerRequest.scheduling.preferredWindows.map(
-                          (window) => ({
-                            ...window,
-                            timezone: window.timezone ?? undefined,
-                          }),
-                        )
-                      : detail.preferredWindows
-                  }
-                  onScheduleEdited={onEditing}
-                  partnerRequest={{
-                    id: detail.id,
-                    accountId: detail.accountId,
-                  }}
-                  onScheduled={(warning?: string | null) => {
-                    const current = currentContext.current;
-                    if (
-                      !mounted.current ||
-                      current.accountId !== accountId ||
-                      current.requestId !== requestId ||
-                      current.detail?.accountId !== detail.accountId ||
-                      current.detail.id !== detail.id
-                    )
-                      return;
-                    rememberSavedSchedule({
-                      accountId: detail.accountId,
-                      requestId: detail.id,
-                      warning: warning?.trim() || null,
-                      phase: "refreshing",
-                    });
-                    focusScheduleOnLoad.current = true;
+              {detail.partnerRequest?.multiService ? (
+                <PartnerMultiServiceReview
+                  key={`${detail.id}:${detail.partnerRequest.multiService.version}`}
+                  accountId={detail.accountId}
+                  bookingId={detail.id}
+                  data={detail.partnerRequest.multiService}
+                  preferredWindows={detail.preferredWindows}
+                  canEdit={detail.canManageVisits === true}
+                  canPrice={detail.canPrice === true}
+                  onEditing={onEditing}
+                  onChanged={() => {
                     onChanged?.();
                     void open({ id: detail.id, accountId: detail.accountId });
                   }}
                 />
               ) : (
-                <div className="space-y-3">
-                  {detailReceipt && detailReceipt.phase !== "refreshed" ? (
-                    <div
-                      role="status"
-                      className="space-y-2 rounded-lg border border-teal-200 bg-teal-50 p-3 text-teal-950"
-                    >
-                      <h4 className="font-semibold">Service confirmed</h4>
-                      <p className="text-sm leading-6">
-                        {detailReceipt.phase === "refreshing"
-                          ? "Refreshing the saved schedule…"
-                          : "The latest details could not be refreshed. Your confirmation was saved."}
-                      </p>
-                      {detailReceipt.phase === "refresh_failed" ? (
-                        <button
-                          type="button"
-                          disabled={busy}
-                          className={teamButtonClass("secondary", "sm")}
-                          onClick={() =>
-                            void open({
-                              id: detailReceipt.requestId,
-                              accountId: detailReceipt.accountId,
-                            })
-                          }
+                <>
+                  {embedded &&
+                  !detailReceipt &&
+                  !SCHEDULED_HEADINGS.get(detail.status) ? (
+                    detail.partnerRequest ? (
+                      <PartnerRequestScheduleSummary
+                        details={detail.partnerRequest}
+                        hidePreferredDates={canSchedule && detail.canSchedule}
+                      />
+                    ) : canSchedule && detail.canSchedule ? null : (
+                      <div className="space-y-2 border-b border-slate-200 pb-4 text-sm">
+                        <h4 className="font-semibold">
+                          Client’s requested timing
+                        </h4>
+                        <p>{preferred(detail.preferredWindows)}</p>
+                        <p className="text-xs text-slate-500">
+                          Awaiting Stonegate confirmation.
+                        </p>
+                      </div>
+                    )
+                  ) : null}
+                  {canSchedule && detail.canSchedule && !detailReceipt ? (
+                    <CalendarAppointmentActions
+                      appointmentId={detail.appointment.id}
+                      appointmentType={detail.appointment.type}
+                      start={detail.appointment.startAt ?? ""}
+                      version={detail.appointment.version}
+                      quotedTotalCents={null}
+                      finalTotalCents={null}
+                      isQuoteOnly={false}
+                      canEditStatus={false}
+                      canUpdateAppointments
+                      canCollectPayments={false}
+                      canSendCustomerMessages={false}
+                      canManageAppointmentMedia={false}
+                      canOverrideScheduleConflicts={false}
+                      teamMembers={[]}
+                      scheduleOnly
+                      confirmPartnerService={embedded}
+                      partnerPreferredWindows={
+                        detail.partnerRequest
+                          ? detail.partnerRequest.scheduling.preferredWindows.map(
+                              (window) => ({
+                                ...window,
+                                timezone: window.timezone ?? undefined,
+                              }),
+                            )
+                          : detail.preferredWindows
+                      }
+                      onScheduleEdited={onEditing}
+                      partnerRequest={{
+                        id: detail.id,
+                        accountId: detail.accountId,
+                      }}
+                      onScheduled={(warning?: string | null) => {
+                        const current = currentContext.current;
+                        if (
+                          !mounted.current ||
+                          current.accountId !== accountId ||
+                          current.requestId !== requestId ||
+                          current.detail?.accountId !== detail.accountId ||
+                          current.detail.id !== detail.id
+                        )
+                          return;
+                        rememberSavedSchedule({
+                          accountId: detail.accountId,
+                          requestId: detail.id,
+                          warning: warning?.trim() || null,
+                          phase: "refreshing",
+                        });
+                        focusScheduleOnLoad.current = true;
+                        onChanged?.();
+                        void open({
+                          id: detail.id,
+                          accountId: detail.accountId,
+                        });
+                      }}
+                    />
+                  ) : (
+                    <div className="space-y-3">
+                      {detailReceipt && detailReceipt.phase !== "refreshed" ? (
+                        <div
+                          role="status"
+                          className="space-y-2 rounded-lg border border-teal-200 bg-teal-50 p-3 text-teal-950"
                         >
-                          Retry details
-                        </button>
+                          <h4 className="font-semibold">Service confirmed</h4>
+                          <p className="text-sm leading-6">
+                            {detailReceipt.phase === "refreshing"
+                              ? "Refreshing the saved schedule…"
+                              : "The latest details could not be refreshed. Your confirmation was saved."}
+                          </p>
+                          {detailReceipt.phase === "refresh_failed" ? (
+                            <button
+                              type="button"
+                              disabled={busy}
+                              className={teamButtonClass("secondary", "sm")}
+                              onClick={() =>
+                                void open({
+                                  id: detailReceipt.requestId,
+                                  accountId: detailReceipt.accountId,
+                                })
+                              }
+                            >
+                              Retry details
+                            </button>
+                          ) : null}
+                        </div>
+                      ) : (embedded || detailReceipt) &&
+                        SCHEDULED_HEADINGS.get(detail.status) ? (
+                        <div
+                          role="status"
+                          className="space-y-2 rounded-lg border border-teal-200 bg-teal-50 p-3 text-teal-950"
+                        >
+                          <h4 className="font-semibold">
+                            {SCHEDULED_HEADINGS.get(detail.status)}
+                          </h4>
+                          <p className="text-sm leading-6">
+                            {arrival(detail)
+                              ? `Confirmed arrival: ${arrival(detail)}`
+                              : "Arrival window not recorded. Review the job in the calendar."}
+                          </p>
+                        </div>
+                      ) : (
+                        <p className="text-sm text-slate-600">
+                          {detail.status === "approval_needed"
+                            ? "Waiting for the client’s approval. You can confirm service after they approve."
+                            : detail.canSchedule
+                              ? "A team member with scheduling access can confirm this service."
+                              : [
+                                    "confirmed",
+                                    "in_progress",
+                                    "completed",
+                                  ].includes(detail.status)
+                                ? "This service is already scheduled. Open the calendar to review it."
+                                : detail.status === "canceled"
+                                  ? "This request was canceled."
+                                  : detail.status === "declined"
+                                    ? "This request was declined."
+                                    : "This request cannot be scheduled here in its current status. Refresh the request or review it in company Jobs."}
+                        </p>
+                      )}
+                      {detailReceipt?.warning ? (
+                        <p
+                          role="status"
+                          className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-950"
+                        >
+                          {detailReceipt.warning}
+                        </p>
+                      ) : null}
+                      {includeScheduled &&
+                      (!detailReceipt || detailReceipt.phase === "refreshed") &&
+                      detail.appointment.startAt &&
+                      formatCalendarDayKey(
+                        new Date(detail.appointment.startAt),
+                      ) ? (
+                        <a
+                          href={teamSurfaceHref("calendar", {
+                            query: {
+                              calView: "day",
+                              cal: formatCalendarDayKey(
+                                new Date(detail.appointment.startAt),
+                              ),
+                              eventId: `db:${detail.appointment.id}`,
+                            },
+                          })}
+                          className={teamButtonClass("secondary")}
+                        >
+                          Open in calendar
+                        </a>
+                      ) : null}
+                      {embedded && SCHEDULED_HEADINGS.get(detail.status) ? (
+                        <details className="border-t border-slate-200 pt-3 text-sm">
+                          <summary className="min-h-11 cursor-pointer py-3 font-medium text-slate-700">
+                            Scheduling details
+                          </summary>
+                          <div className="pt-2">
+                            {detail.partnerRequest ? (
+                              <PartnerRequestScheduleSummary
+                                details={detail.partnerRequest}
+                              />
+                            ) : (
+                              <p>
+                                Client requested:{" "}
+                                {preferred(detail.preferredWindows)}
+                              </p>
+                            )}
+                          </div>
+                        </details>
                       ) : null}
                     </div>
-                  ) : (embedded || detailReceipt) &&
-                    SCHEDULED_HEADINGS.get(detail.status) ? (
-                    <div
-                      role="status"
-                      className="space-y-2 rounded-lg border border-teal-200 bg-teal-50 p-3 text-teal-950"
-                    >
-                      <h4 className="font-semibold">
-                        {SCHEDULED_HEADINGS.get(detail.status)}
-                      </h4>
-                      <p className="text-sm leading-6">
-                        {arrival(detail)
-                          ? `Confirmed arrival: ${arrival(detail)}`
-                          : "Arrival window not recorded. Review the job in the calendar."}
-                      </p>
-                    </div>
-                  ) : (
-                    <p className="text-sm text-slate-600">
-                      {detail.status === "approval_needed"
-                        ? "Waiting for the client’s approval. You can confirm service after they approve."
-                        : detail.canSchedule
-                          ? "A team member with scheduling access can confirm this service."
-                          : ["confirmed", "in_progress", "completed"].includes(
-                                detail.status,
-                              )
-                            ? "This service is already scheduled. Open the calendar to review it."
-                            : detail.status === "canceled"
-                              ? "This request was canceled."
-                              : detail.status === "declined"
-                                ? "This request was declined."
-                                : "This request cannot be scheduled here in its current status. Refresh the request or review it in company Jobs."}
-                    </p>
                   )}
-                  {detailReceipt?.warning ? (
-                    <p
-                      role="status"
-                      className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-950"
-                    >
-                      {detailReceipt.warning}
-                    </p>
-                  ) : null}
-                  {includeScheduled &&
-                  (!detailReceipt || detailReceipt.phase === "refreshed") &&
-                  detail.appointment.startAt &&
-                  formatCalendarDayKey(new Date(detail.appointment.startAt)) ? (
-                    <a
-                      href={teamSurfaceHref("calendar", {
-                        query: {
-                          calView: "day",
-                          cal: formatCalendarDayKey(
-                            new Date(detail.appointment.startAt),
-                          ),
-                          eventId: `db:${detail.appointment.id}`,
-                        },
-                      })}
-                      className={teamButtonClass("secondary")}
-                    >
-                      Open in calendar
-                    </a>
-                  ) : null}
-                  {embedded && SCHEDULED_HEADINGS.get(detail.status) ? (
-                    <details className="border-t border-slate-200 pt-3 text-sm">
-                      <summary className="min-h-11 cursor-pointer py-3 font-medium text-slate-700">
-                        Scheduling details
-                      </summary>
-                      <div className="pt-2">
-                        {detail.partnerRequest ? (
-                          <PartnerRequestScheduleSummary
-                            details={detail.partnerRequest}
-                          />
-                        ) : (
-                          <p>
-                            Client requested:{" "}
-                            {preferred(detail.preferredWindows)}
-                          </p>
-                        )}
-                      </div>
-                    </details>
-                  ) : null}
-                </div>
+                </>
               )}
             </aside>
           </div>

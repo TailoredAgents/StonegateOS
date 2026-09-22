@@ -1,6 +1,7 @@
 "use client";
 
 import * as React from "react";
+import { getPartnerServiceDefinition } from "@myst-os/pricing";
 import type { Route } from "next";
 import { useRouter } from "next/navigation";
 import {
@@ -116,6 +117,8 @@ export function PartnerRepeatWorkManager({
     commit: createPortalOperationKey("bulk-submit"),
   });
   const [sampleLocationId, setSampleLocationId] = React.useState("");
+  const [multiServiceRequestsEnabled, setMultiServiceRequestsEnabled] =
+    React.useState(false);
   const [lifecycleReasons, setLifecycleReasons] = React.useState<
     Record<string, string>
   >({});
@@ -237,6 +240,16 @@ export function PartnerRepeatWorkManager({
   }, []);
   React.useEffect(() => {
     void loadBulkHistory();
+    if (enabledTools.bulk && canCreateRequests)
+      void partnerPortalFetch<{ requestModelVersion?: number }>(
+        "service-catalog",
+      )
+        .then((result) =>
+          setMultiServiceRequestsEnabled(
+            result.ok && result.data.requestModelVersion === 2,
+          ),
+        )
+        .catch(() => setMultiServiceRequestsEnabled(false));
     if (enabledTools.bulk)
       void partnerPortalFetch<{ ok: true; locations: Array<{ id: string }> }>(
         "locations?limit=1&active=true",
@@ -250,7 +263,7 @@ export function PartnerRepeatWorkManager({
             );
         })
         .catch(() => undefined);
-  }, [enabledTools.bulk, loadBulkHistory]);
+  }, [enabledTools.bulk, canCreateRequests, loadBulkHistory]);
 
   const openBulk = React.useCallback(
     async (importId: string, resetPage = true, signal?: AbortSignal) => {
@@ -533,9 +546,20 @@ export function PartnerRepeatWorkManager({
     });
   };
 
+  const sampleDate = new Date(Date.now() + 86400000).toLocaleDateString(
+    "en-CA",
+    { timeZone: "America/New_York" },
+  );
   const exampleCsv = [
-    "location_id,service_key,description,contact_name,contact_phone,contact_email,preferred_date,preferred_window_start,crew_instructions,item_count,volume_cubic_yards,po_number,cost_center,project_reference",
-    `${sampleLocationId},service_request,Describe your service request,On-site contact,,replace-with-contact-email,${new Date(Date.now() + 86400000).toLocaleDateString("en-CA", { timeZone: "America/New_York" })},,Call on arrival,,,,,`,
+    "request_group,service_lines,location_id,service_key,description,contact_name,contact_phone,contact_email,preferred_date,preferred_window_start,crew_instructions,item_count,volume_cubic_yards,po_number,cost_center,project_reference",
+    ...(multiServiceRequestsEnabled
+      ? [
+          `property-visit,,${sampleLocationId},painting,Paint the interior lobby,On-site contact,,replace-with-contact-email,${sampleDate},,Call on arrival,,,,,`,
+          `property-visit,,${sampleLocationId},pressure-washing,Wash the concrete walkway,On-site contact,,replace-with-contact-email,${sampleDate},,Call on arrival,,,,,`,
+        ]
+      : [
+          `,,${sampleLocationId},service_request,Describe your service request,On-site contact,,replace-with-contact-email,${sampleDate},,Call on arrival,,,,,`,
+        ]),
   ].join("\r\n");
 
   return (
@@ -700,7 +724,17 @@ export function PartnerRepeatWorkManager({
                           {template.name}
                         </p>
                         <p className="text-xs text-slate-600">
-                          {humanize(template.serviceKey)}
+                          {template.reusable?.modelVersion === 2
+                            ? template.reusable.serviceLines
+                                ?.map(
+                                  (line) =>
+                                    getPartnerServiceDefinition(line.serviceKey)
+                                      ?.label ?? line.serviceKey,
+                                )
+                                .join(", ")
+                            : humanize(
+                                template.serviceKey ?? "Service request",
+                              )}
                         </p>
                       </div>
                       {canCreateRequests &&
@@ -1241,6 +1275,16 @@ export function PartnerRepeatWorkManager({
                   ? "Each request shows whether its time is confirmed or needs Stonegate’s review."
                   : "Stonegate reviews each request and confirms its price and arrival time."}
               </p>
+              {multiServiceRequestsEnabled ? (
+                <p className="mt-2 text-sm leading-6 text-slate-600">
+                  Use the same request_group value to combine service rows into
+                  one request. The location, contact, preferred date, and
+                  billing references must match. Use a different group for a
+                  separate job. For service-specific scope details, the optional
+                  service_lines column accepts a JSON array; each item needs
+                  serviceKey, description, and scope.
+                </p>
+              ) : null}
               {canCreateRequests && enabledTools.bulk ? (
                 <>
                   <div className="mt-3 flex flex-wrap gap-2">

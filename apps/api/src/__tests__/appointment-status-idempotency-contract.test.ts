@@ -24,6 +24,24 @@ const myDaySource = readFileSync(
 );
 
 describe("appointment status idempotency source contract", () => {
+  it("rechecks visit ownership under the appointment lock before a closed visit can reopen", () => {
+    const transaction = source.indexOf("await database.transaction(async (tx)");
+    const rowLock = source.indexOf('.for("update")', transaction);
+    const stale = source.indexOf('"appointment_changed"', rowLock);
+    const guard = source.indexOf('if (existing.status !== "confirmed")', stale);
+    const ownership = source.indexOf(
+      "await assertAppointmentHasIndependentFinancials(tx, appointmentId)",
+      guard,
+    );
+    const write = source.indexOf("const [updated] = await tx", ownership);
+    expect(stale).toBeGreaterThan(rowLock);
+    expect(guard).toBeGreaterThan(stale);
+    expect(ownership).toBeGreaterThan(guard);
+    expect(write).toBeGreaterThan(ownership);
+    // A confirmed-to-confirmed metadata correction is the sole exception;
+    // canceled, completed, requested and no-show all reach the visit guard.
+    expect(source.slice(guard, ownership)).not.toContain("parsed.data.status");
+  });
   it("authorizes a verified human before params, body, and database access", () => {
     const boundary = source.indexOf("await beginTeamMutation(request, {");
     const params = source.indexOf("await context.params", boundary);

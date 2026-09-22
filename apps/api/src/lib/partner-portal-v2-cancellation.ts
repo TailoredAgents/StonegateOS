@@ -352,7 +352,7 @@ export function evaluatePartnerCancellation(input: {
         "Stonegate will review the request. The job remains scheduled and no fee is applied automatically.",
     });
   }
-  if (input.status !== "confirmed") {
+  if (input.status !== "confirmed" && input.status !== "partially_scheduled") {
     return decision({
       action: null,
       reasonCode: "status_unavailable",

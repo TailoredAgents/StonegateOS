@@ -1,6 +1,11 @@
 import type { NextRequest } from "next/server";
 import { requirePartnerCapability } from "@/lib/partner-account-authorization";
-import { arePartnerPortalV2ReadsEnabled } from "@/lib/partner-portal-feature-flags";
+import {
+  arePartnerPortalV2ReadsEnabled,
+  arePartnerMultiServiceRequestsEnabled,
+} from "@/lib/partner-portal-feature-flags";
+import { getDb } from "@/db";
+import { loadPartnerPublishedServiceRateCard } from "@/lib/partner-structured-rates";
 import {
   createPartnerPortalV2ErrorResponse,
   createPartnerPortalV2SuccessResponse,
@@ -57,16 +62,57 @@ export async function GET(request: NextRequest): Promise<Response> {
       );
     }
 
+    const requestedVersions = request.nextUrl.searchParams.getAll(
+      "requestModelVersion",
+    );
+    if (
+      requestedVersions.length > 1 ||
+      (requestedVersions.length === 1 && requestedVersions[0] !== "1")
+    ) {
+      return createPartnerPortalV2ErrorResponse(
+        "invalid_fields",
+        422,
+        correlationId,
+      );
+    }
+    const legacyRepresentation = requestedVersions.length === 1;
     const [services, agreement] = await Promise.all([
       listPartnerServiceCatalog({
         accountId,
         revealPrices: canReadRates,
+        ...(legacyRepresentation ? { requestModelVersion: 1 as const } : {}),
       }),
       loadPartnerAgreementPresentation({ accountId }),
     ]);
 
+    const multiService =
+      !legacyRepresentation && arePartnerMultiServiceRequestsEnabled(accountId);
+    const card = canReadRates
+      ? await loadPartnerPublishedServiceRateCard(getDb(), { accountId })
+      : null;
+    const visible = canReadRates && card?.portalVisible !== false;
     return createPartnerPortalV2SuccessResponse(
-      { ok: true, services, agreement },
+      {
+        ok: true,
+        services,
+        agreement,
+        requestModelVersion: multiService ? 2 : 1,
+        structuredRatesStatus: !visible
+          ? "hidden"
+          : card
+            ? "published"
+            : "missing",
+        structuredRates:
+          visible && card
+            ? {
+                versionId: card.rateCardVersionId,
+                currency: card.currency,
+                visitMinimum: card.visitMinimum,
+                rates: card.rates,
+                legacyItems: card.legacyItems,
+              }
+            : null,
+      },
       correlationId,
     );
   } catch (error) {

@@ -1,3 +1,6 @@
+import { getPartnerServiceDefinition } from "./partner-services";
+
+// Legacy rate editor/API keys. New request choices use PARTNER_SERVICE_KEYS.
 export const PARTNER_ALLOWED_SERVICE_KEYS = [
   "junk-removal",
   "demo-hauloff",
@@ -140,6 +143,8 @@ function titleCaseFromKey(value: string): string {
 
 export function getPartnerServiceLabel(serviceKey: string): string {
   const normalized = serviceKey.trim().toLowerCase();
+  const current = getPartnerServiceDefinition(normalized);
+  if (current) return current.label;
   if (isPartnerAllowedServiceKey(normalized)) {
     return PARTNER_SERVICE_LABELS[normalized];
   }

@@ -54,6 +54,26 @@ export function arePartnerPortalV2WritesEnabled(
   );
 }
 
+/** Explicit opt-in rollout; existing submitted work remains readable when paused. */
+export function arePartnerMultiServiceRequestsEnabled(
+  accountId?: string | null,
+): boolean {
+  const enabled = EXPLICIT_TRUE_VALUES.has(
+    process.env["PARTNER_MULTI_SERVICE_REQUESTS_ENABLED"]
+      ?.trim()
+      .toLowerCase() ?? "",
+  );
+  if (!enabled || !arePartnerPortalV2WritesEnabled(accountId)) return false;
+  const accounts = (process.env["PARTNER_MULTI_SERVICE_ACCOUNT_IDS"] ?? "")
+    .split(",")
+    .map((value) => value.trim().toLowerCase())
+    .filter(Boolean);
+  return (
+    accounts.length === 0 ||
+    Boolean(accountId && accounts.includes(accountId.toLowerCase()))
+  );
+}
+
 export function isPartnerPortalInstantConfirmationEnabled(
   partnerAccountId?: string | null,
 ): boolean {

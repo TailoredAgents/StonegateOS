@@ -389,6 +389,9 @@ importers:
 
   packages/sdk:
     dependencies:
+      '@myst-os/pricing':
+        specifier: workspace:*
+        version: link:../pricing
       zod:
         specifier: ^3.24.1
         version: 3.25.76

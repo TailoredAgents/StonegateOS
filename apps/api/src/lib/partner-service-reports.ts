@@ -274,7 +274,7 @@ export async function readPartnerServiceReport(input: {
         jobId: partnerBookings.id,
         locationId: partnerAccountLocations.id,
         location: partnerAccountLocations.siteName,
-        service: partnerBookings.serviceKey,
+        service: sql<string>`coalesce(nullif(${partnerBookings.scopeSnapshot}->>'serviceLabel',''),${partnerBookings.serviceKey},'Service request')`,
         status: partnerBookings.publicStatus,
         requesterId: partnerBookings.requestedByMembershipId,
         requester: partnerUsers.name,
@@ -305,7 +305,10 @@ export async function readPartnerServiceReport(input: {
           ? eq(partnerBookings.requestedByMembershipId, filters.requesterId)
           : undefined,
         filters.service
-          ? eq(partnerBookings.serviceKey, filters.service)
+          ? or(
+              eq(partnerBookings.serviceKey, filters.service),
+              sql`exists(select 1 from partner_booking_service_lines line where line.partner_account_id=${partnerBookings.partnerAccountId} and line.partner_booking_id=${partnerBookings.id} and line.service_key=${filters.service})`,
+            )
           : undefined,
         filters.status
           ? eq(partnerBookings.publicStatus, filters.status)

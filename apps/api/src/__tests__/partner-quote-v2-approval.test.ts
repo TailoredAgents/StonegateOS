@@ -178,4 +178,41 @@ describe("Quote V2 canonical Partner approval evidence", () => {
       }),
     ).toBe(false);
   });
+  it("requires exact complete service-set evidence for a combined request", () => {
+    const input = approvedEvidence();
+    const serviceKeys = ["junk-removal", "painting"];
+    const evidence = {
+      ...input.evidence,
+      requestSnapshot: {
+        ...input.evidence.requestSnapshot,
+        modelVersion: 2,
+        serviceKeys,
+      },
+    };
+    expect(
+      partnerQuoteApprovalEvidenceMatches({ ...input, evidence, serviceKeys }),
+    ).toBe(true);
+    for (const changed of [
+      ["junk-removal"],
+      ["junk-removal", "junk-removal"],
+      ["junk-removal", "soft-washing"],
+    ]) {
+      expect(
+        partnerQuoteApprovalEvidenceMatches({
+          ...input,
+          evidence: {
+            ...evidence,
+            requestSnapshot: {
+              ...evidence.requestSnapshot,
+              serviceKeys: changed,
+            },
+          },
+          serviceKeys,
+        }),
+      ).toBe(false);
+    }
+    expect(partnerQuoteApprovalEvidenceMatches({ ...input, serviceKeys })).toBe(
+      false,
+    );
+  });
 });

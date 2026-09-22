@@ -1,4 +1,15 @@
-import { evaluateOwnerAlert, processOwnerAlertReminder, OWNER_ALERT_EVALUATE_EVENT, OWNER_ALERT_REMINDER_EVENT } from "@/lib/partner-owner-alerts";
+import { queuePartnerCommittedStatusNotification } from "./partner-job-lifecycle";
+import {
+  partnerAppointmentBindingSql,
+  partnerVisitServiceLabelSql,
+} from "./partner-appointment-binding";
+import { verifyPartnerVisitCalendarCancellation } from "./partner-visit-calendar-cancellation";
+import {
+  evaluateOwnerAlert,
+  processOwnerAlertReminder,
+  OWNER_ALERT_EVALUATE_EVENT,
+  OWNER_ALERT_REMINDER_EVENT,
+} from "@/lib/partner-owner-alerts";
 import {
   and,
   asc,
@@ -211,7 +222,6 @@ import {
 import {
   PARTNER_NOTIFICATION_DELIVERY_EVENT,
   processPartnerNotificationDelivery,
-  queuePartnerJobAudienceNotification,
   queuePartnerBillingDisputeNotification,
 } from "@/lib/partner-notification-delivery";
 import { arePartnerPortalApplicantNotificationsEnabled } from "@/lib/partner-portal-feature-flags";
@@ -3469,6 +3479,7 @@ async function handleAppointmentCalendarSyncRequested(
       leadServices: leads.servicesRequested,
       leadNotes: leads.notes,
       partnerServiceKey: partnerBookings.serviceKey,
+      partnerServiceLabel: partnerVisitServiceLabelSql,
       quotedScopeText: appointments.quotedScopeText,
       bookingDetails: appointments.bookingDetails,
     })
@@ -3476,10 +3487,7 @@ async function handleAppointmentCalendarSyncRequested(
     .leftJoin(contacts, eq(appointments.contactId, contacts.id))
     .leftJoin(properties, eq(appointments.propertyId, properties.id))
     .leftJoin(leads, eq(appointments.leadId, leads.id))
-    .leftJoin(
-      partnerBookings,
-      eq(partnerBookings.appointmentId, appointments.id),
-    )
+    .leftJoin(partnerBookings, partnerAppointmentBindingSql())
     .where(eq(appointments.id, appointmentId))
     .limit(1);
   if (!appointment) {
@@ -3513,7 +3521,10 @@ async function handleAppointmentCalendarSyncRequested(
     };
   }
 
-  if (syncReason === "appointment.canceled") {
+  if (
+    syncReason === "appointment.canceled" ||
+    syncReason === "partner.visit.canceled"
+  ) {
     if (
       appointment.status !== "canceled" ||
       !requestedCalendarEventId ||
@@ -3536,16 +3547,45 @@ async function handleAppointmentCalendarSyncRequested(
       };
     }
 
-    if (
-      !payload ||
-      !(await verifyAppointmentCancellationCalendarAuthorization({
-        db,
-        payload,
-        appointmentId,
-        requestedVersion,
-        requestedCalendarEventId,
-      }))
-    ) {
+    const visitAccountId = readStringValue(payload?.["accountId"]);
+    const visitBookingId = readStringValue(payload?.["bookingId"]);
+    const visitId = readStringValue(payload?.["visitId"]);
+    const sourceAuditEventId = readStringValue(payload?.["sourceAuditEventId"]);
+    const authorized =
+      syncReason === "partner.visit.canceled"
+        ? Boolean(
+            payload &&
+              visitAccountId &&
+              visitBookingId &&
+              visitId &&
+              sourceAuditEventId &&
+              [
+                visitAccountId,
+                visitBookingId,
+                visitId,
+                sourceAuditEventId,
+              ].every((id) => UUID_VALUE_PATTERN.test(id)) &&
+              (await verifyPartnerVisitCalendarCancellation(db, {
+                accountId: visitAccountId,
+                bookingId: visitBookingId,
+                visitId,
+                sourceAuditEventId,
+                appointmentId,
+                version: requestedVersion,
+                calendarEventId: requestedCalendarEventId,
+              })),
+          )
+        : Boolean(
+            payload &&
+              (await verifyAppointmentCancellationCalendarAuthorization({
+                db,
+                payload,
+                appointmentId,
+                requestedVersion,
+                requestedCalendarEventId,
+              })),
+          );
+    if (!authorized) {
       return {
         status: "skipped",
         error: "calendar_cancel_not_explicitly_authorized",
@@ -3607,6 +3647,7 @@ async function handleAppointmentCalendarSyncRequested(
     leadServices: appointment.leadServices,
     leadNotes: appointment.leadNotes,
     partnerServiceKey: appointment.partnerServiceKey,
+    partnerServiceLabel: appointment.partnerServiceLabel,
     quotedScopeText: appointment.quotedScopeText,
     bookingDetails: appointment.bookingDetails,
   });
@@ -3716,48 +3757,121 @@ async function handleOutboxEvent(
   switch (event.type) {
     case "partner.bulk_import.process": {
       const payload = isRecord(event.payload) ? event.payload : {};
-      const accountId = payload["accountId"], importId = payload["importId"];
-      if (typeof accountId !== "string" || typeof importId !== "string" || !OUTBOX_UUID_PATTERN.test(accountId) || !OUTBOX_UUID_PATTERN.test(importId)) return { status: "skipped", error: "partner_bulk_binding_invalid" };
+      const accountId = payload["accountId"],
+        importId = payload["importId"];
+      if (
+        typeof accountId !== "string" ||
+        typeof importId !== "string" ||
+        !OUTBOX_UUID_PATTERN.test(accountId) ||
+        !OUTBOX_UUID_PATTERN.test(importId)
+      )
+        return { status: "skipped", error: "partner_bulk_binding_invalid" };
       await processPartnerBulkImport({ accountId, importId });
       return { status: "processed" };
     }
     case "partner.billing.refund.submit": {
-      const operationId = isRecord(event.payload) ? event.payload["operationId"] : null;
-      if (typeof operationId !== "string" || !OUTBOX_UUID_PATTERN.test(operationId)) return { status: "skipped", error: "partner_refund_operation_invalid" };
+      const operationId = isRecord(event.payload)
+        ? event.payload["operationId"]
+        : null;
+      if (
+        typeof operationId !== "string" ||
+        !OUTBOX_UUID_PATTERN.test(operationId)
+      )
+        return { status: "skipped", error: "partner_refund_operation_invalid" };
       await processPartnerBillingRefundOperation(operationId);
       return { status: "processed" };
     }
     case "partner.job.status_committed": {
       const payload = isRecord(event.payload) ? event.payload : {};
-      const accountId = payload["accountId"], jobId = payload["jobId"], status = payload["status"];
-      if (typeof accountId !== "string" || typeof jobId !== "string" || !OUTBOX_UUID_PATTERN.test(accountId) || !OUTBOX_UUID_PATTERN.test(jobId)) return { status: "skipped", error: "partner_job_status_binding_invalid" };
-      const eventType = status === "completed" ? "booking.completed" : status === "confirmed" ? "booking.created" : status === "canceled" ? "booking.canceled" : null;
-      if (!eventType) return { status: "skipped", error: "partner_job_status_invalid" };
-      await getDb().transaction(async (tx) => {
-        const [job] = await tx.select({ id: partnerBookings.id, status: appointments.status, serviceAt: partnerBookings.arrivalWindowStartAt, timezone: appointments.schedulingTimezone })
-          .from(partnerBookings).innerJoin(appointments, eq(appointments.id, partnerBookings.appointmentId)).where(and(eq(partnerBookings.id, jobId), eq(partnerBookings.partnerAccountId, accountId))).limit(1);
-        if (!job || job.status !== status) return;
-        await queuePartnerJobAudienceNotification({ tx, accountId, partnerBookingId: jobId, eventType, dedupeKey: event.id, occurredAt: new Date(), correlationId: null, accountTimezone: job.timezone, serviceAt: job.serviceAt });
-      });
+      const accountId = payload["accountId"],
+        jobId = payload["jobId"],
+        status = payload["status"];
+      if (
+        typeof accountId !== "string" ||
+        typeof jobId !== "string" ||
+        !OUTBOX_UUID_PATTERN.test(accountId) ||
+        !OUTBOX_UUID_PATTERN.test(jobId)
+      )
+        return {
+          status: "skipped",
+          error: "partner_job_status_binding_invalid",
+        };
+      if (
+        status !== "completed" &&
+        status !== "confirmed" &&
+        status !== "rescheduled" &&
+        status !== "canceled"
+      )
+        return { status: "skipped", error: "partner_job_status_invalid" };
+      const visitId = payload["visitId"];
+      if (
+        visitId !== undefined &&
+        (typeof visitId !== "string" || !OUTBOX_UUID_PATTERN.test(visitId))
+      )
+        return {
+          status: "skipped",
+          error: "partner_visit_status_binding_invalid",
+        };
+      await getDb().transaction((tx) =>
+        queuePartnerCommittedStatusNotification(tx, {
+          accountId,
+          jobId,
+          status,
+          eventId: event.id,
+          ...(typeof visitId === "string" ? { visitId } : {}),
+          ...(typeof payload["version"] === "string"
+            ? { version: payload["version"] }
+            : {}),
+        }),
+      );
       return { status: "processed" };
     }
     case "partner.proof.prepare": {
       const payload = isRecord(event.payload) ? event.payload : {};
-      const accountId = payload["accountId"], jobId = payload["jobId"];
-      if (typeof accountId !== "string" || typeof jobId !== "string" || !OUTBOX_UUID_PATTERN.test(accountId) || !OUTBOX_UUID_PATTERN.test(jobId)) return { status: "skipped", error: "partner_completion_binding_invalid" };
+      const accountId = payload["accountId"],
+        jobId = payload["jobId"];
+      if (
+        typeof accountId !== "string" ||
+        typeof jobId !== "string" ||
+        !OUTBOX_UUID_PATTERN.test(accountId) ||
+        !OUTBOX_UUID_PATTERN.test(jobId)
+      )
+        return {
+          status: "skipped",
+          error: "partner_completion_binding_invalid",
+        };
       await preparePartnerCompletionRecord(accountId, jobId);
       return { status: "processed" };
     }
     case "partner.document.scan": {
       const payload = isRecord(event.payload) ? event.payload : {};
-      const assetId = payload["assetId"], accountId = payload["accountId"];
-      if (typeof assetId !== "string" || typeof accountId !== "string" || !OUTBOX_UUID_PATTERN.test(assetId) || !OUTBOX_UUID_PATTERN.test(accountId)) return { status: "skipped", error: "partner_document_scan_payload_invalid" };
+      const assetId = payload["assetId"],
+        accountId = payload["accountId"];
+      if (
+        typeof assetId !== "string" ||
+        typeof accountId !== "string" ||
+        !OUTBOX_UUID_PATTERN.test(assetId) ||
+        !OUTBOX_UUID_PATTERN.test(accountId)
+      )
+        return {
+          status: "skipped",
+          error: "partner_document_scan_payload_invalid",
+        };
       await processPartnerDocumentScan({ assetId, accountId });
       return { status: "processed" };
     }
     case "partner.billing.document.generate": {
-      const operationId = isRecord(event.payload) ? event.payload["operationId"] : null;
-      if (typeof operationId !== "string" || !OUTBOX_UUID_PATTERN.test(operationId)) return { status: "skipped", error: "partner_billing_document_operation_invalid" };
+      const operationId = isRecord(event.payload)
+        ? event.payload["operationId"]
+        : null;
+      if (
+        typeof operationId !== "string" ||
+        !OUTBOX_UUID_PATTERN.test(operationId)
+      )
+        return {
+          status: "skipped",
+          error: "partner_billing_document_operation_invalid",
+        };
       await processPartnerBillingDocumentOperation(operationId);
       return { status: "processed" };
     }

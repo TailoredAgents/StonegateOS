@@ -101,6 +101,9 @@ export function PartnerDraftPhotoUpload({
   onPhaseChange,
   persona,
   compact = false,
+  serviceChoices,
+  serviceAssociations = {},
+  onServiceAssociationsChange,
 }: {
   draftId: string;
   canUpload: boolean;
@@ -109,6 +112,12 @@ export function PartnerDraftPhotoUpload({
   onPhaseChange?: (phase: DraftPhotoUploadPhase) => void;
   persona?: string | null;
   compact?: boolean;
+  serviceChoices?: readonly { id: string; label: string }[];
+  serviceAssociations?: Readonly<Record<string, readonly string[]>>;
+  onServiceAssociationsChange?: (
+    photoId: string,
+    serviceLineIds: string[],
+  ) => void;
 }) {
   const [state, setState] = React.useState<MediaState>("loading");
   const [loadError, setLoadError] = React.useState<string | null>(null);
@@ -559,6 +568,7 @@ export function PartnerDraftPhotoUpload({
     );
     mediaRef.current = next;
     setMedia(next);
+    onServiceAssociationsChange?.(item.id, []);
     onCountChange(next.filter((item) => item.status === "ready").length);
     setPhase(files.length ? "ready" : "idle");
     setMessage({ tone: "success", text: "Photo removed from this request." });
@@ -948,6 +958,58 @@ export function PartnerDraftPhotoUpload({
                     <p className="mt-2 text-sm leading-5 text-slate-600">
                       {item.caption}
                     </p>
+                  ) : null}
+                  {serviceChoices?.length &&
+                  onServiceAssociationsChange &&
+                  item.status === "ready" ? (
+                    <details className="mt-2 border-t border-slate-100 pt-1">
+                      <summary className="min-h-11 cursor-pointer py-3 text-xs font-semibold text-slate-700">
+                        For services
+                        {serviceAssociations[item.id]?.length
+                          ? ` (${serviceAssociations[item.id]!.length})`
+                          : " (optional)"}
+                      </summary>
+                      <p className="mb-2 text-xs leading-5 text-slate-500">
+                        Leave all unchecked to share this photo with the whole
+                        request.
+                      </p>
+                      <fieldset
+                        disabled={busy || preparingFiles || deletingId !== null}
+                      >
+                        <legend className="sr-only">
+                          Services shown in {item.filename ?? "this photo"}
+                        </legend>
+                        {serviceChoices.map((service) => (
+                          <label
+                            key={service.id}
+                            className="flex min-h-11 items-center gap-2 text-xs text-slate-700"
+                          >
+                            <input
+                              type="checkbox"
+                              className="h-4 w-4 shrink-0"
+                              checked={
+                                serviceAssociations[item.id]?.includes(
+                                  service.id,
+                                ) ?? false
+                              }
+                              onChange={(event) => {
+                                const selected =
+                                  serviceAssociations[item.id] ?? [];
+                                onServiceAssociationsChange(
+                                  item.id,
+                                  event.target.checked
+                                    ? [...selected, service.id]
+                                    : selected.filter(
+                                        (id) => id !== service.id,
+                                      ),
+                                );
+                              }}
+                            />
+                            {service.label}
+                          </label>
+                        ))}
+                      </fieldset>
+                    </details>
                   ) : null}
                   <div className="mt-3 flex flex-wrap gap-2">
                     {item.downloadIntent?.originalUrl ? (

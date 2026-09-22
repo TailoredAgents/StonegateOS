@@ -1,4 +1,5 @@
-import { and, desc, eq } from "drizzle-orm";
+import { lockPartnerRequestFinancials } from "./partner-request-financials";
+import { and, desc, eq, sql } from "drizzle-orm";
 import { z } from "zod";
 import {
   appointments,
@@ -16,7 +17,6 @@ import {
 } from "@/db";
 import { loadPartnerAccountServiceAgreement } from "@/lib/partner-account-service-agreement-service";
 import { applyPartnerChangeOrderPrice } from "@/lib/partner-change-order-price";
-import { lockAppointmentInvoiceCollection } from "@/lib/partner-invoice-ledger";
 import {
   PartnerJobChangeRequestBodySchema,
   type PartnerJobChangeRequestBody,
@@ -346,7 +346,11 @@ export async function resolvePartnerJobChangeOrderFromQuoteResponse(
       "conflict",
       "This job is no longer available.",
     );
-  await lockAppointmentInvoiceCollection(tx, binding.appointmentId);
+  await lockPartnerRequestFinancials(
+    tx,
+    input.partnerAccountId,
+    order.partnerBookingId,
+  );
   const snapshot = OfferSnapshotSchema.safeParse(order.offerSnapshot);
   if (
     !snapshot.success ||
@@ -372,10 +376,10 @@ export async function resolvePartnerJobChangeOrderFromQuoteResponse(
       publicStatus: partnerBookings.publicStatus,
       scopeSnapshot: partnerBookings.scopeSnapshot,
       rateSnapshot: partnerBookings.rateSnapshot,
-      appointmentStatus: appointments.status,
+      appointmentStatus: sql<string>`coalesce(${appointments.status}::text, ${partnerBookings.publicStatus})`,
     })
     .from(partnerBookings)
-    .innerJoin(appointments, eq(appointments.id, partnerBookings.appointmentId))
+    .leftJoin(appointments, eq(appointments.id, partnerBookings.appointmentId))
     .where(
       and(
         eq(partnerBookings.partnerAccountId, input.partnerAccountId),

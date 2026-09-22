@@ -1,3 +1,4 @@
+import { PartnerMultiServiceRequestDetails } from "../../partners/components/PartnerMultiServiceRequestDetails";
 import Link from "next/link";
 import type { Route } from "next";
 import {
@@ -297,12 +298,13 @@ function JobDetail({
               <h2 className="text-xl font-semibold text-slate-950">
                 {job.location.name?.trim() ||
                   address?.line1 ||
+                  job.service.label ||
                   humanize(job.service.key)}
               </h2>
               <PartnerStatusBadge status={job.status} />
             </div>
             <p className="mt-2 text-sm text-slate-600">
-              {humanize(job.service.key)} ·{" "}
+              {job.service.label || humanize(job.service.key)} ·{" "}
               {formatDateTime(job.schedule.arrivalWindow?.startAt, timezone)}
             </p>
           </div>
@@ -314,6 +316,9 @@ function JobDetail({
           </Link>
         </div>
 
+        {job.multiService ? (
+          <PartnerMultiServiceRequestDetails request={job.multiService} />
+        ) : null}
         <dl className="mt-5 grid gap-3 border-t border-slate-200 pt-5 sm:grid-cols-2">
           <div>
             <dt className="text-xs font-semibold uppercase tracking-wide text-slate-600">
@@ -720,7 +725,7 @@ export async function PartnerPortalReadOnlyPreview({
                         <PartnerStatusBadge status={job.status} />
                       </div>
                       <p className="mt-1 text-sm text-slate-600">
-                        {humanize(job.service.key)}
+                        {job.service.label || humanize(job.service.key)}
                       </p>
                       <p className="mt-1 text-xs text-slate-600">
                         {formatDateTime(

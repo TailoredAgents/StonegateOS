@@ -2,6 +2,11 @@ import { enqueueOwnerAlertEvaluation } from "@/lib/partner-owner-alerts";
 import { createHash, randomUUID } from "node:crypto";
 import { DateTime } from "luxon";
 import {
+  PartnerServiceLinesInputSchema,
+  getPartnerServiceDefinition,
+  type PartnerServiceLineInput,
+} from "@myst-os/pricing";
+import {
   and,
   asc,
   desc,
@@ -21,6 +26,7 @@ import {
   partnerAccountLocations,
   partnerAccounts,
   partnerBookings,
+  partnerBookingServiceLines,
   partnerBulkImportRows,
   partnerBulkImports,
   partnerRecurringOccurrences,
@@ -60,7 +66,10 @@ import {
 } from "@/lib/partner-account-workflows";
 import { loadPartnerBackgroundSchedulingActor } from "@/lib/partner-background-scheduling-actor";
 import { listPartnerServiceCatalog } from "@/lib/partner-portal-v2-service-catalog";
-import { arePartnerPortalV2WritesEnabled } from "@/lib/partner-portal-feature-flags";
+import {
+  arePartnerMultiServiceRequestsEnabled,
+  arePartnerPortalV2WritesEnabled,
+} from "@/lib/partner-portal-feature-flags";
 import { csvCell } from "@/lib/expense-export";
 
 const MAX_BULK_ROWS = 100;
@@ -89,6 +98,8 @@ const UNSAFE_REUSE_TEXT =
 
 type TemplateData = Readonly<{
   schemaVersion: 1;
+  modelVersion?: 1 | 2;
+  serviceLines?: readonly PartnerServiceLineInput[];
   tierKey: string | null;
   scope: Readonly<Record<string, unknown>>;
   description: string;
@@ -102,7 +113,7 @@ export type PartnerServiceTemplateDto = Readonly<{
   active: boolean;
   id: string;
   name: string;
-  serviceKey: string;
+  serviceKey: string | null;
   locationId: string | null;
   reusable: TemplateData;
   version: number;
@@ -181,8 +192,11 @@ export type BulkRowIssue = Readonly<{
 }>;
 
 export type NormalizedBulkRow = Readonly<{
+  requestGroup?: string;
+  modelVersion?: 1 | 2;
+  serviceLines?: readonly PartnerServiceLineInput[];
   locationId: string;
-  serviceKey: string;
+  serviceKey: string | null;
   tierKey: string | null;
   description: string;
   crewInstructions: string | null;
@@ -275,6 +289,8 @@ export function sanitizeReusableScope(
 ): Readonly<Record<string, unknown>> {
   const sanitized = sanitizeReusableValue(isRecord(value) ? value : {});
   const record = isRecord(sanitized) ? sanitized : {};
+  // Photos are intentionally not reused; saved evidence IDs never belong to a new draft.
+  delete record["photoServiceAssociations"];
   if (stableJson(record).length > 32_000) {
     throw new PartnerPortalSchedulingError(
       "invalid_fields",
@@ -359,6 +375,12 @@ function toTemplateDto(
   const reusable: TemplateData = rawReusable
     ? ({
         ...(rawReusable as unknown as TemplateData),
+        scope: sanitizeReusableScope(rawReusable["scope"]),
+        modelVersion: rawReusable["modelVersion"] === 2 ? 2 : 1,
+        serviceLines:
+          rawReusable["modelVersion"] === 2
+            ? reusableServiceLines(rawReusable["serviceLines"])
+            : [],
         tierKey:
           typeof rawReusable["tierKey"] === "string" &&
           /^[a-z0-9][a-z0-9_-]{0,99}$/u.test(rawReusable["tierKey"])
@@ -437,9 +459,29 @@ async function loadLocationForActor(
   return location!;
 }
 
+function reusableServiceLines(value: unknown): PartnerServiceLineInput[] {
+  const lines = PartnerServiceLinesInputSchema.parse(value);
+  return lines.map((line) => ({
+    ...line,
+    description: cleanReusableText(line.description, 4000) ?? "",
+    scope: Object.fromEntries(
+      Object.entries(line.scope).flatMap(([key, value]) => {
+        const clean = cleanReusableText(value, 2000);
+        return clean ? [[key, clean]] : [];
+      }),
+    ),
+  }));
+}
+
 function templateDataFromDraft(draft: PartnerDraftDto): TemplateData {
   const description = cleanReusableText(draft.description, 4_000);
-  if (!description || !draft.serviceKey || !draft.locationId) {
+  if (
+    !draft.locationId ||
+    (draft.modelVersion === 2
+      ? !draft.serviceLines.length ||
+        draft.serviceLines.some((line) => !line.description.trim())
+      : !description || !draft.serviceKey)
+  ) {
     throw new PartnerPortalSchedulingError(
       "invalid_fields",
       "Complete the location, service, and description before saving a template.",
@@ -448,9 +490,12 @@ function templateDataFromDraft(draft: PartnerDraftDto): TemplateData {
   }
   return Object.freeze({
     schemaVersion: 1 as const,
+    modelVersion: draft.modelVersion,
+    serviceLines:
+      draft.modelVersion === 2 ? reusableServiceLines(draft.serviceLines) : [],
     tierKey: draft.tierKey,
     scope: sanitizeReusableScope(draft.scope),
-    description,
+    description: description ?? "",
     crewInstructions: cleanReusableText(draft.crewInstructions, 4_000),
     onSiteContact: safeOnSiteContact(draft.onSiteContact),
     proofRequirements: safeProofRequirements(draft.proofRequirements),
@@ -463,11 +508,12 @@ async function reusableSourceFromJob(input: {
   jobId: string;
 }): Promise<{
   locationId: string;
-  serviceKey: string;
+  serviceKey: string | null;
   data: TemplateData;
 }> {
   const [job] = await getDb()
     .select({
+      modelVersion: partnerBookings.modelVersion,
       serviceKey: partnerBookings.serviceKey,
       tierKey: partnerBookings.tierKey,
       propertyId: partnerBookings.propertyId,
@@ -483,7 +529,7 @@ async function reusableSourceFromJob(input: {
       ),
     )
     .limit(1);
-  if (!job?.serviceKey) {
+  if (!job || (job.modelVersion !== 2 && !job.serviceKey)) {
     throw new PartnerPortalSchedulingError(
       "not_found",
       "The job was not found.",
@@ -510,8 +556,34 @@ async function reusableSourceFromJob(input: {
     )
     .limit(1);
   assertActorLocation(input.actor, location ?? null);
+  const sourceLines =
+    job.modelVersion === 2
+      ? await getDb()
+          .select()
+          .from(partnerBookingServiceLines)
+          .where(
+            and(
+              eq(
+                partnerBookingServiceLines.partnerAccountId,
+                input.actor.accountId,
+              ),
+              eq(partnerBookingServiceLines.partnerBookingId, input.jobId),
+            ),
+          )
+          .orderBy(asc(partnerBookingServiceLines.position))
+      : [];
+  const lines = reusableServiceLines(
+    sourceLines.map((line) => ({
+      id: line.id,
+      serviceKey: line.serviceKey,
+      description: line.description,
+      scope: line.scope,
+      selectedAddOns: line.selectedAddOns,
+      proofRequirements: line.proofRequirements,
+    })),
+  );
   const description = cleanReusableText(snapshot["description"], 4_000);
-  if (!description) {
+  if (!description && job.modelVersion !== 2) {
     throw new PartnerPortalSchedulingError(
       "invalid_fields",
       "This job does not contain reusable scope.",
@@ -523,9 +595,11 @@ async function reusableSourceFromJob(input: {
     serviceKey: job.serviceKey,
     data: Object.freeze({
       schemaVersion: 1 as const,
+      modelVersion: job.modelVersion === 2 ? 2 : 1,
+      serviceLines: lines,
       tierKey: job.tierKey,
       scope: sanitizeReusableScope(snapshot["scope"]),
-      description,
+      description: description ?? "",
       crewInstructions: cleanReusableText(snapshot["crewInstructions"], 4_000),
       onSiteContact: safeOnSiteContact(snapshot["onSiteContact"]),
       proofRequirements: safeProofRequirements(job.proof),
@@ -555,7 +629,7 @@ async function reusableSource(input: {
     actor: input.actor,
     draftId: input.draftId!,
   });
-  if (!draft.locationId || !draft.serviceKey) {
+  if (!draft.locationId || (draft.modelVersion !== 2 && !draft.serviceKey)) {
     throw new PartnerPortalSchedulingError(
       "invalid_fields",
       "Complete the location and service before reusing this draft.",
@@ -574,6 +648,11 @@ function mutationFromTemplate(
   template: PartnerServiceTemplateDto,
 ): PartnerDraftMutation {
   return {
+    modelVersion: template.reusable.modelVersion === 2 ? 2 : 1,
+    serviceLines:
+      template.reusable.modelVersion === 2
+        ? reusableServiceLines(template.reusable.serviceLines)
+        : [],
     locationId: template.locationId,
     serviceKey: template.serviceKey,
     tierKey: template.reusable.tierKey,
@@ -3030,6 +3109,8 @@ export function parseCsv(csv: string): readonly (readonly string[])[] {
 }
 
 const BULK_HEADERS = [
+  "request_group",
+  "service_lines",
   "location_id",
   "service_key",
   "tier_key",
@@ -3067,6 +3148,113 @@ export function correctionCsv(rows: readonly BulkValidationRow[]): string {
   ].join("\r\n");
 }
 
+/** Group validation finishes before any draft or booking is written. */
+export function groupPartnerBulkRows(
+  rows: readonly BulkValidationRow[],
+  enabled: boolean,
+): readonly BulkValidationRow[] {
+  const groups = new Map<string, BulkValidationRow[]>();
+  for (const row of rows) {
+    const key = row.raw["request_group"]?.trim();
+    if (key) groups.set(key, [...(groups.get(key) ?? []), row]);
+  }
+  const replacements = new Map<number, BulkValidationRow>();
+  for (const [key, group] of groups) {
+    let issue: string | null = !enabled
+      ? "Multi-service request groups are not enabled for this account."
+      : !/^[A-Za-z0-9][A-Za-z0-9._:-]{0,79}$/.test(key)
+        ? "Use a request group identifier of at most 80 letters, numbers, dots, colons, underscores, or hyphens."
+        : null;
+    const first = group[0]!.normalized;
+    if (!first || group.some((row) => !row.normalized || row.errors.length))
+      issue ??= "Correct every row in this request group before submitting it.";
+    if (
+      group.some((row) => Object.keys(row.normalized?.scope ?? {}).length > 0)
+    )
+      issue ??=
+        "Put service-specific measurements in service_lines scope or the service description; grouped requests cannot use the legacy item_count or volume_cubic_yards columns.";
+    const shared = (row: NormalizedBulkRow) =>
+      stableJson({
+        locationId: row.locationId,
+        onSiteContact: row.onSiteContact,
+        preferredDate: row.preferredDate,
+        preferredWindowStart: row.preferredWindowStart,
+        timezone: row.timezone,
+        commercial: row.commercial,
+        proofRequirements: row.proofRequirements,
+        crewInstructions: row.crewInstructions,
+      });
+    if (
+      first &&
+      group.some(
+        (row) => row.normalized && shared(row.normalized) !== shared(first),
+      )
+    )
+      issue ??=
+        "Every row in a request group must have the same location, contact, dates, instructions, and billing references.";
+    let lines: PartnerServiceLineInput[] = [];
+    if (!issue) {
+      try {
+        lines = PartnerServiceLinesInputSchema.parse(
+          group.flatMap((row) => {
+            const value = row.normalized!;
+            if (value.modelVersion === 2) return value.serviceLines ?? [];
+            if (
+              !value.serviceKey ||
+              !getPartnerServiceDefinition(value.serviceKey)
+            )
+              throw new Error("unsupported_group_service");
+            return [
+              {
+                id: randomUUID(),
+                serviceKey: getPartnerServiceDefinition(value.serviceKey)!.key,
+                description: value.description,
+                scope: {},
+                selectedAddOns: [],
+                proofRequirements: {},
+              },
+            ];
+          }),
+        );
+        if (!lines.length || lines.some((line) => !line.description.trim()))
+          throw new Error("empty_group");
+      } catch {
+        issue =
+          "Choose up to eight distinct supported services with descriptions in each request group.";
+      }
+    }
+    for (const row of group)
+      replacements.set(
+        row.rowNumber,
+        issue
+          ? {
+              ...row,
+              normalized: null,
+              errors: [
+                ...row.errors,
+                { field: "request_group", message: issue },
+              ],
+            }
+          : {
+              ...row,
+              normalized: {
+                ...first!,
+                requestGroup: key,
+                modelVersion: 2,
+                serviceKey: null,
+                tierKey: null,
+                serviceLines: lines,
+                description: "",
+                scope: {},
+              },
+            },
+      );
+  }
+  return Object.freeze(
+    rows.map((row) => replacements.get(row.rowNumber) ?? row),
+  );
+}
+
 export async function validatePartnerBulkCsv(input: {
   actor: PartnerSchedulingActor;
   csv: string;
@@ -3097,7 +3285,13 @@ export async function validatePartnerBulkCsv(input: {
     "description",
     "contact_name",
   ] as const) {
-    if (!header.includes(required))
+    if (
+      !header.includes(required) &&
+      !(
+        header.includes("service_lines") &&
+        ["service_key", "description"].includes(required)
+      )
+    )
       throw new PartnerPortalSchedulingError(
         "invalid_fields",
         "The CSV is missing required columns.",
@@ -3159,11 +3353,49 @@ export async function validatePartnerBulkCsv(input: {
   }
   const supported = new Set(services.map((service) => service.key));
   const tomorrowByTimezone = new Map<string, string>();
-  return Object.freeze(
+  const validated = Object.freeze(
     rawRows.map((raw, index) => {
       const errors: BulkRowIssue[] = [];
       const locationId = raw["location_id"] ?? "";
       const location = accessibleLocations.get(locationId);
+      let serviceLines: PartnerServiceLineInput[] | undefined;
+      if (raw["service_lines"]?.trim()) {
+        if (!arePartnerMultiServiceRequestsEnabled(input.actor.accountId))
+          errors.push({
+            field: "service_lines",
+            message: "Multi-service requests are not enabled for this account.",
+          });
+        try {
+          const rawLines: unknown = JSON.parse(raw["service_lines"]);
+          const parsedLines = PartnerServiceLinesInputSchema.parse(
+            Array.isArray(rawLines)
+              ? rawLines.map((line: unknown) =>
+                  isRecord(line)
+                    ? { ...line, id: line["id"] ?? randomUUID() }
+                    : line,
+                )
+              : rawLines,
+          );
+          if (
+            !parsedLines.length ||
+            parsedLines.some((line) => !line.description.trim())
+          )
+            throw new Error("missing_description");
+          serviceLines = parsedLines;
+          if (parsedLines.some((line) => !supported.has(line.serviceKey)))
+            errors.push({
+              field: "service_lines",
+              message: "Choose only services enabled for this account.",
+            });
+        } catch {
+          errors.push({
+            field: "service_lines",
+            message:
+              "Use an array of supported services with descriptions and scoped details.",
+          });
+        }
+      }
+      const grouped = Boolean(raw["request_group"]?.trim());
       const serviceKey = (raw["service_key"] ?? "").toLowerCase();
       const service = services.find((item) => item.key === serviceKey);
       const tierKey =
@@ -3183,13 +3415,15 @@ export async function validatePartnerBulkCsv(input: {
           field: "location_id",
           message: "Choose an accessible active location ID.",
         });
-      if (!supported.has(serviceKey))
+      if (!serviceLines && !supported.has(serviceKey))
         errors.push({
           field: "service_key",
           message:
             "Choose a service enabled for your account, or service_request for Stonegate review.",
         });
       if (
+        !serviceLines &&
+        !grouped &&
         service &&
         ((tierKey &&
           !service.baseOptions.some((option) => option.tierKey === tierKey)) ||
@@ -3200,7 +3434,7 @@ export async function validatePartnerBulkCsv(input: {
           message:
             "Choose a current service option from your account's booking form.",
         });
-      if (!description)
+      if (!serviceLines && !description)
         errors.push({ field: "description", message: "Describe the work." });
       if (!contactName)
         errors.push({
@@ -3267,8 +3501,10 @@ export async function validatePartnerBulkCsv(input: {
         ? null
         : Object.freeze({
             locationId,
-            serviceKey,
-            tierKey,
+            modelVersion: serviceLines ? 2 : 1,
+            serviceLines,
+            serviceKey: serviceLines ? null : serviceKey,
+            tierKey: serviceLines ? null : tierKey,
             description,
             crewInstructions: cleanText(raw["crew_instructions"], 4_000),
             onSiteContact: {
@@ -3303,6 +3539,10 @@ export async function validatePartnerBulkCsv(input: {
         errors: Object.freeze(errors),
       });
     }),
+  );
+  return groupPartnerBulkRows(
+    validated,
+    arePartnerMultiServiceRequestsEnabled(input.actor.accountId),
   );
 }
 
@@ -3749,6 +3989,17 @@ export async function retryPartnerBulkImport(input: {
   return getPartnerBulkImport(input);
 }
 
+function bulkRowGroupCondition(row: typeof partnerBulkImportRows.$inferSelect) {
+  const group = row.normalizedData?.["requestGroup"];
+  return typeof group === "string"
+    ? and(
+        eq(partnerBulkImportRows.partnerAccountId, row.partnerAccountId),
+        eq(partnerBulkImportRows.partnerBulkImportId, row.partnerBulkImportId),
+        sql`${partnerBulkImportRows.normalizedData}->>'requestGroup' = ${group}`,
+      )
+    : eq(partnerBulkImportRows.id, row.id);
+}
+
 async function submitBulkRow(
   actor: PartnerSchedulingActor,
   stored: typeof partnerBulkImportRows.$inferSelect,
@@ -3760,6 +4011,9 @@ async function submitBulkRow(
       "Correct this row and upload it again.",
       { status: 422 },
     );
+  const operationIdentity = row.requestGroup
+    ? sha256(stored.partnerBulkImportId, row.requestGroup)
+    : stored.id;
   await loadLocationForActor(actor, row.locationId);
   if (stored.bookingDraftId) {
     const [accepted] = await getDb()
@@ -3783,6 +4037,8 @@ async function submitBulkRow(
     actor,
     mutation: {
       locationId: row.locationId,
+      modelVersion: row.modelVersion ?? 1,
+      serviceLines: row.serviceLines ? [...row.serviceLines] : [],
       serviceKey: row.serviceKey,
       tierKey: row.tierKey ?? null,
       scope: { ...row.scope },
@@ -3804,12 +4060,12 @@ async function submitBulkRow(
         },
       ],
     },
-    idempotencyKeyHash: sha256("bulk-draft", stored.id),
+    idempotencyKeyHash: sha256("bulk-draft", operationIdentity),
   });
   await getDb()
     .update(partnerBulkImportRows)
     .set({ bookingDraftId: created.draft.id })
-    .where(eq(partnerBulkImportRows.id, stored.id));
+    .where(bulkRowGroupCondition(stored));
   let draft = created.draft;
   let holdId: string | null = null;
   const day = DateTime.fromISO(row.preferredDate, {
@@ -3837,7 +4093,7 @@ async function submitBulkRow(
         draftId: draft.id,
         windowId: window.id,
         ifMatch: draft.etag,
-        idempotencyKeyHash: sha256("bulk-hold", stored.id),
+        idempotencyKeyHash: sha256("bulk-hold", operationIdentity),
         correlationId: randomUUID(),
       });
       holdId = held.hold.id;
@@ -3857,7 +4113,7 @@ async function submitBulkRow(
       draftId: draft.id,
       holdId,
       ifMatch: draft.etag,
-      idempotencyKeyHash: sha256("bulk-submit", stored.id),
+      idempotencyKeyHash: sha256("bulk-submit", operationIdentity),
       correlationId: randomUUID(),
     });
     return {
@@ -3879,7 +4135,7 @@ async function submitBulkRow(
       draftId: draft.id,
       holdId: null,
       ifMatch: draft.etag,
-      idempotencyKeyHash: sha256("bulk-review", stored.id),
+      idempotencyKeyHash: sha256("bulk-review", operationIdentity),
       correlationId: randomUUID(),
     });
     return { jobId: submitted.booking.id, draftId: draft.id, state: "review" };
@@ -3947,7 +4203,7 @@ export async function processPartnerBulkImport(payload: {
           processingStartedAt: new Date(),
           processingAttempts: sql`${partnerBulkImportRows.processingAttempts} + 1`,
         })
-        .where(eq(partnerBulkImportRows.id, candidate.id));
+        .where(bulkRowGroupCondition(candidate));
       return candidate;
     });
     if (!row) break;
@@ -3968,7 +4224,7 @@ export async function processPartnerBulkImport(payload: {
           processingStartedAt: null,
           errors: [],
         })
-        .where(eq(partnerBulkImportRows.id, row.id));
+        .where(bulkRowGroupCondition(row));
     } catch (error) {
       const recoverable =
         !(error instanceof PartnerPortalSchedulingError) ||
@@ -3989,7 +4245,7 @@ export async function processPartnerBulkImport(payload: {
             },
           ],
         })
-        .where(eq(partnerBulkImportRows.id, row.id));
+        .where(bulkRowGroupCondition(row));
       if (recoverable) throw error;
     }
   }
@@ -4015,7 +4271,11 @@ export async function processPartnerBulkImport(payload: {
         completedAt: pending ? null : new Date(),
       })
       .where(eq(partnerBulkImports.id, batch.id));
-    if (!pending) await enqueueOwnerAlertEvaluation(tx, { accountId: payload.accountId, bulkImportId: batch.id });
+    if (!pending)
+      await enqueueOwnerAlertEvaluation(tx, {
+        accountId: payload.accountId,
+        bulkImportId: batch.id,
+      });
     if (pending)
       await tx.insert(outboxEvents).values({
         type: "partner.bulk_import.process",

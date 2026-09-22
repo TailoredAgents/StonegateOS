@@ -11,6 +11,7 @@ export type RescheduleReview = {
   id: string;
   jobId: string;
   appointmentId?: string | null;
+  visitId?: string | null;
   accountId: string;
   state: string;
   updatedAt: string;

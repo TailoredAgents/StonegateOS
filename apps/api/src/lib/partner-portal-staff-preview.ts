@@ -1,3 +1,10 @@
+import type { PartnerMultiServiceRequest } from "@myst-os/sdk";
+import { getPartnerMultiServiceRequest } from "./partner-multi-service";
+import {
+  partnerRequestNextArrivalStartSql,
+  partnerRequestNextArrivalEndSql,
+  partnerRequestCompletedAtSql,
+} from "./partner-request-schedule";
 import { and, asc, desc, eq, inArray, isNull, or, sql } from "drizzle-orm";
 import {
   appointments,
@@ -34,7 +41,11 @@ export type PartnerStaffPreviewJobSummary = Readonly<{
   id: string;
   status: string;
   confirmationMode: string;
-  service: Readonly<{ key: string | null; tierKey: string | null }>;
+  service: Readonly<{
+    key: string | null;
+    tierKey: string | null;
+    label?: string | null;
+  }>;
   schedule: ReturnType<typeof createPartnerPublicJobScheduleDto>;
   location: Readonly<{
     id: string | null;
@@ -58,10 +69,15 @@ export type PartnerStaffPreviewJobSummary = Readonly<{
 }>;
 
 export type PartnerStaffPreviewJobDetail = Readonly<{
+  multiService?: PartnerMultiServiceRequest;
   id: string;
   status: string;
   confirmationMode: string;
-  service: Readonly<{ key: string | null; tierKey: string | null }>;
+  service: Readonly<{
+    key: string | null;
+    tierKey: string | null;
+    label?: string | null;
+  }>;
   schedule: ReturnType<typeof createPartnerPublicJobScheduleDto>;
   location: Readonly<{
     id: string | null;
@@ -196,8 +212,14 @@ async function loadSelectedJob(
       status: partnerBookings.publicStatus,
       confirmationMode: partnerBookings.confirmationMode,
       serviceKey: partnerBookings.serviceKey,
+      modelVersion: partnerBookings.modelVersion,
+      serviceLabel: sql<
+        string | null
+      >`nullif(${partnerBookings.scopeSnapshot}->>'serviceLabel','')`,
       tierKey: partnerBookings.tierKey,
-      amountCents: partnerBookings.amountCents,
+      amountCents: sql<
+        number | null
+      >`case when ${partnerBookings.modelVersion}=2 then coalesce(${partnerBookings.finalTotalCents},${partnerBookings.quotedTotalCents}) else ${partnerBookings.amountCents} end`,
       currency: partnerBookings.currency,
       scope: partnerBookings.scopeSnapshot,
       proofRequirements: partnerBookings.proofRequirementsSnapshot,
@@ -205,12 +227,12 @@ async function loadSelectedJob(
       costCenter: partnerBookings.costCenter,
       projectReference: partnerBookings.projectReference,
       reviewReasons: partnerBookings.requestedReviewReasons,
-      arrivalStartAt: partnerBookings.arrivalWindowStartAt,
-      arrivalEndAt: partnerBookings.arrivalWindowEndAt,
+      arrivalStartAt: partnerRequestNextArrivalStartSql,
+      arrivalEndAt: partnerRequestNextArrivalEndSql,
       version: partnerBookings.version,
       createdAt: partnerBookings.createdAt,
       updatedAt: partnerBookings.updatedAt,
-      completedAt: appointments.completedAt,
+      completedAt: partnerRequestCompletedAtSql,
       locationId: partnerAccountLocations.id,
       siteName: partnerAccountLocations.siteName,
       externalPropertyId: partnerAccountLocations.externalPropertyId,
@@ -226,7 +248,7 @@ async function loadSelectedJob(
       timezone: partnerAccountLocations.timezone,
     })
     .from(partnerBookings)
-    .innerJoin(appointments, eq(partnerBookings.appointmentId, appointments.id))
+    .leftJoin(appointments, eq(partnerBookings.appointmentId, appointments.id))
     .leftJoin(properties, eq(partnerBookings.propertyId, properties.id))
     .leftJoin(partnerAccountLocations, createPartnerJobLocationJoinCondition())
     .where(
@@ -344,11 +366,22 @@ async function loadSelectedJob(
         .then((rows) => rows[0] ?? null),
     ]);
 
+  const multiService =
+    job.modelVersion === 2
+      ? await getPartnerMultiServiceRequest(db, accountId, jobId, {
+          financials: true,
+        })
+      : null;
   return Object.freeze({
+    ...(multiService ? { multiService } : {}),
     id: job.id,
     status: job.status,
     confirmationMode: job.confirmationMode,
-    service: Object.freeze({ key: job.serviceKey, tierKey: job.tierKey }),
+    service: Object.freeze({
+      key: job.serviceKey,
+      tierKey: job.tierKey,
+      label: job.serviceLabel,
+    }),
     schedule: createPartnerPublicJobScheduleDto({
       arrivalWindowStartAt: job.arrivalStartAt,
       arrivalWindowEndAt: job.arrivalEndAt,
@@ -529,17 +562,23 @@ export async function loadPartnerStaffPreview(input: {
           status: partnerBookings.publicStatus,
           confirmationMode: partnerBookings.confirmationMode,
           serviceKey: partnerBookings.serviceKey,
+          modelVersion: partnerBookings.modelVersion,
+          serviceLabel: sql<
+            string | null
+          >`nullif(${partnerBookings.scopeSnapshot}->>'serviceLabel','')`,
           tierKey: partnerBookings.tierKey,
-          amountCents: partnerBookings.amountCents,
+          amountCents: sql<
+            number | null
+          >`case when ${partnerBookings.modelVersion}=2 then coalesce(${partnerBookings.finalTotalCents},${partnerBookings.quotedTotalCents}) else ${partnerBookings.amountCents} end`,
           currency: partnerBookings.currency,
           poNumber: partnerBookings.poNumber,
           costCenter: partnerBookings.costCenter,
           projectReference: partnerBookings.projectReference,
-          arrivalStartAt: partnerBookings.arrivalWindowStartAt,
-          arrivalEndAt: partnerBookings.arrivalWindowEndAt,
+          arrivalStartAt: partnerRequestNextArrivalStartSql,
+          arrivalEndAt: partnerRequestNextArrivalEndSql,
           createdAt: partnerBookings.createdAt,
           updatedAt: partnerBookings.updatedAt,
-          completedAt: appointments.completedAt,
+          completedAt: partnerRequestCompletedAtSql,
           locationId: partnerAccountLocations.id,
           siteName: partnerAccountLocations.siteName,
           timezone: partnerAccountLocations.timezone,
@@ -549,7 +588,7 @@ export async function loadPartnerStaffPreview(input: {
           postalCode: properties.postalCode,
         })
         .from(partnerBookings)
-        .innerJoin(
+        .leftJoin(
           appointments,
           eq(partnerBookings.appointmentId, appointments.id),
         )
@@ -582,7 +621,11 @@ export async function loadPartnerStaffPreview(input: {
         id: job.id,
         status: job.status,
         confirmationMode: job.confirmationMode,
-        service: Object.freeze({ key: job.serviceKey, tierKey: job.tierKey }),
+        service: Object.freeze({
+          key: job.serviceKey,
+          tierKey: job.tierKey,
+          label: job.serviceLabel,
+        }),
         schedule: createPartnerPublicJobScheduleDto({
           arrivalWindowStartAt: job.arrivalStartAt,
           arrivalWindowEndAt: job.arrivalEndAt,

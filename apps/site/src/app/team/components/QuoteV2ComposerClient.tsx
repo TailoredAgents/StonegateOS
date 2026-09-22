@@ -22,6 +22,8 @@ import {
   calculateQuoteV2OptimisticTotals,
   formatQuoteV2Money,
   newQuoteV2ComposerDraft,
+  newPartnerQuoteComposerDraft,
+  type PartnerQuoteServiceSeed,
   newQuoteV2LineDraft,
   quoteV2ContactResultLabel,
   quoteV2Readiness,
@@ -246,6 +248,7 @@ export type QuoteV2ComposerClientProps = {
   preparerName: string;
   issuer: QuoteV2IssuerSnapshot;
   recoveryId: string;
+  initialServiceLines?: readonly PartnerQuoteServiceSeed[];
   initialContactId?: string;
   initialPropertyId?: string;
   partnerContext?: QuoteV2PartnerContext;
@@ -257,6 +260,7 @@ export default function QuoteV2ComposerClient({
   preparerName,
   issuer,
   recoveryId,
+  initialServiceLines,
   initialContactId,
   initialPropertyId,
   partnerContext,
@@ -264,7 +268,9 @@ export default function QuoteV2ComposerClient({
   const client = React.useMemo(() => new QuoteV2StaffClient(), []);
   const [step, setStep] = React.useState<QuoteV2ComposerStep>("client_project");
   const [draft, setDraft] = React.useState<QuoteV2ComposerDraft>(() =>
-    newQuoteV2ComposerDraft(recoveryId),
+    initialServiceLines?.length
+      ? newPartnerQuoteComposerDraft(recoveryId, initialServiceLines)
+      : newQuoteV2ComposerDraft(recoveryId),
   );
   const [contactQuery, setContactQuery] = React.useState("");
   const [servicePresetId, setServicePresetId] = React.useState("");
@@ -1244,11 +1250,37 @@ export default function QuoteV2ComposerClient({
           >
             <p className="font-semibold">Portal-visible account quote</p>
             <p className="mt-1 text-xs leading-5">
-              Bound to {partnerContext.accountName} · {partnerContext.targetLabel}.
-              The verified client, property, account, and location cannot be
-              changed after this draft is created.
+              Bound to {partnerContext.accountName} ·{" "}
+              {partnerContext.targetLabel}. The verified client, property,
+              account, and location cannot be changed after this draft is
+              created.
             </p>
           </div>
+        ) : null}
+        {initialServiceLines?.some((line) => line.rateReferences.length) ? (
+          <details className="mt-3 border-t border-[color:var(--team-border)] pt-2">
+            <summary className="min-h-11 cursor-pointer py-2 text-sm font-semibold">
+              Agreed service rate references
+            </summary>
+            <p className="text-sm text-[color:var(--team-text-muted)]">
+              These rates are reference information. Review each service amount
+              and the proposal scope before sending.
+            </p>
+            {initialServiceLines.map((line) =>
+              line.rateReferences.length ? (
+                <div key={line.id} className="mt-2 text-sm">
+                  <p className="font-medium">{line.title}</p>
+                  <ul className="mt-1 space-y-1">
+                    {line.rateReferences.map((rate, index) => (
+                      <li key={index} className="break-words">
+                        {rate}
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              ) : null,
+            )}
+          </details>
         ) : null}
       </div>
 
@@ -1477,7 +1509,9 @@ export default function QuoteV2ComposerClient({
                           id="quote-client-search"
                           type="search"
                           value={contactQuery}
-                          onChange={(event) => setContactQuery(event.target.value)}
+                          onChange={(event) =>
+                            setContactQuery(event.target.value)
+                          }
                           placeholder="Name, company, email, phone, or address"
                           autoComplete="off"
                           className={`${TEAM_INPUT} w-full`}
@@ -1487,7 +1521,9 @@ export default function QuoteV2ComposerClient({
                       <div
                         id="quote-client-search-status"
                         className="mt-2 text-xs text-[color:var(--team-text-soft)]"
-                        role={contactSearchState === "error" ? "alert" : "status"}
+                        role={
+                          contactSearchState === "error" ? "alert" : "status"
+                        }
                         aria-live="polite"
                       >
                         {contactSearchMessage ??

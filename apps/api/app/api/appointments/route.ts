@@ -1,3 +1,7 @@
+import {
+  partnerAppointmentBindingSql,
+  partnerVisitServiceLabelSql,
+} from "@/lib/partner-appointment-binding";
 import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
 import {
@@ -159,6 +163,7 @@ export async function GET(request: NextRequest): Promise<Response> {
       servicesRequested: leads.servicesRequested,
       partnerBookingId: partnerBookings.id,
       partnerServiceKey: partnerBookings.serviceKey,
+      partnerServiceLabel: partnerVisitServiceLabelSql,
       quotedScopeText: appointments.quotedScopeText,
       rescheduleToken: appointments.rescheduleToken,
       calendarEventId: appointments.calendarEventId,
@@ -169,13 +174,7 @@ export async function GET(request: NextRequest): Promise<Response> {
     .leftJoin(contacts, eq(appointments.contactId, contacts.id))
     .leftJoin(properties, eq(appointments.propertyId, properties.id))
     .leftJoin(leads, eq(appointments.leadId, leads.id))
-    .leftJoin(
-      partnerBookings,
-      and(
-        eq(partnerBookings.appointmentId, appointments.id),
-        eq(partnerBookings.partnerAccountId, appointments.partnerAccountId),
-      ),
-    );
+    .leftJoin(partnerBookings, partnerAppointmentBindingSql());
 
   const conditions = [];
   if (statusFilter && statusFilter.length > 0) {
@@ -429,6 +428,7 @@ export async function GET(request: NextRequest): Promise<Response> {
       leadServices: row.servicesRequested,
       leadNotes: null,
       partnerServiceKey: row.partnerServiceKey,
+      partnerServiceLabel: row.partnerServiceLabel,
       quotedScopeText: row.quotedScopeText,
       bookingDetails,
     });

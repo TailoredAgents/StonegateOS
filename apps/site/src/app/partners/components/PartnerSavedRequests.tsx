@@ -1,5 +1,6 @@
 "use client";
 import Link from "next/link";
+import { getPartnerServiceDefinition } from "@myst-os/pricing";
 import { useEffect, useRef, useState } from "react";
 import {
   createPortalOperationKey,
@@ -119,7 +120,17 @@ export function PartnerSavedRequests({
               href={`/partners/book?draftId=${draft.id}`}
               className="min-h-11 max-w-full flex-1 truncate py-3 font-medium text-primary-800 underline"
             >
-              {draft.description?.slice(0, 90) || "Untitled request"}
+              {draft.description?.slice(0, 90) ||
+                (draft.modelVersion === 2
+                  ? draft.serviceLines
+                      ?.map(
+                        (line) =>
+                          getPartnerServiceDefinition(line.serviceKey)?.label ??
+                          line.serviceKey,
+                      )
+                      .join(", ")
+                  : null) ||
+                "Untitled request"}
             </Link>
             {canDiscard ? (
               <button

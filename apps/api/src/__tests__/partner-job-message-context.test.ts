@@ -67,6 +67,7 @@ function setup(
     where: jest.fn().mockReturnThis(),
     for: jest.fn().mockReturnThis(),
     innerJoin: jest.fn().mockReturnThis(),
+    leftJoin: jest.fn().mockReturnThis(),
     limit: jest.fn(() => Promise.resolve(replies.shift())),
   };
   const db = {
