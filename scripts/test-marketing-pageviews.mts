@@ -52,6 +52,8 @@ void test("marketing page views survive public-layout remounts without duplicate
         import {createRoot} from 'react-dom/client';
         import {GoogleTagPageView} from './src/components/GoogleTagPageView';
         import {MetaPixelPageView} from './src/components/MetaPixelPageView';
+        import {setCookiePreferences} from './src/lib/cookie-consent';
+        setCookiePreferences({analytics:true,advertising:true});
         window.views=[]; window.revision=0;
         window.installTags=()=>{
           window.gtag=(...args)=>window.views.push({provider:'google',args,path:location.pathname});
@@ -146,7 +148,13 @@ void test("marketing page views survive public-layout remounts without duplicate
         assert.deepEqual(await views(page), [
           {
             provider: "google",
-            args: ["config", "G-LOCALTEST", { page_path: "/contractors" }],
+            args: ["config", "G-LOCALTEST", {
+              page_path: "/contractors",
+              page_location: `${origin}/contractors`,
+              page_referrer: "",
+              allow_google_signals: true,
+              allow_ad_personalization_signals: true,
+            }],
             path: "/contractors",
           },
           {

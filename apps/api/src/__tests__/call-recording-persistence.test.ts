@@ -19,7 +19,10 @@ const callId = "7c6de4d6-ecab-48a4-a2f2-c389ae930fc6";
 // Stateful query adapter exercises the real lease/checkpoint transitions.
 // No database or external provider is contacted by these regression tests.
 function recordingStore(attempts = 0) {
-  const event: Record<string, any> = {
+  const event: Record<string, unknown> & {
+    id: string;
+    payload: Record<string, unknown>;
+  } = {
     id: eventId,
     payload: { callSid },
     attempts,
@@ -28,7 +31,7 @@ function recordingStore(attempts = 0) {
     nextAttemptAt: null,
     lastError: null,
   };
-  const call: Record<string, any> = {
+  const call: Record<string, unknown> & { id: string } = {
     id: callId,
     callSid,
     parentCallSid: null,
@@ -45,13 +48,13 @@ function recordingStore(attempts = 0) {
     throw new Error("unexpected_table");
   }
   const tx = {
-    insert: () => ({ values: async () => undefined }),
+    insert: () => ({ values: () => Promise.resolve(undefined) }),
     select: () => ({
       from: (table: unknown) => {
         const query = {
           where: () => query,
           for: () => query,
-          limit: async () => [{ ...rowFor(table) }],
+          limit: () => Promise.resolve([{ ...rowFor(table) }]),
         };
         return query;
       },
@@ -61,7 +64,7 @@ function recordingStore(attempts = 0) {
         where: () => {
           Object.assign(rowFor(table), patch);
           return {
-            returning: async () => [{ id: rowFor(table).id }],
+            returning: () => Promise.resolve([{ id: rowFor(table).id }]),
           };
         },
       }),
