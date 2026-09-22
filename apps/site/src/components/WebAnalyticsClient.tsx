@@ -3,6 +3,7 @@
 import * as React from "react";
 import { usePathname } from "next/navigation";
 import { trackGoogleAdsConversion } from "@/lib/google-ads";
+import { COOKIE_CONSENT_EVENT, isAnalyticsAllowed } from "@/lib/cookie-consent";
 import {
   ensureVisitStarted,
   flushWebAnalytics,
@@ -40,7 +41,7 @@ function resolveTelClick(
   return null;
 }
 
-function computeVitals(pathname: string): void {
+function computeVitals(pathname: string): (() => void) | undefined {
   if (typeof window === "undefined") return;
   if (typeof PerformanceObserver !== "function") return;
 
@@ -120,18 +121,32 @@ function computeVitals(pathname: string): void {
   };
 
   window.addEventListener("pagehide", onPageHide, { once: true });
+  return () => {
+    window.removeEventListener("pagehide", onPageHide);
+    lcpObserver.disconnect();
+    clsObserver.disconnect();
+  };
 }
 
 export function WebAnalyticsClient(): React.ReactElement | null {
   const pathname = usePathname() ?? "/";
   const pathRef = React.useRef(pathname);
   pathRef.current = pathname;
+  const [analyticsAllowed, setAnalyticsAllowed] = React.useState(false);
 
   React.useEffect(() => {
+    const update = () => setAnalyticsAllowed(isAnalyticsAllowed());
+    update();
+    window.addEventListener(COOKIE_CONSENT_EVENT, update);
+    return () => window.removeEventListener(COOKIE_CONSENT_EVENT, update);
+  }, []);
+
+  React.useEffect(() => {
+    if (!analyticsAllowed) return;
     ensureVisitStarted(pathname);
     trackWebEvent({ event: "page_view", path: pathname });
-    computeVitals(pathname);
-  }, [pathname]);
+    return computeVitals(pathname);
+  }, [pathname, analyticsAllowed]);
 
   React.useEffect(() => {
     const onClickCapture = (event: MouseEvent) => {

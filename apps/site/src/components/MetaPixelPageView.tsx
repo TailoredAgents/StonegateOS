@@ -2,6 +2,10 @@
 
 import * as React from "react";
 import { usePathname } from "next/navigation";
+import {
+  isAdvertisingAllowed,
+  isPublicTrackingPath,
+} from "@/lib/cookie-consent";
 
 declare global {
   interface Window {
@@ -15,6 +19,7 @@ export function MetaPixelPageView() {
 
   React.useEffect(() => {
     if (typeof window === "undefined") return;
+    if (!isAdvertisingAllowed() || !isPublicTrackingPath(pathname)) return;
     if (typeof window.fbq !== "function") return;
     if (!didMountRef.current) {
       didMountRef.current = true;

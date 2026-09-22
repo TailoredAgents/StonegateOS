@@ -8,6 +8,7 @@ import {
   readTeamMutationException,
 } from "../lib/mutation-feedback";
 import { formatCalendarDayKey, TEAM_TIME_ZONE } from "../lib/calendar-time";
+import { readScheduleWarning } from "../lib/schedule-warning";
 import { CrewPayoutSelector } from "./CrewPayoutSelector";
 import type { SavedCrewPayout } from "../lib/crew-payout-form";
 import { StaffScheduleResourcePicker } from "./StaffScheduleResourcePicker";
@@ -44,6 +45,7 @@ type SuccessPayload = {
   ok?: unknown;
   version?: unknown;
   calendarSync?: unknown;
+  scheduleWarning?: unknown;
   note?: unknown;
   data?: unknown;
   receipt?: unknown;
@@ -333,6 +335,9 @@ export function CalendarAppointmentActions({
       if (nextVersion) setCurrentVersion(nextVersion);
       mutationAttemptsRef.current.delete(actionName);
       const mutationData = isRecord(payload.data) ? payload.data : null;
+      const scheduleWarning = readScheduleWarning(
+        payload.scheduleWarning ?? mutationData?.["scheduleWarning"],
+      );
       const calendarQueued = isStatusAction
         ? mutationData?.["calendarSync"] === "requested"
         : payload.calendarSync === "requested";
@@ -345,18 +350,25 @@ export function CalendarAppointmentActions({
           : isStatusAction
             ? " Customer was not notified."
             : "";
+      const message = calendarQueued
+        ? `${successMessage} in the CRM.${effectCopy} Google Calendar cleanup is queued; keep this view available until the linked event disappears.`
+        : needsReconciliation
+          ? `${successMessage} in the CRM.${effectCopy} Google Calendar did not confirm the change. Keep the appointment open and ask an owner to reconcile the calendar.`
+          : `${successMessage}${effectCopy}`;
       setFeedback({
-        tone: calendarQueued || needsReconciliation ? "warning" : "success",
-        message: calendarQueued
-          ? `${successMessage} in the CRM.${effectCopy} Google Calendar cleanup is queued; keep this view available until the linked event disappears.`
-          : needsReconciliation
-            ? `${successMessage} in the CRM.${effectCopy} Google Calendar did not confirm the change. Keep the appointment open and ask an owner to reconcile the calendar.`
-            : `${successMessage}${effectCopy}`,
+        tone:
+          calendarQueued || needsReconciliation || scheduleWarning
+            ? "warning"
+            : "success",
+        message: scheduleWarning
+          ? `${message} Warning: ${scheduleWarning}`
+          : message,
       });
       if (actionName === "note") setNoteDraft("");
       if (actionName === "reschedule") {
         setScheduleConflict(null);
-        onScheduled?.();
+        // Keep the scheduling panel open so the saved warning can be read.
+        if (!scheduleWarning) onScheduled?.();
       }
       router.refresh();
     } catch (error) {

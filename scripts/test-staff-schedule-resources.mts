@@ -10,9 +10,13 @@ const require = createRequire(`${repo}/package.json`),
 const appointmentId = "11111111-1111-4111-8111-111111111111",
   crewId = "22222222-2222-4222-8222-222222222222",
   truckId = "33333333-3333-4333-8333-333333333333";
+const capacityWarningMessage =
+  "This time exceeds schedule capacity. Review the overlapping jobs.";
+const resourceConflictMessage =
+  "The selected crew or equipment cannot cover this job, or its daily limit is reached. Choose another resource or time.";
 for (const engine of [chromium, webkit])
   test(
-    `${engine.name()}: actual CRM scheduler sends selected resource IDs and preserves retry details`,
+    `${engine.name()}: actual CRM scheduler preserves resource retries and allows capacity warnings without override permission`,
     { timeout: 60000 },
     async () => {
       const bundle = await build({
@@ -91,7 +95,7 @@ for (const engine of [chromium, webkit])
                   ? {
                       ok: false,
                       error: "slot_unavailable",
-                      message: "Selected crew is no longer available.",
+                      message: resourceConflictMessage,
                     }
                   : {
                       ok: true,
@@ -103,6 +107,22 @@ for (const engine of [chromium, webkit])
                         actorId: "local",
                         committedAt: "2035-06-01T12:01:00.000Z",
                       },
+                      ...(sends.length === 3
+                        ? {
+                            scheduleWarning: {
+                              code: "schedule_capacity_exceeded",
+                              message: capacityWarningMessage,
+                              conflicts: [
+                                {
+                                  id: "44444444-4444-4444-8444-444444444444",
+                                  title: "Overlapping job",
+                                  startAt: "2035-06-04T14:00:00.000Z",
+                                  endAt: "2035-06-04T16:00:00.000Z",
+                                },
+                              ],
+                            },
+                          }
+                        : {}),
                     },
             });
           },
@@ -116,18 +136,34 @@ for (const engine of [chromium, webkit])
         await page
           .getByRole("button", { name: "Schedule service", exact: true })
           .click();
-        await page
-          .getByText(/^Selected crew is no longer available\./u)
-          .waitFor();
+        const resourceFeedback = page.getByText(resourceConflictMessage, {
+          exact: true,
+        });
+        await resourceFeedback.waitFor();
+        assert.equal(await resourceFeedback.innerText(), resourceConflictMessage);
+        assert.equal(
+          await page.getByText(/This record changed since the page loaded/u).count(),
+          0,
+        );
+        assert.equal(
+          await page.getByLabel("Choose specific resources").isChecked(),
+          true,
+        );
         assert.equal(await page.getByLabel(/Crew Alpha/u).isChecked(), true);
+        assert.equal(await page.getByLabel(/Truck Alpha/u).isChecked(), true);
         assert.equal(
           await page.getByLabel("New date", { exact: true }).inputValue(),
           "2035-06-04",
+        );
+        assert.equal(
+          await page.getByLabel("Eastern time", { exact: true }).inputValue(),
+          "10:00",
         );
         await page
           .getByRole("button", { name: "Schedule service", exact: true })
           .click();
         await page.getByText("Service scheduled.", { exact: true }).waitFor();
+        assert.equal(await page.getByText(capacityWarningMessage).count(), 0);
         assert.equal(sends.length, 2);
         assert.equal(sends[0]?.key, sends[1]?.key);
         assert.ok(sends[0]?.key);
@@ -141,6 +177,46 @@ for (const engine of [chromium, webkit])
           await page.locator('input[name="selectedResourceIds"]').count(),
           0,
         );
+        await page.getByLabel("Eastern time", { exact: true }).fill("11:00");
+        const scheduleButton = page.getByRole("button", {
+          name: "Schedule service",
+          exact: true,
+        });
+        await scheduleButton.click();
+        const capacityFeedback = page
+          .getByRole("status")
+          .filter({ hasText: capacityWarningMessage });
+        await capacityFeedback.waitFor();
+        assert.match(
+          await capacityFeedback.innerText(),
+          /^Service scheduled\./u,
+        );
+        assert.match(
+          (await capacityFeedback.getAttribute("class")) ?? "",
+          /\bbg-amber-50\b/u,
+        );
+        assert.equal(await scheduleButton.isEnabled(), true);
+        assert.equal(await page.getByRole("alert").count(), 0);
+        assert.equal(
+          await page
+            .locator(
+              '[name="conflictOverrideReason"], [name="conflictAcknowledgement"], [name="conflictFingerprint"]',
+            )
+            .count(),
+          0,
+        );
+        assert.equal(sends.length, 3);
+        assert.doesNotMatch(
+          sends[2]?.body ?? "",
+          /conflictOverrideReason|conflictAcknowledgement|conflictFingerprint/u,
+        );
+
+        await page.getByLabel("Eastern time", { exact: true }).fill("13:00");
+        await scheduleButton.click();
+        await page.getByText("Service scheduled.", { exact: true }).waitFor();
+        assert.equal(await capacityFeedback.count(), 0);
+        assert.equal(await scheduleButton.isEnabled(), true);
+        assert.equal(sends.length, 4);
         assert.deepEqual(errors, []);
       } finally {
         await browser.close();

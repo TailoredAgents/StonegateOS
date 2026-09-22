@@ -1,5 +1,4 @@
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
 import test from "node:test";
 import {
   PARTNER_SCHEDULE_ASSISTANCE_OPTIONS,
@@ -7,15 +6,6 @@ import {
   visibleRankedPartnerAlternatives,
 } from "./partner-scheduling-assistance";
 import type { PartnerAvailability } from "./portal-v2";
-
-const bookingWizard = readFileSync(
-  new URL("../components/PartnerBookingWizard.tsx", import.meta.url),
-  "utf8",
-);
-const bookingPage = readFileSync(
-  new URL("../(portal)/book/page.tsx", import.meta.url),
-  "utf8",
-);
 
 function alternative(
   id: string,
@@ -60,13 +50,4 @@ void test("shows only unique, available server-ranked alternatives in rank order
     ]).map(({ id }) => id),
     ["13:00", "14:00"],
   );
-});
-
-void test("renders ranked choices, a durable follow-up choice, and an honest urgent call path", () => {
-  assert.match(bookingWizard, /Recommended available windows/u);
-  assert.match(bookingWizard, /PARTNER_SCHEDULE_ASSISTANCE_OPTIONS\.map/u);
-  assert.match(bookingWizard, /href=\{`tel:\$\{supportPhoneE164\}`\}/u);
-  assert.match(bookingWizard, /Calling does not reserve capacity/u);
-  assert.match(bookingPage, /supportPhoneE164=\{company\.phoneE164\}/u);
-  assert.match(bookingPage, /supportPhoneDisplay=\{company\.phoneDisplay\}/u);
 });

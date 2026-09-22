@@ -2,6 +2,10 @@ import { z } from "zod";
 import { NextResponse } from "next/server";
 import type { NextRequest } from "next/server";
 import { getDb, crmPipeline, instantQuotes, leads, outboxEvents } from "@/db";
+import {
+  captureOpenAiAdsAttribution,
+  OpenAiAdsAttributionSchema,
+} from "@/lib/openai-ads-capture";
 import { isGeorgiaPostalCode, normalizePostalCode } from "@/lib/policy";
 import { eq } from "drizzle-orm";
 import {
@@ -127,6 +131,7 @@ const DemoSizeSchema = z.enum([
 ]);
 
 const RequestSchema = z.object({
+  openaiAds: OpenAiAdsAttributionSchema.optional().catch({ consent: false }),
   source: z.string().optional().default("public_site"),
   contact: z.object({
     name: z.string().min(2),
@@ -616,6 +621,7 @@ export async function POST(request: NextRequest): Promise<Response> {
           fbclid: utm.fbclid,
           referrer,
           formPayload: {
+            openaiAds: captureOpenAiAdsAttribution(body.openaiAds),
             instantQuoteId: quoteId,
             timeframe: body.contact.timeframe,
             zip: body.job.zip.trim(),

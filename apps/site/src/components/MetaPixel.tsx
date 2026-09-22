@@ -1,40 +1,61 @@
-import Script from "next/script";
-import { MetaPixelPageView } from "./MetaPixelPageView";
+"use client";
+
+import { useEffect } from "react";
+import { usePathname } from "next/navigation";
+import {
+  isAdvertisingAllowed,
+  isPublicTrackingPath,
+} from "@/lib/cookie-consent";
+
+type MetaQueue = ((...args: unknown[]) => void) & {
+  callMethod?: (...args: unknown[]) => void;
+  queue: unknown[][];
+  push: (...args: unknown[]) => void;
+  loaded: boolean;
+  version: string;
+};
+const initializedPixels = new Set<string>();
 
 export function MetaPixel({ pixelId }: { pixelId: string | null }) {
-  if (!pixelId) return null;
-  const sanitized = pixelId.trim();
-  // Meta pixel IDs are numeric. Reject malformed configuration and the
-  // documented E2E sentinel before a browser can contact Meta.
-  if (!/^\d{5,32}$/u.test(sanitized)) return null;
-
-  return (
-    <>
-      <Script id="meta-pixel-stub" strategy="afterInteractive">
-        {`!function(f,b,e,v,n,t,s)
-{if(f.fbq)return;n=f.fbq=function(){n.callMethod?
-n.callMethod.apply(n,arguments):n.queue.push(arguments)};
-if(!f._fbq)f._fbq=n;n.push=n;n.loaded=!0;n.version='2.0';
-n.queue=[]}(window, document,'script',
-'https://connect.facebook.net/en_US/fbevents.js');
-fbq('init', '${sanitized}');
-fbq('track', 'PageView');`}
-      </Script>
-      <Script
-        src="https://connect.facebook.net/en_US/fbevents.js"
-        strategy="lazyOnload"
-      />
-      <noscript>
-        {/* eslint-disable-next-line @next/next/no-img-element */}
-        <img
-          height="1"
-          width="1"
-          style={{ display: "none" }}
-          src={`https://www.facebook.com/tr?id=${encodeURIComponent(sanitized)}&ev=PageView&noscript=1`}
-          alt=""
-        />
-      </noscript>
-      <MetaPixelPageView />
-    </>
-  );
+  const pathname = usePathname();
+  useEffect(() => {
+    const id = pixelId?.trim();
+    if (
+      !id ||
+      !/^\d{5,32}$/u.test(id) ||
+      !isAdvertisingAllowed() ||
+      !isPublicTrackingPath(window.location.pathname)
+    )
+      return;
+    if (!window.fbq) {
+      const queue = ((...args: unknown[]) => {
+        if (queue.callMethod) queue.callMethod(...args);
+        else queue.queue.push(args);
+      }) as MetaQueue;
+      queue.queue = [];
+      queue.push = queue;
+      queue.loaded = true;
+      queue.version = "2.0";
+      window.fbq = queue;
+      (window as Window & { _fbq?: MetaQueue })._fbq = queue;
+    }
+    window.fbq("consent", "grant");
+    if (!initializedPixels.has(id)) {
+      window.fbq("init", id);
+      initializedPixels.add(id);
+    }
+    window.fbq("track", "PageView");
+    if (!document.getElementById("stonegate-meta-pixel")) {
+      const script = document.createElement("script");
+      script.id = "stonegate-meta-pixel";
+      script.async = true;
+      script.src = "https://connect.facebook.net/en_US/fbevents.js";
+      document.head.appendChild(script);
+    }
+    return () => {
+      window.fbq?.("consent", "revoke");
+    };
+  }, [pixelId, pathname]);
+  // JavaScript-disabled visits cannot grant optional-cookie consent.
+  return null;
 }

@@ -31,7 +31,7 @@ describe("Team mutation feedback", () => {
   it.each([
     [401, "session expired"],
     [403, "do not have permission"],
-    [409, "changed since the page loaded"],
+    [409, "Refresh to review the latest details"],
     [422, "Check the entered values"],
     [429, "Wait a moment"],
     [500, "could not confirm the change"],
@@ -58,6 +58,63 @@ describe("Team mutation feedback", () => {
       ),
     ).resolves.toBe(
       "Final total is required. Check the entered values and try again. No change was confirmed.",
+    );
+  });
+
+  it("reports partner scheduling conflicts without claiming the record is stale", async () => {
+    const message =
+      "The selected crew or equipment cannot cover this job, or its daily limit is reached. Choose another resource or time.";
+    const response = jsonResponse(409, {
+      ok: false,
+      error: "slot_unavailable",
+      message,
+    });
+
+    await expect(
+      resolveTeamMutationFeedback(Promise.resolve(response), {
+        success: "Request confirmed",
+        failure: "Unable to confirm request",
+      }),
+    ).resolves.toEqual({ ok: false, message });
+    await expect(response.json()).resolves.toMatchObject({
+      error: "slot_unavailable",
+      message,
+    });
+  });
+
+  it("preserves actual stale-record recovery instructions", async () => {
+    const message =
+      "This appointment changed on another screen. Refresh it and review the latest status, total, crew, and time before retrying.";
+
+    await expect(
+      readTeamMutationError(
+        jsonResponse(409, { error: "appointment_changed", message }),
+        "Unable to update appointment",
+      ),
+    ).resolves.toBe(message);
+  });
+
+  it("keeps other business-conflict guidance without adding stale-record advice", async () => {
+    const message =
+      "This request is already being processed. Wait for it to finish before trying again.";
+
+    await expect(
+      readTeamMutationError(
+        jsonResponse(409, { error: "idempotency_in_progress", message }),
+        "Unable to confirm request",
+      ),
+    ).resolves.toBe(message);
+  });
+
+  it.each([
+    ["missing body", new Response(null, { status: 409 })],
+    ["invalid JSON", new Response("{", { status: 409 })],
+    ["empty message", jsonResponse(409, { message: " " })],
+  ])("gives neutral conflict guidance for %s", async (_label, response) => {
+    await expect(
+      readTeamMutationError(response, "Unable to confirm request"),
+    ).resolves.toBe(
+      "Unable to confirm request. Refresh to review the latest details before trying again. No change was confirmed.",
     );
   });
 

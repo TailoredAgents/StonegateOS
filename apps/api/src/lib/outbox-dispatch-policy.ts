@@ -6,6 +6,7 @@ import { getTeamOperationKillSwitch } from "@/lib/team-operation-kill-switch";
  * the provider-bound event remains durable and is deferred here.
  */
 const EXTERNAL_PROVIDER_EVENT_TYPES = new Set([
+  "ads.openai.conversion",
   "appointment.calendar_sync_requested",
   "call.recording.delete",
   "crm.reminder.sms",

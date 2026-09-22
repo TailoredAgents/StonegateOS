@@ -45,6 +45,28 @@ void test("server scope, contact, billing and proof errors resolve to the correc
       "scheduling",
       "partner-book-preferred-date-2",
     ],
+    [
+      "preferredWindows.0.timeOfDay",
+      "scheduling",
+      "partner-book-preferred-time",
+    ],
+    [
+      "preferredWindows[1].timeOfDay",
+      "scheduling",
+      "partner-book-preferred-time-2",
+    ],
+    [
+      "preferredWindows[2].timeOfDay",
+      "scheduling",
+      "partner-book-preferred-time-3",
+    ],
+    ["preferredTimeOfDayTwo", "scheduling", "partner-book-preferred-time-2"],
+    ["preferredTimeOfDayThree", "scheduling", "partner-book-preferred-time-3"],
+    [
+      "scheduleAssistancePreference",
+      "scheduling",
+      "partner-book-schedule-assistance",
+    ],
     ["locationId", "address", "partner-book-location"],
     ["tierKey", "service", "partner-book-base-option"],
     ["serviceKey", "service", "partner-book-service"],
@@ -71,6 +93,8 @@ void test("moved fields and nested server paths return to their owning wizard st
     ["scope.requiredCompletion.localTime", 2],
     ["scope.requiredCompletion.custom", 2],
     ["preferredWindows[1].localDate", 2],
+    ["preferredWindows[2].timeOfDay", 2],
+    ["scheduleAssistancePreference", 2],
     ["scope", 1],
     ["scope.equipmentNeeds[2]", 1],
     ["scope.hazardCategories[0]", 1],
@@ -91,6 +115,104 @@ void test("moved fields and nested server paths return to their owning wizard st
     bookingFieldElementId("scope.multiStopDetails.custom"),
     "partner-book-multi-stop-details",
   );
+});
+
+void test("server window indices follow nonempty dates while local errors keep fixed slots", () => {
+  const disclosure = { tagName: "DETAILS", open: false, parentElement: null };
+  let focused = "";
+  const targets = new Map(
+    [
+      ["partner-book-preferred-date-1", "0"],
+      ["partner-book-preferred-time", "0"],
+      ["partner-book-preferred-date-2", undefined],
+      ["partner-book-preferred-time-2", undefined],
+      ["partner-book-preferred-date-3", "1"],
+      ["partner-book-preferred-time-3", "1"],
+    ].map(([id, index]) => [
+      id!,
+      {
+        tagName: "INPUT",
+        parentElement: disclosure,
+        dataset: { partnerPreferredIndex: index },
+        focus() {
+          assert.equal(disclosure.open, true);
+          focused = id!;
+        },
+      },
+    ]),
+  );
+  const previous = Object.getOwnPropertyDescriptor(globalThis, "document");
+  try {
+    Object.defineProperty(globalThis, "document", {
+      configurable: true,
+      value: { getElementById: (id: string) => targets.get(id) ?? null },
+    });
+    assert.equal(
+      bookingFieldElementId("preferredWindows[1].localDate"),
+      "partner-book-preferred-date-3",
+    );
+    assert.equal(
+      bookingFieldElementId("preferredWindows.1.timeOfDay"),
+      "partner-book-preferred-time-3",
+    );
+    assert.equal(
+      bookingFieldElementId("preferredDateTwo"),
+      "partner-book-preferred-date-2",
+    );
+    assert.equal(focusBookingField("preferredWindows[1].timeOfDay"), true);
+    assert.equal(focused, "partner-book-preferred-time-3");
+
+    // With the main date removed, server index zero points to the remaining
+    // alternative, but the missing-main-date error must still focus slot one.
+    targets.get(
+      "partner-book-preferred-date-1",
+    )!.dataset.partnerPreferredIndex = undefined;
+    targets.get(
+      "partner-book-preferred-date-3",
+    )!.dataset.partnerPreferredIndex = "0";
+    assert.equal(
+      bookingFieldElementId("preferredWindows.0.localDate"),
+      "partner-book-preferred-date-3",
+    );
+    assert.equal(
+      bookingFieldElementId("preferredDateOne"),
+      "partner-book-preferred-date-1",
+    );
+    assert.equal(
+      bookingFieldElementId("preferredWindows.99.localDate"),
+      "partner-book-preferred-date-1",
+    );
+  } finally {
+    if (previous) Object.defineProperty(globalThis, "document", previous);
+    else Reflect.deleteProperty(globalThis, "document");
+  }
+});
+
+void test("scheduling errors focus the available date when preferred inputs are not rendered", () => {
+  let focused = false;
+  const target = {
+    tagName: "INPUT",
+    parentElement: null,
+    focus() {
+      focused = true;
+    },
+  };
+  const previous = Object.getOwnPropertyDescriptor(globalThis, "document");
+  try {
+    Object.defineProperty(globalThis, "document", {
+      configurable: true,
+      value: {
+        getElementById: (id: string) =>
+          id === "partner-book-available-date" ? target : null,
+      },
+    });
+    assert.equal(focusBookingField("preferredWindows"), true);
+    assert.equal(focused, true);
+    assert.equal(focusBookingField("locationId"), false);
+  } finally {
+    if (previous) Object.defineProperty(globalThis, "document", previous);
+    else Reflect.deleteProperty(globalThis, "document");
+  }
 });
 
 void test("focus opens every enclosing disclosure before focusing, retaining other open sections", () => {

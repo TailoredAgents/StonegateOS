@@ -73,6 +73,156 @@ function block(
 }
 
 describe("Partner named resource scheduling", () => {
+  describe("unassigned work in compatibility pools", () => {
+    const poolResources: readonly NamedScheduleResource[] = [
+      { ...resources[0]!, id: "pool-crew", label: "Field service crew pool" },
+      { ...resources[2]!, id: "pool-truck", label: "Field service fleet" },
+    ].map((resource) => ({
+      ...resource,
+      source: "compatibility_pool",
+      capacityUnits: 3,
+      dailyJobMultiplier: 3,
+    }));
+    const plan = { resources: poolResources, requirements, revision: "pool" };
+    const base = {
+      startAt: occupancy.startAt,
+      endAt: occupancy.endAt,
+      timezone: "America/New_York",
+      capacityPoolKey: "field_service",
+      capacityUnits: 1,
+      assignments: [],
+      plan,
+    };
+    function evaluate(blocks: readonly NamedScheduleResourceBlock[]) {
+      return assignNamedScheduleResources({
+        capacityPoolKey: "field_service",
+        occupancy,
+        localDate: "2026-09-08",
+        resources: poolResources,
+        requirements,
+        blocks,
+        maxJobsPerCrew: 1,
+      });
+    }
+
+    it.each(["appointment", "hold"])(
+      "reserves only the weighted units of an unassigned %s",
+      (kind) => {
+        const blocks = namedResourceBlocksForOccupancy({
+          ...base,
+          id: `${kind}:legacy`,
+          capacityUnits: 2,
+        });
+        expect(blocks.map((entry) => entry.capacityUnits)).toEqual([2, 2]);
+        expect(evaluate(blocks)).toMatchObject({
+          available: true,
+          assignments: [
+            { resourceId: "pool-crew", capacityUnits: 1 },
+            { resourceId: "pool-truck", capacityUnits: 1 },
+          ],
+        });
+      },
+    );
+
+    it("still rejects work when unassigned reservations consume the pool", () => {
+      const blocks = [1, 2].flatMap((capacityUnits, index) =>
+        namedResourceBlocksForOccupancy({
+          ...base,
+          id: `appointment:${index}`,
+          capacityUnits,
+        }),
+      );
+      expect(
+        assignNamedScheduleResources({
+          capacityPoolKey: "field_service",
+          occupancy,
+          localDate: "2026-09-08",
+          resources: poolResources,
+          requirements,
+          blocks,
+          maxJobsPerCrew: 0,
+        }),
+      ).toEqual({
+        available: false,
+        reason: "resource_capacity",
+        assignments: [],
+      });
+    });
+
+    it("charges actual weights toward the daily limit even without overlap", () => {
+      const earlier = {
+        ...base,
+        startAt: new Date("2026-09-08T10:00:00.000Z"),
+        endAt: new Date("2026-09-08T11:00:00.000Z"),
+      };
+      const blocks = namedResourceBlocksForOccupancy({
+        ...earlier,
+        id: "appointment:weighted",
+        capacityUnits: 2,
+      });
+      expect(evaluate(blocks).available).toBe(true);
+      expect(
+        evaluate([
+          ...blocks,
+          ...namedResourceBlocksForOccupancy({
+            ...earlier,
+            id: "hold:last-daily-unit",
+          }),
+        ]),
+      ).toEqual({
+        available: false,
+        reason: "crew_daily_limit",
+        assignments: [],
+      });
+    });
+
+    it("preserves explicit assignments and keeps retired assignments conservative", () => {
+      const assigned = namedResourceBlocksForOccupancy({
+        ...base,
+        id: "appointment:assigned",
+        assignments: [
+          {
+            resourceId: "pool-crew",
+            kind: "crew",
+            label: "Field service crew pool",
+            capacityUnits: 2,
+          },
+        ],
+      });
+      expect(assigned.map((entry) => entry.capacityUnits)).toEqual([2, 1]);
+      const retired = namedResourceBlocksForOccupancy({
+        ...base,
+        id: "appointment:retired",
+        assignments: [
+          {
+            resourceId: "retired-crew",
+            kind: "crew",
+            label: "Retired crew",
+            capacityUnits: 1,
+          },
+        ],
+      });
+      expect(retired.map((entry) => entry.capacityUnits)).toEqual([3, 1]);
+      expect(evaluate(retired).available).toBe(false);
+    });
+
+    it("keeps the full capacity of unknown physical resources occupied", () => {
+      const blocks = namedResourceBlocksForOccupancy({
+        ...base,
+        id: "appointment:physical",
+        plan: {
+          ...plan,
+          resources: poolResources.map((resource) => ({
+            ...resource,
+            source: "staff",
+            dailyJobMultiplier: 1,
+          })),
+        },
+      });
+      expect(blocks.map((entry) => entry.capacityUnits)).toEqual([3, 3]);
+    });
+  });
+
   it("keeps old pooled or unassigned work occupied after physical resources are configured", () => {
     const base = {
       id: "old-job",
@@ -80,6 +230,7 @@ describe("Partner named resource scheduling", () => {
       endAt: occupancy.endAt,
       timezone: "America/New_York",
       capacityPoolKey: "field_service",
+      capacityUnits: 1,
       plan: { resources, requirements, revision: "current" },
     };
     const pooled = namedResourceBlocksForOccupancy({

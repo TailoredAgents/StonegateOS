@@ -3,6 +3,7 @@ import { Phone } from "lucide-react";
 import type { PublicCompanyProfile } from "@/lib/company";
 import { PartnerPublicHeaderAction } from "./PartnerPublicHeaderAction";
 import { PARTNER_SUPPORT } from "../lib/partner-support";
+import { PartnerArchitecturalAccent } from "./PartnerArchitecturalAccent";
 
 export function PartnerPublicShell({
   company,
@@ -14,14 +15,14 @@ export function PartnerPublicShell({
   showSignIn?: boolean;
 }) {
   return (
-    <div className="flex min-h-screen flex-col bg-white text-slate-950">
+    <div className="partner-public-shell flex min-h-screen flex-col text-slate-950">
       <a
         href="#partner-public-main"
         className="sr-only focus:fixed focus:left-4 focus:top-4 focus:z-50 focus:not-sr-only focus:rounded-lg focus:bg-primary-900 focus:px-4 focus:py-3 focus:font-semibold focus:text-white focus:shadow-xl"
       >
         Skip to main content
       </a>
-      <header className="sticky top-0 z-40 border-b border-slate-200 bg-white/95 backdrop-blur">
+      <header className="partner-brand sticky top-0 z-40 border-b border-slate-200 bg-white/95 backdrop-blur">
         <div className="mx-auto flex min-h-16 w-full max-w-6xl items-center justify-between gap-4 px-4 py-2 sm:px-6 lg:px-8">
           <div className="flex min-w-0 items-center gap-2 sm:gap-3">
             <Link
@@ -73,8 +74,9 @@ export function PartnerPublicShell({
       <main
         id="partner-public-main"
         tabIndex={-1}
-        className="mx-auto flex min-h-0 w-full max-w-6xl flex-1 items-center px-4 py-8 focus:outline-none sm:px-6 sm:py-12 lg:px-8"
+        className="partner-public-main mx-auto flex min-h-0 w-full max-w-6xl flex-1 items-center px-4 py-8 focus:outline-none sm:px-6 sm:py-12 lg:px-8"
       >
+        <PartnerArchitecturalAccent className="partner-public-art" />
         <div className="w-full">{children}</div>
       </main>
       <footer className="border-t border-slate-200 bg-white">

@@ -65,6 +65,21 @@ export type ScheduleConflictOverrideInput = {
   fingerprint?: string | null;
 };
 
+export type ScheduleCapacityWarning = {
+  code: "schedule_capacity_exceeded";
+  message: string;
+  conflicts: ScheduleConflict[];
+};
+
+type StaffScheduleConflictDecision =
+  | {
+      ok: true;
+      overridden: false;
+      reason: null;
+      warning: ScheduleCapacityWarning | null;
+    }
+  | { ok: false; code: "schedule_conflict"; message: string };
+
 export type ScheduleConflictOverrideDecision =
   | { ok: true; overridden: false; reason: null }
   | { ok: true; overridden: true; reason: string }
@@ -688,6 +703,44 @@ export async function inspectScheduleConflicts(
       capacity > 0 &&
       requestedCapacityUnits <= capacity &&
       !conflicts.some((item) => item.kind === "schedule_block"),
+  };
+}
+
+/** Staff may plan overlapping jobs without a separate override permission.
+ * Configured closures and external blocks still require schedule changes. */
+export function decideStaffScheduleConflict(
+  decision: ScheduleConflictDecision,
+  input: { actorType?: string; autonomous?: boolean },
+): StaffScheduleConflictDecision {
+  if (!decision.conflict) {
+    return { ok: true, overridden: false, reason: null, warning: null };
+  }
+  if (input.actorType !== "human" || input.autonomous) {
+    return { ok: false, code: "schedule_conflict", message: decision.message };
+  }
+  if (decision.overrideAllowed === false) {
+    return {
+      ok: false,
+      code: "schedule_conflict",
+      message:
+        "This time is blocked by configured capacity, a blackout, or an external calendar block. Update the underlying schedule configuration or choose another time.",
+    };
+  }
+  const overlappingWork = decision.conflicts
+    .map(
+      (item) =>
+        `${item.title} (${formatConflictTime(item.startAt, item.endAt)})`,
+    )
+    .join("; ");
+  return {
+    ok: true,
+    overridden: false,
+    reason: null,
+    warning: {
+      code: "schedule_capacity_exceeded",
+      message: `This time exceeds schedule capacity${overlappingWork ? ` and overlaps ${overlappingWork}` : ""}. Review crew availability for the overlapping work.`,
+      conflicts: decision.conflicts,
+    },
   };
 }
 

@@ -1,5 +1,6 @@
 import type { NextRequest } from "next/server";
 import { NextRequest as RuntimeNextRequest } from "next/server";
+import type * as AppointmentScheduleConflicts from "@/lib/appointment-schedule-conflicts";
 
 const appointmentId = "11111111-1111-4111-8111-111111111111";
 const crewMemberId = "22222222-2222-4222-8222-222222222222";
@@ -328,6 +329,9 @@ jest.mock("@/lib/appointment-media", () => ({
 }));
 
 jest.mock("@/lib/appointment-schedule-conflicts", () => ({
+  ...jest.requireActual<typeof AppointmentScheduleConflicts>(
+    "@/lib/appointment-schedule-conflicts",
+  ),
   acquireScheduleConflictLock: (...args: unknown[]): unknown =>
     mockAcquireScheduleConflictLock(...args) as unknown,
   inspectScheduleConflicts: (...args: unknown[]): unknown =>
@@ -1150,12 +1154,16 @@ describe("appointment status mutation integrity", () => {
     expect(mockInspectScheduleConflicts).not.toHaveBeenCalled();
   });
 
-  it("rechecks current weighted capacity before reopening a canceled appointment at its old time", async () => {
+  it("warns and saves when reopening a canceled appointment exceeds capacity", async () => {
     appointment.status = "canceled";
     appointment.startAt = new Date("2026-09-09T14:00:00Z");
     appointment.durationMinutes = 60;
     appointment.travelBufferMinutes = 30;
-    mockInspectScheduleConflicts.mockResolvedValue({ conflict: true });
+    mockInspectScheduleConflicts.mockResolvedValue({
+      conflict: true,
+      overrideAllowed: true,
+      conflicts: [],
+    });
     const response = await updateAppointmentStatus(
       request({
         status: "confirmed",
@@ -1163,7 +1171,20 @@ describe("appointment status mutation integrity", () => {
       }),
       context(),
     );
-    expect(response.status).toBe(409);
+    expect(response.status).toBe(200);
+    const warningMessage: unknown = expect.stringContaining(
+      "This time exceeds schedule capacity",
+    );
+    await expect(response.json()).resolves.toMatchObject({
+      ok: true,
+      data: {
+        status: "confirmed",
+        scheduleWarning: {
+          code: "schedule_capacity_exceeded",
+          message: warningMessage,
+        },
+      },
+    });
     expect(mockInspectScheduleConflicts).toHaveBeenCalledWith(
       mockTransaction,
       expect.objectContaining({
@@ -1173,6 +1194,25 @@ describe("appointment status mutation integrity", () => {
         travelBufferMinutes: 30,
       }),
     );
+    expect(appointmentUpdateCount).toBe(1);
+  });
+
+  it("still blocks reopening an appointment into a configured closure or external block", async () => {
+    appointment.status = "canceled";
+    appointment.startAt = new Date("2026-09-09T14:00:00Z");
+    mockInspectScheduleConflicts.mockResolvedValue({
+      conflict: true,
+      overrideAllowed: false,
+      conflicts: [],
+    });
+    const response = await updateAppointmentStatus(
+      request({
+        status: "confirmed",
+        expectedVersion: currentVersion.toISOString(),
+      }),
+      context(),
+    );
+    expect(response.status).toBe(409);
     expect(appointmentUpdateCount).toBe(0);
   });
 

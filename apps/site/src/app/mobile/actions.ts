@@ -23,6 +23,7 @@ import {
   storeManualCallAttempt,
 } from "@/lib/manual-call-attempt-store";
 import { readTeamMutationSuccess } from "../team/lib/mutation-feedback";
+import { readScheduleWarning } from "../team/lib/schedule-warning";
 import { callAdminMutationWithSafeReplay } from "../team/lib/team-mutation-transport";
 import { requireCurrentTeamPrincipal } from "@/lib/team-principal";
 import type { MobileSession } from "./lib/session";
@@ -64,6 +65,16 @@ function mobileReturnWithParam(
 ): Route {
   const separator = returnTo.includes("?") ? "&" : "?";
   return `${returnTo}${separator}${encodeURIComponent(key)}=${encodeURIComponent(value)}` as Route;
+}
+
+function mobileReturnWithScheduleWarning(
+  returnTo: Route,
+  value: unknown,
+): Route {
+  const warning = readScheduleWarning(value);
+  return warning
+    ? mobileReturnWithParam(returnTo, "scheduleWarning", warning.slice(0, 500))
+    : returnTo;
 }
 
 async function requireMobileOwner(): Promise<void> {
@@ -1714,6 +1725,7 @@ export async function convertMobileQuoteToJobAction(formData: FormData) {
     version?: unknown;
     calendarSync?: unknown;
     completedAtomically?: unknown;
+    scheduleWarning?: unknown;
   }>(convertResponse);
   if (
     !envelope ||
@@ -1736,7 +1748,10 @@ export async function convertMobileQuoteToJobAction(formData: FormData) {
 
   revalidatePath("/mobile");
   redirect(
-    `${redirectPath}&converted=${shouldComplete ? "completed" : "1"}&calendarSync=${encodeURIComponent(String(envelope.data.calendarSync))}` as Route,
+    mobileReturnWithScheduleWarning(
+      `${redirectPath}&converted=${shouldComplete ? "completed" : "1"}&calendarSync=${encodeURIComponent(String(envelope.data.calendarSync))}` as Route,
+      envelope.data.scheduleWarning,
+    ),
   );
 }
 
@@ -1911,6 +1926,7 @@ export async function rescheduleMobileAppointmentAction(formData: FormData) {
     appointmentId?: unknown;
     preferredDate?: unknown;
     version?: unknown;
+    scheduleWarning?: unknown;
   } | null;
   if (
     result?.ok !== true ||
@@ -1929,7 +1945,10 @@ export async function rescheduleMobileAppointmentAction(formData: FormData) {
 
   revalidatePath("/mobile");
   redirect(
-    `${mobileBookingHref(screen, preferredDate, appointmentId)}&appointment=1` as Route,
+    mobileReturnWithScheduleWarning(
+      `${mobileBookingHref(screen, preferredDate, appointmentId)}&appointment=1` as Route,
+      result.scheduleWarning,
+    ),
   );
 }
 
@@ -2088,15 +2107,28 @@ export async function bookMobileAppointmentAction(formData: FormData) {
     redirect(errorRedirect(message));
   }
 
+  const data = (await response.json().catch(() => null)) as {
+    scheduleWarning?: unknown;
+  } | null;
   revalidatePath("/mobile");
   if (returnTo) {
-    redirect(mobileReturnWithParam(returnTo, "booked", "1"));
+    redirect(
+      mobileReturnWithScheduleWarning(
+        mobileReturnWithParam(returnTo, "booked", "1"),
+        data?.scheduleWarning,
+      ),
+    );
   }
   const dayKey = startAt.slice(0, 10);
   const calendarRedirect = dayKey
     ? `/mobile?screen=calendar&date=${encodeURIComponent(dayKey)}&booked=1`
     : "/mobile?screen=calendar&booked=1";
-  redirect(calendarRedirect as Route);
+  redirect(
+    mobileReturnWithScheduleWarning(
+      calendarRedirect as Route,
+      data?.scheduleWarning,
+    ),
+  );
 }
 
 export async function createMobileQuoteAction(formData: FormData) {

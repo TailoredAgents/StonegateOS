@@ -33,6 +33,7 @@ import { getAppointmentCapacity } from "@/lib/appointment-capacity";
 import {
   acquireScheduleConflictLock,
   decideScheduleConflictOverride,
+  decideStaffScheduleConflict,
   inspectScheduleConflicts,
   type ScheduleConflictDecision,
 } from "@/lib/appointment-schedule-conflicts";
@@ -53,6 +54,11 @@ import {
   soldByChangeRequiresOverride,
 } from "@/lib/sold-by-override";
 import { isAdminRequest } from "../../../web/admin";
+import {
+  captureOpenAiAdsAttribution,
+  enqueueOpenAiAdsBooking,
+  findOpenAiAdsBookingLead,
+} from "@/lib/openai-ads-capture";
 
 function parseStartAt(value: string, timezone: string): Date | null {
   const trimmed = value.trim();
@@ -72,6 +78,7 @@ function parseStartAt(value: string, timezone: string): Date | null {
 }
 
 type BookRequest = {
+  openaiAds?: unknown;
   contactId?: string;
   propertyId?: string;
   appointmentType?: string;
@@ -142,6 +149,7 @@ export async function POST(request: NextRequest): Promise<Response> {
   }
   const permissionError = await requirePermission(request, "bookings.manage");
   if (permissionError) return permissionError;
+  const actor = getAuditActorFromRequest(request);
 
   let payload: BookRequest = {};
   const contentType = request.headers.get("content-type") ?? "";
@@ -213,6 +221,8 @@ export async function POST(request: NextRequest): Promise<Response> {
       : "manual_booking";
   const requiresAutonomousBookingRules =
     requiresAutonomousBookingRulesForSource(source);
+  const allowStaffCapacityWarning =
+    actor.type === "human" && !requiresAutonomousBookingRules;
   if (
     payload.durationMinutes !== undefined &&
     (typeof payload.durationMinutes !== "number" ||
@@ -311,7 +321,7 @@ export async function POST(request: NextRequest): Promise<Response> {
     conflictOverrideReason || conflictAcknowledgement || conflictFingerprint,
   );
 
-  if (conflictOverrideRequested) {
+  if (conflictOverrideRequested && !allowStaffCapacityWarning) {
     const overridePermissionError = await requirePermission(
       request,
       "appointments.override_conflicts",
@@ -378,7 +388,6 @@ export async function POST(request: NextRequest): Promise<Response> {
       { status: 422 },
     );
   }
-  const actor = getAuditActorFromRequest(request);
   const correlationId = getCalendarMutationCorrelationId(request);
   const now = new Date();
 
@@ -618,14 +627,16 @@ export async function POST(request: NextRequest): Promise<Response> {
         excludeHoldInstantQuoteId: instantQuoteId,
         now,
       });
-      const scheduleOverride = decideScheduleConflictOverride(
-        scheduleDecision,
-        {
-          reason: conflictOverrideReason,
-          acknowledgement: conflictAcknowledgement,
-          fingerprint: conflictFingerprint,
-        },
-      );
+      const scheduleOverride = allowStaffCapacityWarning
+        ? decideStaffScheduleConflict(scheduleDecision, {
+            actorType: actor.type,
+            autonomous: requiresAutonomousBookingRules,
+          })
+        : decideScheduleConflictOverride(scheduleDecision, {
+            reason: conflictOverrideReason,
+            acknowledgement: conflictAcknowledgement,
+            fingerprint: conflictFingerprint,
+          });
       if (!scheduleOverride.ok) {
         throw new BookingScheduleConflictError(
           scheduleDecision,
@@ -633,8 +644,56 @@ export async function POST(request: NextRequest): Promise<Response> {
           scheduleOverride.message,
         );
       }
+      const scheduleWarning =
+        "warning" in scheduleOverride ? scheduleOverride.warning : null;
 
       const token = nanoid(24);
+      const openaiAds = captureOpenAiAdsAttribution(payload.openaiAds, now);
+      resolvedLeadId = await findOpenAiAdsBookingLead(tx, {
+        existingLeadId: resolvedLeadId,
+        contactId,
+        propertyId: resolvedPropertyId,
+        now,
+      });
+      if (openaiAds !== undefined) {
+        const [attributedLead] = resolvedLeadId
+          ? await tx
+              .select({ id: leads.id, formPayload: leads.formPayload })
+              .from(leads)
+              .where(
+                and(
+                  eq(leads.contactId, contactId),
+                  eq(leads.id, resolvedLeadId),
+                ),
+              )
+              .orderBy(desc(leads.createdAt))
+              .limit(1)
+          : [];
+        if (attributedLead) {
+          await tx
+            .update(leads)
+            .set({
+              formPayload: { ...attributedLead.formPayload, openaiAds },
+              updatedAt: now,
+            })
+            .where(eq(leads.id, attributedLead.id));
+          resolvedLeadId = attributedLead.id;
+        } else {
+          const [createdLead] = await tx
+            .insert(leads)
+            .values({
+              contactId,
+              propertyId: resolvedPropertyId,
+              servicesRequested: services,
+              source,
+              status: "scheduled",
+              formPayload: { openaiAds },
+            })
+            .returning({ id: leads.id });
+          if (!createdLead) throw new Error("lead_insert_failed");
+          resolvedLeadId = createdLead.id;
+        }
+      }
       const appointmentStatus = requiresAutonomousBookingRules
         ? await resolveAutomaticAppointmentStatusForMedia({
             proposedStatus: "confirmed",
@@ -670,6 +729,15 @@ export async function POST(request: NextRequest): Promise<Response> {
 
       if (!appointment) throw new Error("appointment_create_failed");
       const appointmentId = appointment.id;
+      const openaiAdsBookingEligible = await enqueueOpenAiAdsBooking(tx, {
+        appointmentId,
+        status: appointmentStatus,
+        startAt,
+        contactId,
+        leadId: resolvedLeadId,
+        attribution: openaiAds,
+        now,
+      });
 
       if (notes) {
         await tx.insert(appointmentNotes).values({
@@ -786,11 +854,13 @@ export async function POST(request: NextRequest): Promise<Response> {
           scheduleConflictOverridden: scheduleOverride.overridden,
           scheduleConflictOverrideReason: scheduleOverride.reason,
           scheduleConflictFingerprint: scheduleDecision.fingerprint,
+          scheduleWarning,
         },
       });
 
       return {
         appointmentId,
+        openaiAdsBookingEligible,
         version: appointment.updatedAt.toISOString(),
         leadId: resolvedLeadId,
         instantQuoteId,
@@ -802,12 +872,14 @@ export async function POST(request: NextRequest): Promise<Response> {
         scheduleConflictOverridden: scheduleOverride.overridden,
         scheduleConflictOverrideReason: scheduleOverride.reason,
         scheduleConflictFingerprint: scheduleDecision.fingerprint,
+        scheduleWarning,
       };
     });
 
     return NextResponse.json({
       ok: true,
       appointmentId: result.appointmentId,
+      openaiAdsBookingEligible: result.openaiAdsBookingEligible,
       version: result.version,
       propertyId: result.propertyId,
       leadId: result.leadId,
@@ -815,6 +887,7 @@ export async function POST(request: NextRequest): Promise<Response> {
       createdPlaceholderProperty: Boolean(result.createdPropertyId),
       startAt: startAt.toISOString(),
       scheduleConflictOverridden: result.scheduleConflictOverridden,
+      scheduleWarning: result.scheduleWarning,
     });
   } catch (error) {
     if (error instanceof BookingScheduleConflictError) {

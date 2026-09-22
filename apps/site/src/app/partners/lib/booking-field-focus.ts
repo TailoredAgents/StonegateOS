@@ -39,6 +39,36 @@ function indexedEquipmentField(path: string) {
   });
 }
 
+const PREFERRED_DATE_IDS = [
+  "partner-book-preferred-date-1",
+  "partner-book-preferred-date-2",
+  "partner-book-preferred-date-3",
+] as const;
+const PREFERRED_TIME_IDS = [
+  "partner-book-preferred-time",
+  "partner-book-preferred-time-2",
+  "partner-book-preferred-time-3",
+] as const;
+
+function indexedPreferredFieldId(path: string): string | undefined {
+  const index = /^preferredWindows\.([012])(?:\.|$)/u.exec(path)?.[1];
+  if (index === undefined) return undefined;
+  const ids = path.endsWith(".timeOfDay")
+    ? PREFERRED_TIME_IDS
+    : PREFERRED_DATE_IDS;
+  // The API array omits empty dates. Local field aliases always keep their
+  // visible slot, while server indices follow each input's serialized position.
+  const renderedId =
+    typeof document === "undefined"
+      ? undefined
+      : ids.find(
+          (id) =>
+            document.getElementById(id)?.dataset["partnerPreferredIndex"] ===
+            index,
+        );
+  return renderedId ?? ids[Number(index)];
+}
+
 export function bookingErrorSection(field: string): BookingErrorSection {
   const path = fieldPath(field);
   if (
@@ -63,7 +93,11 @@ export function bookingErrorSection(field: string): BookingErrorSection {
   )
     return "contact";
   if (path.startsWith("proof")) return "proof";
-  if (path.startsWith("preferred")) return "scheduling";
+  if (
+    path.startsWith("preferred") ||
+    belongsTo(path, "scheduleAssistancePreference")
+  )
+    return "scheduling";
   return "service";
 }
 
@@ -137,12 +171,16 @@ export function bookingFieldElementId(field: string): string {
     preferredDateTwo: "partner-book-preferred-date-2",
     preferredDateThree: "partner-book-preferred-date-3",
     preferredTimeOfDay: "partner-book-preferred-time",
+    preferredTimeOfDayTwo: "partner-book-preferred-time-2",
+    preferredTimeOfDayThree: "partner-book-preferred-time-3",
   };
   if (Object.hasOwn(exactIds, path)) return exactIds[path]!;
+  if (belongsTo(path, "scheduleAssistancePreference"))
+    return "partner-book-schedule-assistance";
   if (belongsTo(path, "preferredWindows")) {
+    const indexedId = indexedPreferredFieldId(path);
+    if (indexedId) return indexedId;
     if (path.endsWith(".timeOfDay")) return "partner-book-preferred-time";
-    const index = /^preferredWindows\.([012])(?:\.|$)/u.exec(path)?.[1];
-    if (index) return `partner-book-preferred-date-${Number(index) + 1}`;
   }
   return SECTION_FALLBACK_IDS[bookingErrorSection(path)];
 }
@@ -157,12 +195,16 @@ export function focusBookingField(field: string): boolean {
     "scope.itemCount",
     "scope.volumeCubicYards",
   ].some((root) => belongsTo(path, root));
+  const section = bookingErrorSection(field);
   const target =
     document.getElementById(bookingFieldElementId(field)) ??
     (savedDetail
       ? document.getElementById("partner-book-saved-details")
       : null) ??
-    document.getElementById(SECTION_FALLBACK_IDS[bookingErrorSection(field)]);
+    (section === "scheduling"
+      ? document.getElementById("partner-book-available-date")
+      : null) ??
+    document.getElementById(SECTION_FALLBACK_IDS[section]);
   if (!target) return false;
   for (
     let ancestor: HTMLElement | null = target;

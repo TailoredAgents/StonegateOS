@@ -31,7 +31,9 @@ import { getAppointmentCapacity } from "@/lib/appointment-capacity";
 import { validateActiveAppointmentAttribution } from "@/lib/appointment-attribution";
 import {
   acquireScheduleConflictLock,
+  decideStaffScheduleConflict,
   inspectScheduleConflicts,
+  type ScheduleCapacityWarning,
 } from "@/lib/appointment-schedule-conflicts";
 import {
   BoundedJsonRequestError,
@@ -684,6 +686,7 @@ export async function POST(
         );
       }
 
+      let scheduleWarning: ScheduleCapacityWarning | null = null;
       if (existing.startAt?.getTime() !== startAt.getTime()) {
         const scheduleDecision = await inspectScheduleConflicts(tx, {
           startAt,
@@ -691,15 +694,17 @@ export async function POST(
           capacity: getAppointmentCapacity(),
           excludeAppointmentId: appointmentId,
         });
-        if (scheduleDecision.conflict) {
+        const staffSchedule = decideStaffScheduleConflict(scheduleDecision, {
+          actorType: mutation.actor.type,
+        });
+        if (!staffSchedule.ok) {
           return storeTerminalFailure(
             tx,
             mutation,
             claimed.claim,
-            conversionFailure("conflict", scheduleDecision.message, {
+            conversionFailure("conflict", staffSchedule.message, {
               fieldErrors: {
-                startAt:
-                  "Choose another time; this time exceeds scheduling capacity.",
+                startAt: "Choose another time or update the schedule block.",
               },
               current: {
                 conflictFingerprint: scheduleDecision.fingerprint,
@@ -716,6 +721,7 @@ export async function POST(
             409,
           );
         }
+        scheduleWarning = staffSchedule.warning;
       }
 
       const targetStatus = parsed.data.completion ? "completed" : "confirmed";
@@ -1138,6 +1144,7 @@ export async function POST(
           calendarSync,
           calendarExternalSafetyChecked: calendarSyncRequested,
           reviewRequestQueued: false,
+          scheduleWarning,
         },
         committedAt,
       });
@@ -1150,6 +1157,7 @@ export async function POST(
         version: updated.updatedAt.toISOString(),
         calendarSync,
         completedAtomically: Boolean(completion),
+        scheduleWarning,
       };
       const success = {
         ...teamMutationSuccessResult(mutation, data, {

@@ -10,6 +10,7 @@ import {
   type TeamRequestPrincipal,
 } from "@/lib/team-principal";
 import { callAdminApiAs } from "./lib/api";
+import { readScheduleWarning } from "./lib/schedule-warning";
 import {
   isInboxPreparedMessage,
   type InboxPrepareResult,
@@ -492,6 +493,7 @@ export async function sendQuoteAction(formData: FormData) {
 type InboxWorkflowActionResult = {
   ok: boolean;
   error?: string;
+  warning?: string;
   draftText?: string;
   recordId?: string;
   refreshKey?: string;
@@ -1425,9 +1427,15 @@ export async function rescheduleAppointmentAction(formData: FormData) {
     }
     jar.set({ name: "myst-flash-error", value: message, path: "/" });
   } else {
+    const data = (await response.json().catch(() => null)) as {
+      scheduleWarning?: unknown;
+    } | null;
+    const warning = readScheduleWarning(data?.scheduleWarning);
     jar.set({
       name: "myst-flash",
-      value: "Appointment rescheduled",
+      value: warning
+        ? `Appointment rescheduled. Warning: ${warning}`
+        : "Appointment rescheduled",
       path: "/",
     });
   }
@@ -2163,7 +2171,17 @@ export async function bookAppointmentAction(formData: FormData) {
       return;
     }
 
-    jar.set({ name: "myst-flash", value: "Appointment booked", path: "/" });
+    const data = (await response.json().catch(() => null)) as {
+      scheduleWarning?: unknown;
+    } | null;
+    const warning = readScheduleWarning(data?.scheduleWarning);
+    jar.set({
+      name: "myst-flash",
+      value: warning
+        ? `Appointment booked. Warning: ${warning}`
+        : "Appointment booked",
+      path: "/",
+    });
     revalidatePath("/team");
   } catch (error) {
     jar.set({
@@ -2270,6 +2288,7 @@ export async function bookInboxAppointmentAction(
       appointmentId?: string;
       id?: string;
       startAt?: string | null;
+      scheduleWarning?: unknown;
       error?: string;
       message?: string;
     } | null;
@@ -2294,6 +2313,7 @@ export async function bookInboxAppointmentAction(
       ok: true,
       draftText,
       recordId,
+      warning: readScheduleWarning(data?.scheduleWarning) ?? undefined,
       refreshKey: String(Date.now()),
     };
   } catch (error) {
@@ -2336,6 +2356,7 @@ export async function rescheduleInboxAppointmentAction(
       appointmentId?: string;
       startAt?: string | null;
       preferredDate?: string | null;
+      scheduleWarning?: unknown;
       error?: string;
       message?: string;
     } | null;
@@ -2356,6 +2377,7 @@ export async function rescheduleInboxAppointmentAction(
       ok: true,
       draftText,
       recordId: data?.appointmentId ?? appointmentId,
+      warning: readScheduleWarning(data?.scheduleWarning) ?? undefined,
       refreshKey: String(Date.now()),
     };
   } catch (error) {
@@ -2671,6 +2693,7 @@ export async function convertAppointmentToJobAction(formData: FormData) {
     version?: unknown;
     calendarSync?: unknown;
     completedAtomically?: unknown;
+    scheduleWarning?: unknown;
   }>(response);
   if (
     !envelope ||
@@ -2696,12 +2719,14 @@ export async function convertAppointmentToJobAction(formData: FormData) {
     return;
   }
 
+  const warning = readScheduleWarning(envelope.data.scheduleWarning);
+  const successMessage =
+    envelope.data.calendarSync === "requested"
+      ? "Quote converted to job. Google Calendar sync queued."
+      : "Quote converted to job. No Google Calendar change was required.";
   jar.set({
     name: "myst-flash",
-    value:
-      envelope.data.calendarSync === "requested"
-        ? "Quote converted to job. Google Calendar sync queued."
-        : "Quote converted to job. No Google Calendar change was required.",
+    value: warning ? `${successMessage} Warning: ${warning}` : successMessage,
     path: "/",
   });
   revalidatePath("/team");

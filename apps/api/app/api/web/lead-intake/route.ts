@@ -24,6 +24,10 @@ import {
   readBoundedJsonRequest,
 } from "@/lib/bounded-json-request";
 import { sendConversion } from "@/lib/ga";
+import {
+  captureOpenAiAdsAttribution,
+  OpenAiAdsAttributionSchema,
+} from "@/lib/openai-ads-capture";
 import { getBookingRulesPolicy, normalizePostalCode } from "@/lib/policy";
 import { normalizeName, normalizePhone, resolveClientIp } from "../utils";
 import {
@@ -179,6 +183,15 @@ const LeadSchema = z
       .optional(),
     gclid: optionalTrackingValue,
     fbclid: optionalTrackingValue,
+    openaiAds: OpenAiAdsAttributionSchema.optional().catch({ consent: false }),
+    cookieConsent: z
+      .object({
+        analytics: z.boolean().optional(),
+        advertising: z.boolean().optional(),
+      })
+      .strict()
+      .optional()
+      .catch({ analytics: false, advertising: false }),
     consent: z.boolean().optional(),
     hp_company: z.string().max(256).optional(),
   })
@@ -495,6 +508,7 @@ export async function POST(request: NextRequest) {
           intakeOperationKeyHash: operationKeyHash,
           intakeRequestHash: requestHash,
           formPayload: {
+            openaiAds: captureOpenAiAdsAttribution(payload.openaiAds),
             services: servicesRequested,
             appointmentType,
             scheduling,
@@ -636,6 +650,7 @@ export async function POST(request: NextRequest) {
         correlationId,
       });
       void sendConversion("generate_lead", {
+        analyticsConsent: payload.cookieConsent?.analytics === true,
         params: {
           source: payload.utm?.source ?? "web",
           medium: payload.utm?.medium ?? "form",

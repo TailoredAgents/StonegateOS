@@ -164,7 +164,7 @@ function PortalNavigation({
     const active = isActivePath(pathname, item);
     const Icon = item.icon;
     return <Link key={item.href} href={item.href as Route} onClick={onNavigate} aria-current={active ? "page" : undefined}
-      className={cn("group flex min-h-11 items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-medium focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-500", active ? "bg-primary-50 text-primary-900" : "text-slate-600 hover:bg-slate-100 hover:text-slate-950")}>
+      className={cn("partner-nav-link group flex min-h-11 items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-medium focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-500", active ? "bg-primary-50 text-primary-900" : "text-slate-600 hover:bg-slate-100 hover:text-slate-950")}>
       <Icon className="h-5 w-5 shrink-0" aria-hidden="true" /><span>{item.label}</span>
     </Link>;
   };
@@ -444,7 +444,7 @@ export function PartnerAppShell({
   );
 
   return (
-    <div className="min-h-screen bg-slate-100 text-slate-950">
+    <div className="partner-app-shell min-h-screen text-slate-950">
       <div inert={mobileOpen ? true : undefined} className="min-h-screen">
         <a
           href={`#${MAIN_ID}`}
@@ -454,9 +454,9 @@ export function PartnerAppShell({
         </a>
 
         <div className="flex min-h-screen">
-          <aside className="sticky top-0 hidden h-screen w-72 shrink-0 border-r border-slate-200 bg-white lg:flex lg:flex-col">
-            <div className="border-b border-slate-200 px-5 py-4">{brand}</div>
-            <div className="border-b border-slate-100 px-5 py-4">
+          <aside className="partner-sidebar sticky top-0 hidden h-screen w-72 shrink-0 border-r border-slate-200 bg-white lg:flex lg:flex-col">
+            <div className="partner-brand relative border-b border-slate-200 px-5 py-4">{brand}</div>
+            <div className="partner-account-card px-4 py-3">
               <p className="text-xs font-medium uppercase tracking-[0.14em] text-slate-500">
                 Working for
               </p>
@@ -470,7 +470,7 @@ export function PartnerAppShell({
               {capabilities.schedule ? (
                 <Link
                   href="/partners/book"
-                  className="mb-4 flex min-h-11 items-center justify-center gap-2 rounded-xl bg-primary-700 px-4 py-2.5 text-sm font-semibold text-white shadow-sm transition hover:bg-primary-800"
+                  className="partner-primary-button mb-4 flex min-h-11 items-center justify-center gap-2 rounded-xl bg-primary-700 px-4 py-2.5 text-sm font-semibold text-white shadow-sm transition hover:bg-primary-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-500 focus-visible:ring-offset-2 motion-reduce:transition-none"
                 >
                   <CalendarPlus2 className="h-4 w-4" aria-hidden="true" />
                   Request service
@@ -483,7 +483,7 @@ export function PartnerAppShell({
             </div>
             <div className="border-t border-slate-200 p-4">
               <div className="flex items-center gap-3 px-2 py-2">
-                <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-slate-100 text-slate-600">
+                <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-[#dbe5dc] bg-[#eef3ed] text-[#426b54]">
                   <UserRound className="h-5 w-5" aria-hidden="true" />
                 </div>
                 <div className="min-w-0">
@@ -587,7 +587,7 @@ export function PartnerAppShell({
 
         <nav
           aria-label="Quick navigation"
-          className="fixed inset-x-0 bottom-0 z-30 border-t border-slate-200 bg-white pb-[env(safe-area-inset-bottom)] lg:hidden"
+          className="partner-mobile-nav fixed inset-x-0 bottom-0 z-30 border-t border-slate-200 bg-white pb-[env(safe-area-inset-bottom)] lg:hidden"
         >
           <div className="grid grid-flow-col auto-cols-fr">
             {NAV_ITEMS.filter((item) =>
@@ -643,9 +643,9 @@ export function PartnerAppShell({
             aria-modal="true"
             aria-label="Partner portal navigation"
             tabIndex={-1}
-            className="absolute inset-y-0 left-0 flex w-[min(88vw,22rem)] flex-col bg-white shadow-2xl"
+            className="partner-sidebar absolute inset-y-0 left-0 flex w-[min(88vw,22rem)] flex-col bg-white shadow-2xl"
           >
-            <div className="flex items-center justify-between gap-3 border-b border-slate-200 px-4 py-3">
+            <div className="partner-brand relative flex items-center justify-between gap-3 border-b border-slate-200 px-4 py-3">
               {brand}
               <button
                 ref={closeButtonRef}
@@ -657,7 +657,7 @@ export function PartnerAppShell({
                 <X className="h-5 w-5" aria-hidden="true" />
               </button>
             </div>
-            <div className="border-b border-slate-100 px-5 py-4">
+            <div className="partner-account-card px-4 py-3">
               <p className="text-xs font-medium uppercase tracking-[0.14em] text-slate-500">
                 Working for
               </p>

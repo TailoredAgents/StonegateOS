@@ -1,5 +1,6 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
+import { jest } from "@jest/globals";
 import { DateTime } from "luxon";
 import {
   isAnalyticsIdentifierKey,
@@ -217,6 +218,24 @@ describe("Website Analytics experience", () => {
     expect(GA_ADAPTER).not.toContain("user_id");
   });
 
+  it.each([undefined, false, null, "true", 1, {}])(
+    "does not send server analytics without affirmative consent (%p)",
+    async (analyticsConsent) => {
+      process.env["GA4_MEASUREMENT_ID"] = "G-TEST";
+      process.env["GA4_API_SECRET"] = "test-secret";
+      const fetchMock = jest
+        .spyOn(global, "fetch")
+        .mockResolvedValue(new Response(null, { status: 204 }));
+
+      await sendConversion("generate_lead", {
+        analyticsConsent: analyticsConsent as boolean | undefined,
+        params: { source: "web", service: "junk_removal" },
+      });
+
+      expect(fetchMock).not.toHaveBeenCalled();
+    },
+  );
+
   it("sends no record identifiers even when a caller supplies them", async () => {
     process.env["GA4_MEASUREMENT_ID"] = "G-TEST";
     process.env["GA4_API_SECRET"] = "test-secret";
@@ -225,6 +244,7 @@ describe("Website Analytics experience", () => {
       .mockResolvedValue(new Response(null, { status: 204 }));
 
     await sendConversion("generate_lead", {
+      analyticsConsent: true,
       params: {
         source: "google",
         medium: "cpc",

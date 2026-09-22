@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { Button, Cta } from "@myst-os/ui";
 import { getPublicCompanyProfile } from "@/lib/company";
+import { CookieSettingsButton } from "@/components/CookieSettingsButton";
 
 export function Footer() {
   const company = getPublicCompanyProfile();
@@ -154,6 +155,7 @@ export function Footer() {
             >
               Privacy Policy
             </Link>
+            <CookieSettingsButton />
             <Link
               href="/terms"
               className="inline-flex min-h-11 items-center hover:text-primary-700"

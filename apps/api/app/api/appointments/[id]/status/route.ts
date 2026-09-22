@@ -7,6 +7,7 @@ import type { NextRequest } from "next/server";
 import { and, eq, inArray, sql } from "drizzle-orm";
 import { DateTime } from "luxon";
 import { z } from "zod";
+import { enqueueOpenAiAdsBooking } from "@/lib/openai-ads-capture";
 import {
   appointmentCrewMembers,
   appointments,
@@ -22,7 +23,9 @@ import {
 } from "@/lib/appointment-media";
 import {
   acquireScheduleConflictLock,
+  decideStaffScheduleConflict,
   inspectScheduleConflicts,
+  type ScheduleCapacityWarning,
 } from "@/lib/appointment-schedule-conflicts";
 import { getAppointmentCapacity } from "@/lib/appointment-capacity";
 import {
@@ -794,6 +797,7 @@ export async function POST(
         .select({
           id: appointments.id,
           leadId: appointments.leadId,
+          contactId: appointments.contactId,
           type: appointments.type,
           calendarEventId: appointments.calendarEventId,
           quotedTotalCents: appointments.quotedTotalCents,
@@ -1346,6 +1350,7 @@ export async function POST(
           409,
         );
       }
+      let scheduleWarning: ScheduleCapacityWarning | null = null;
       if (returnsToOccupiedSchedule && existing.startAt) {
         const capacityDecision = await inspectScheduleConflicts(tx, {
           startAt: existing.startAt,
@@ -1354,7 +1359,10 @@ export async function POST(
           capacity: getAppointmentCapacity(),
           excludeAppointmentId: existing.id,
         });
-        if (capacityDecision.conflict)
+        const staffSchedule = decideStaffScheduleConflict(capacityDecision, {
+          actorType: mutation.actor.type,
+        });
+        if (!staffSchedule.ok)
           return storeTerminalFailure(
             tx,
             mutation,
@@ -1362,10 +1370,11 @@ export async function POST(
             statusFailure(
               "conflict",
               "schedule_conflict",
-              "This appointment cannot be reopened at its old time because current staffing, holds, or calendar blocks no longer leave enough capacity. Reschedule it first.",
+              staffSchedule.message,
             ),
             409,
           );
+        scheduleWarning = staffSchedule.warning;
       }
       const becameFinalTotalKnown =
         status === "completed" &&
@@ -1588,6 +1597,14 @@ export async function POST(
           .update(leads)
           .set({ status: "scheduled" })
           .where(eq(leads.id, updated.leadId));
+        await enqueueOpenAiAdsBooking(tx, {
+          appointmentId,
+          status,
+          startAt: existing.startAt,
+          contactId: existing.contactId,
+          leadId: updated.leadId,
+          now: committedAt,
+        });
       }
 
       const calendarSync: "not_required" | "requested" =
@@ -1645,6 +1662,7 @@ export async function POST(
           commissionPeriod,
           proofOverrideApplied,
           proofOverrideCategories,
+          scheduleWarning,
         },
         committedAt: updated.updatedAt,
       });
@@ -1715,6 +1733,7 @@ export async function POST(
           ? ("requested" as const)
           : ("not_requested" as const),
         bookingDetailsUpdated: bookingDetailsUpdate !== undefined,
+        scheduleWarning,
       };
       const success = {
         ...teamMutationSuccessResult(mutation, data, {

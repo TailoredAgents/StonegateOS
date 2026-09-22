@@ -27,6 +27,9 @@ type RecordingIdentity = {
 };
 
 export const RECORDING_PROCESSING_LEASE_MS = 10 * 60_000;
+export const RECORDING_PROCESSING_MAX_ATTEMPTS = 5;
+export const RECORDING_PROCESSING_RETRY_EXHAUSTED =
+  "recording_processing_retry_budget_exhausted";
 const RECORDING_PROCESSING_LEASE_TOKEN_KEY = "recordingProcessingLeaseToken";
 const RECORDING_PROCESSING_LEASE_EXPIRES_KEY =
   "recordingProcessingLeaseExpiresAt";
@@ -78,6 +81,8 @@ type RecordingProcessingCall = {
   assignedTo: string | null;
   noteTaskId: string | null;
   processedAt: Date | null;
+  recordingSid: string | null;
+  transcript: string | null;
 };
 
 type LockedRecordingProcessingLease =
@@ -135,7 +140,7 @@ async function completeRecordingProcessingEvent(
       payload: payloadWithoutRecordingProcessingLease(
         input.payload ?? input.event.payload,
       ),
-      attempts: (input.event.attempts ?? 0) + 1,
+      attempts: input.event.attempts ?? 0,
       processedAt: input.now,
       nextAttemptAt: null,
       lastError: null,
@@ -166,6 +171,7 @@ export async function claimRecordingProcessingLease(input: {
     }
   | { kind: "deferred"; retryAt: Date }
   | { kind: "call_missing" }
+  | { kind: "quarantined" }
   | { kind: "already_terminal" }
 > {
   const now = input.now ?? new Date();
@@ -177,6 +183,7 @@ export async function claimRecordingProcessingLease(input: {
         processedAt: outboxEvents.processedAt,
         quarantinedAt: outboxEvents.quarantinedAt,
         nextAttemptAt: outboxEvents.nextAttemptAt,
+        lastError: outboxEvents.lastError,
       })
       .from(outboxEvents)
       .where(eq(outboxEvents.id, input.outboxEventId))
@@ -205,6 +212,8 @@ export async function claimRecordingProcessingLease(input: {
         assignedTo: callRecords.assignedTo,
         noteTaskId: callRecords.noteTaskId,
         processedAt: callRecords.processedAt,
+        recordingSid: callRecords.recordingSid,
+        transcript: callRecords.transcript,
       })
       .from(callRecords)
       .where(eq(callRecords.callSid, input.callSid))
@@ -233,6 +242,22 @@ export async function claimRecordingProcessingLease(input: {
       return { kind: "already_terminal" as const };
     }
 
+    // Check legacy attempts before any provider work. Claiming the attempt
+    // durably also bounds crashes between a paid request and its checkpoint.
+    if ((event.attempts ?? 0) >= RECORDING_PROCESSING_MAX_ATTEMPTS) {
+      await tx
+        .update(outboxEvents)
+        .set({
+          payload: payloadWithoutRecordingProcessingLease(event.payload),
+          nextAttemptAt: null,
+          quarantinedAt: now,
+          quarantineReason: RECORDING_PROCESSING_RETRY_EXHAUSTED,
+          lastError: event.lastError ?? RECORDING_PROCESSING_RETRY_EXHAUSTED,
+        })
+        .where(eq(outboxEvents.id, input.outboxEventId));
+      return { kind: "quarantined" as const };
+    }
+
     const leaseToken = randomUUID();
     const leaseExpiresAt = new Date(
       now.getTime() + RECORDING_PROCESSING_LEASE_MS,
@@ -244,7 +269,11 @@ export async function claimRecordingProcessingLease(input: {
     };
     const [claimed] = await tx
       .update(outboxEvents)
-      .set({ payload, nextAttemptAt: leaseExpiresAt })
+      .set({
+        payload,
+        nextAttemptAt: leaseExpiresAt,
+        attempts: (event.attempts ?? 0) + 1,
+      })
       .where(
         and(
           eq(outboxEvents.id, input.outboxEventId),
@@ -269,17 +298,24 @@ export async function deferRecordingProcessingLease(input: {
   leaseToken: string;
   error: string;
   nextAttemptAt: Date;
-}): Promise<"deferred" | "lease_lost" | "already_terminal"> {
+}): Promise<"deferred" | "quarantined" | "lease_lost" | "already_terminal"> {
   return input.db.transaction(async (tx) => {
     const lease = await lockRecordingProcessingLease(tx, input);
     if (lease.kind !== "owned") return lease.kind;
+    const exhausted =
+      (lease.event.attempts ?? 0) >= RECORDING_PROCESSING_MAX_ATTEMPTS;
     const [deferred] = await tx
       .update(outboxEvents)
       .set({
         payload: payloadWithoutRecordingProcessingLease(lease.event.payload),
-        attempts: (lease.event.attempts ?? 0) + 1,
-        nextAttemptAt: input.nextAttemptAt,
+        nextAttemptAt: exhausted ? null : input.nextAttemptAt,
         lastError: input.error,
+        ...(exhausted
+          ? {
+              quarantinedAt: new Date(),
+              quarantineReason: RECORDING_PROCESSING_RETRY_EXHAUSTED,
+            }
+          : {}),
       })
       .where(
         and(
@@ -291,7 +327,7 @@ export async function deferRecordingProcessingLease(input: {
       )
       .returning({ id: outboxEvents.id });
     if (!deferred) throw new Error("recording_processing_defer_claim_lost");
-    return "deferred" as const;
+    return exhausted ? ("quarantined" as const) : ("deferred" as const);
   });
 }
 
@@ -397,6 +433,10 @@ export async function recordVerifiedEmptyRecordingPoll(input: {
       lease.event.payload,
     );
     const plan = planRecordingEmptyPoll(verifiedEmptyPolls, "verified_empty");
+    // A confirmed empty list is a readiness observation, not a failed or
+    // paid processing attempt. Return its reservation while retaining the
+    // independent counter that proves five successful empty observations.
+    const attempts = Math.max(0, (lease.event.attempts ?? 0) - 1);
     const payload = {
       ...payloadWithoutRecordingProcessingLease(lease.event.payload),
       recordingEmptyPolls: plan.verifiedEmptyPolls,
@@ -406,7 +446,7 @@ export async function recordVerifiedEmptyRecordingPoll(input: {
         .update(outboxEvents)
         .set({
           payload,
-          attempts: (lease.event.attempts ?? 0) + 1,
+          attempts,
           nextAttemptAt: nextVerifiedRecordingPollAt(now),
           lastError: "recordings_not_ready",
         })
@@ -450,7 +490,7 @@ export async function recordVerifiedEmptyRecordingPoll(input: {
     await completeRecordingProcessingEvent(tx, {
       outboxEventId: input.outboxEventId,
       leaseToken: input.leaseToken,
-      event: lease.event,
+      event: { ...lease.event, attempts },
       payload,
       now,
     });
@@ -523,6 +563,40 @@ export async function persistSkippedRecordingProcessing(input: {
       event: lease.event,
       now,
     });
+    return "committed" as const;
+  });
+}
+
+/** Save paid transcription before downstream analysis can fail or retry. */
+export async function persistRecordingTranscript(input: {
+  db: DatabaseClient;
+  outboxEventId: string;
+  leaseToken: string;
+  callRecordId: string;
+  recording: RecordingIdentity;
+  transcript: string;
+  now?: Date;
+}): Promise<"committed" | "already_terminal" | "lease_lost"> {
+  if (!input.transcript.trim()) throw new Error("recording_transcript_empty");
+  const now = input.now ?? new Date();
+  return input.db.transaction(async (tx) => {
+    const lease = await lockRecordingProcessingLease(tx, input);
+    if (lease.kind !== "owned") return lease.kind;
+    const call = await lockCall(tx, input.callRecordId);
+    if (!call || call.processedAt) return "already_terminal" as const;
+    if (call.callSid !== input.recording.callSid) {
+      throw new Error("recording_call_identity_mismatch");
+    }
+    await tx
+      .update(callRecords)
+      .set({
+        recordingSid: input.recording.recordingSid,
+        recordingDurationSec: input.recording.durationSec,
+        recordingCreatedAt: input.recording.createdAt,
+        transcript: input.transcript,
+        updatedAt: now,
+      })
+      .where(eq(callRecords.id, call.id));
     return "committed" as const;
   });
 }

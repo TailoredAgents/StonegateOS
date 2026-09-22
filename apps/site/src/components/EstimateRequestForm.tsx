@@ -7,6 +7,8 @@ import { Check } from "lucide-react";
 import { DEFAULT_LEAD_SERVICE_OPTIONS } from "@/lib/lead-services";
 import { trackGoogleAdsConversion } from "@/lib/google-ads";
 import { useUTM } from "@/lib/use-utm";
+import { getOpenAiAdsAttribution, withOpenAiAdsUtm } from "@/lib/openai-ads";
+import { isAdvertisingAllowed, isAnalyticsAllowed } from "@/lib/cookie-consent";
 
 type EstimateFormContext = "default" | "contractor";
 
@@ -169,7 +171,12 @@ export function EstimateRequestForm({
           timeWindow: timeWindow.trim()
         },
         appointmentType: "web_lead",
-        utm,
+        utm: withOpenAiAdsUtm(utm),
+        openaiAds: getOpenAiAdsAttribution(),
+        cookieConsent: {
+          analytics: isAnalyticsAllowed(),
+          advertising: isAdvertisingAllowed()
+        },
         hp_company: hpCompany
       };
       const serializedPayload = JSON.stringify(payload);

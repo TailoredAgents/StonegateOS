@@ -1980,6 +1980,7 @@ export default async function MobileHomePage({
     customerNotification?: string;
     reviewRequest?: string;
     booked?: string;
+    scheduleWarning?: string;
     converted?: string;
     calendarSync?: string;
     upload?: string;
@@ -2097,6 +2098,11 @@ export default async function MobileHomePage({
   const appointmentBooked = params.booked === "1";
   const appointmentConverted =
     params.converted === "1" || params.converted === "completed";
+  const scheduleWarning =
+    (appointmentBooked || appointmentSaved || appointmentConverted) &&
+    typeof params.scheduleWarning === "string"
+      ? params.scheduleWarning.slice(0, 500)
+      : "";
   const calendarSyncStatus =
     params.calendarSync === "requested" ? "requested" : "not_required";
   const uploadSaved = params.upload === "1";
@@ -2562,6 +2568,14 @@ export default async function MobileHomePage({
               {calendarSyncStatus === "requested"
                 ? "Google Calendar sync queued."
                 : "No Google Calendar change was required."}
+            </div>
+          ) : null}
+          {scheduleWarning ? (
+            <div
+              role="status"
+              className="rounded-lg border border-amber-300/30 bg-amber-300/10 p-4 text-sm text-amber-100"
+            >
+              Warning: {scheduleWarning}
             </div>
           ) : null}
           {uploadSaved ? (

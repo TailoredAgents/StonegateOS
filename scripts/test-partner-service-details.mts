@@ -70,6 +70,18 @@ const savedCommercial = {
     email: "saved-accounts@example.test",
   },
 };
+const savedSchedule = {
+  preferredWindows: ["morning", "afternoon", "anytime"].map(
+    (timeOfDay, index) => ({
+      localDate: new Date(Date.now() + (index + 2) * 86_400_000)
+        .toISOString()
+        .slice(0, 10),
+      timeOfDay,
+      timezone: "America/New_York",
+    }),
+  ),
+  scheduleAssistancePreference: "callback",
+};
 const service = {
   key: "facility_cleanout",
   label: "Facility cleanout",
@@ -135,10 +147,12 @@ const actualCatalog=catalog.map(service=>scenario==='required'&&service.key==='f
 let savedDraft=scenario?{...draft,serviceKey:scenario==='blank-saved'?null:scenario==='unavailable'?'retired_service':(['switch','legacy','required'].includes(scenario))?'facility_cleanout':'service_request',tierKey:(['switch','legacy','required'].includes(scenario))?'standard':null,scope:scenario==='legacy'?${JSON.stringify(legacyScope)}:scenario==='legacy-flags'?{nonStandard:true,restrictedItems:true}:{},description:'Keep the saved description and attached photo.',selectedAddOns:(scenario==='switch'||scenario==='legacy')?[{key:'stairs',quantity:2}]:[],preferredWindows:[{localDate:new Date(Date.now()+2*86400000).toISOString().slice(0,10),timeOfDay:'afternoon',timezone:'America/New_York'}]}:draft;
 if(scenario==='contact'){savedDraft={...savedDraft,onSiteContact:null,crewInstructions:'Retain the older saved crew instructions.'};const restored=sessionStorage.getItem('fixture-contact-draft');if(restored)savedDraft=JSON.parse(restored);}
 if(scenario==='billing'){savedDraft={...savedDraft,commercial:${JSON.stringify(savedCommercial)}};const restored=sessionStorage.getItem('fixture-billing-draft');if(restored)savedDraft=JSON.parse(restored);}
+if(scenario==='scheduling'){savedDraft={...savedDraft,...${JSON.stringify(savedSchedule)}};const restored=sessionStorage.getItem('fixture-scheduling-draft');if(restored)savedDraft=JSON.parse(restored);}
+if(scenario==='hold')savedDraft={...savedDraft,preferredWindows:[]};
 const locations=[{id:'facility-address',name:'Northside facility',address:'100 Facility Drive, Atlanta, GA 30301',accessDetails:'Old location instructions removed from this draft.',...(scenario==='contact'?{contact:{name:'Location Manager',phone:'+14045550200',email:''}}:{})},...(scenario==='contact'?[{id:'second-address',name:'Southside facility',address:'200 Facility Drive, Atlanta, GA 30301',accessDetails:'Use the second loading entrance.',contact:{name:'Second Manager',phone:'',email:'second@example.test'}}]:[])];
 function App(){return <main className="mx-auto max-w-5xl px-4 py-6 sm:px-6"><PartnerBookingWizard
  initialDraft={scenario==='new'||scenario==='explicit'?null:savedDraft} defaultLocationId={scenario?'facility-address':''} defaultServiceKey={scenario==='explicit'||scenario==='blank-saved'?'appliance_collection':''} locations={locations} requesterContact={scenario==='contact'?{name:'Account Requester',phone:'',email:'requester@example.test'}:undefined}
- services={actualCatalog} canUploadPhotos canManageLocations persona="commercial_client"
+ services={actualCatalog} canUploadPhotos canManageLocations instantConfirmationAvailable={scenario==='hold'} persona="commercial_client"
  cancellationPolicy={{minimumNoticeMinutes:0,directCancellationEnabled:false,lateCancellationDisposition:'staff_review',automaticFeeMinor:null,source:'unconfigured',revision:null}}
  supportPhoneE164="+14045550100" supportPhoneDisplay="404-555-0100"/></main>}
 createRoot(document.getElementById('root')).render(<App/>);`;
@@ -1231,19 +1245,96 @@ for (const engine of [chromium, webkit]) {
             "data-booking-step",
             "2",
           );
+          await expect(
+            page.locator("#partner-book-step-heading"),
+          ).toBeFocused();
+          const alternatives = page.locator("#partner-book-alternative-dates");
+          const schedulingHelp = page.locator("#partner-book-scheduling-help");
           const deadline = disclosure(page, "Completion deadline");
-          await expect(deadline).toHaveJSProperty("open", false);
+          for (const details of [alternatives, schedulingHelp, deadline])
+            await expect(details).toHaveJSProperty("open", false);
+          const urgentCall = page.getByRole("link", { name: /Call/ });
+          await expect(urgentCall).toBeVisible();
+          await expect(urgentCall).toHaveAttribute("href", "tel:+14045550100");
+          await expect(
+            page.getByLabel("Preferred date", { exact: true }),
+          ).toBeVisible();
+          await expect(
+            page.getByLabel("Preferred time", { exact: true }),
+          ).toBeVisible();
+          for (const id of [
+            "partner-book-preferred-date-2",
+            "partner-book-preferred-date-3",
+            "partner-book-schedule-assistance",
+          ]) {
+            await expect(page.locator(`#${id}`)).toHaveCount(1);
+            await expect(page.locator(`#${id}`)).toBeHidden();
+          }
+          await expect(
+            page.getByRole("button", { name: /^Refresh/ }),
+          ).toHaveCount(0);
+          await expect(
+            page.getByText(/Stonegate.*confirm/i).first(),
+          ).toBeVisible();
+          await expect(
+            page.getByRole("button", { name: "Continue", exact: true }),
+          ).toBeEnabled();
+          await fits(page);
+          await screenshot(page, engine.name(), width, "scheduling-compact");
+          await page
+            .getByRole("button", { name: "Continue", exact: true })
+            .click();
+          await expect(errorSummary).toBeFocused();
+          await errorSummary
+            .locator('a[href="#partner-book-preferred-date-1"]')
+            .click();
+          await expect(
+            page.locator("#partner-book-preferred-date-1"),
+          ).toBeFocused();
+          const requestedDates = [2, 3, 4].map((days) =>
+            new Date(Date.now() + days * 86_400_000).toISOString().slice(0, 10),
+          );
+          await page
+            .locator("#partner-book-preferred-date-1")
+            .fill(requestedDates[0]!);
+          await page
+            .locator("#partner-book-preferred-time")
+            .selectOption("morning");
+          await toggle(alternatives, true, "Space");
+          for (const [index, time] of [
+            [2, "afternoon"],
+            [3, "anytime"],
+          ] as const) {
+            await page
+              .locator(`#partner-book-preferred-date-${index}`)
+              .fill(requestedDates[index - 1]!);
+            await page
+              .locator(`#partner-book-preferred-time-${index}`)
+              .selectOption(time);
+          }
+          await toggle(alternatives, false);
+          await toggle(schedulingHelp, true);
+          await page
+            .locator("#partner-book-schedule-assistance")
+            .selectOption("callback");
+          await toggle(schedulingHelp, false);
+          await expect
+            .poll(() => saved.preferredWindows)
+            .toEqual(
+              requestedDates.map((localDate, index) => ({
+                localDate,
+                timeOfDay: ["morning", "afternoon", "anytime"][index],
+                timezone: "America/New_York",
+              })),
+            );
+          await expect
+            .poll(() => saved.scheduleAssistancePreference)
+            .toBe("callback");
           await toggle(deadline, true);
           await page.locator("#partner-book-required-date").fill("2026-10-04");
           await page.locator("#partner-book-required-time").fill("16:00");
           await page.locator("#partner-book-required-date").fill("");
           await toggle(deadline, false);
-          const preferredDate = new Date(Date.now() + 2 * 86_400_000)
-            .toISOString()
-            .slice(0, 10);
-          await page
-            .locator("#partner-book-preferred-date-1")
-            .fill(preferredDate);
           await page
             .getByRole("button", { name: "Continue", exact: true })
             .click();
@@ -1284,19 +1375,18 @@ for (const engine of [chromium, webkit]) {
             await expect(
               page.locator("#partner-book-required-date"),
             ).toBeDisabled();
-            // Scheduling replaces its preference controls with a loading state;
-            // if a future layout keeps them mounted, they must be disabled.
-            await expect
-              .poll(async () => {
-                const preference = page.locator(
-                  "#partner-book-preferred-date-1",
-                );
-                return (
-                  (await preference.count()) === 0 ||
-                  (await preference.isDisabled())
-                );
-              })
-              .toBe(true);
+            // The compact form stays visible while its availability check runs.
+            await expect(
+              page.locator("#partner-book-preferred-date-1"),
+            ).toBeVisible();
+            for (const id of [
+              "partner-book-preferred-date-1",
+              "partner-book-preferred-time",
+              "partner-book-preferred-date-2",
+              "partner-book-preferred-date-3",
+              "partner-book-schedule-assistance",
+            ])
+              await expect(page.locator(`#${id}`)).toBeDisabled();
             await expect(
               page.getByRole("button", { name: "Saving step…", exact: true }),
             ).toBeDisabled();
@@ -1350,6 +1440,15 @@ for (const engine of [chromium, webkit]) {
           assert.deepEqual(saved.selectedAddOns, [
             { key: "stairs", quantity: 2 },
           ]);
+          assert.deepEqual(
+            saved.preferredWindows,
+            requestedDates.map((localDate, index) => ({
+              localDate,
+              timeOfDay: ["morning", "afternoon", "anytime"][index],
+              timezone: "America/New_York",
+            })),
+          );
+          assert.equal(saved.scheduleAssistancePreference, "callback");
           await expect(
             page
               .getByText(
@@ -1416,6 +1515,8 @@ for (const engine of [chromium, webkit]) {
           "scope-error",
           "contact",
           "billing",
+          "scheduling",
+          "hold",
         ]) {
           const page = await browser.newPage({
             viewport: { width: 375, height: 1000 },
@@ -1465,7 +1566,25 @@ for (const engine of [chromium, webkit]) {
               },
             ],
           };
+          if (scenario === "scheduling")
+            Object.assign(saved, structuredClone(savedSchedule));
+          if (scenario === "hold") saved.preferredWindows = [];
           let validations = 0;
+          let failAvailability = false;
+          const holdAttempts: Array<{ key: string | null; body: unknown }> = [];
+          const holdReleases: string[] = [];
+          const availableWindow = {
+            id: "held-arrival-window",
+            localDate: new Date(Date.now() + 2 * 86_400_000)
+              .toISOString()
+              .slice(0, 10),
+            startAt: new Date(Date.now() + 2 * 86_400_000).toISOString(),
+            endAt: new Date(
+              Date.now() + 2 * 86_400_000 + 2 * 3_600_000,
+            ).toISOString(),
+            label: "Available arrival window",
+            available: true,
+          };
           let validationErrors: Record<string, string> =
             scenario === "scope-error"
               ? {
@@ -1518,6 +1637,17 @@ for (const engine of [chromium, webkit]) {
             }
             if (path.endsWith(`/booking-drafts/${draftId}/availability`)) {
               availabilityServices.push(saved.serviceKey);
+              if (failAvailability)
+                return route.fulfill({
+                  status: 503,
+                  headers: { "x-correlation-id": "scheduling-recovery-ref" },
+                  json: {
+                    ok: false,
+                    error: "temporarily_unavailable",
+                    message: "Scheduling is temporarily unavailable.",
+                    correlationId: "scheduling-recovery-ref",
+                  },
+                });
               const amount = {
                 amountMinor:
                   saved.serviceKey === "facility_cleanout" ? 12345 : 67890,
@@ -1532,7 +1662,7 @@ for (const engine of [chromium, webkit]) {
                     timezone: "America/New_York",
                     calendar: { state: "current" },
                     reviewReasons: ["manual_review_required"],
-                    instantConfirmationEligible: false,
+                    instantConfirmationEligible: scenario === "hold",
                     pricing: {
                       status: "estimate",
                       currency: "USD",
@@ -1541,8 +1671,44 @@ for (const engine of [chromium, webkit]) {
                       total: amount,
                       addOns: [],
                     },
-                    windows: [],
+                    windows: scenario === "hold" ? [availableWindow] : [],
                     rankedAlternatives: [],
+                  },
+                },
+              });
+            }
+            if (path.endsWith(`/booking-drafts/${draftId}/hold`)) {
+              if (request.method() === "DELETE") {
+                holdReleases.push(
+                  new URL(request.url()).searchParams.get("holdId") ?? "",
+                );
+                return route.fulfill({ json: { ok: true, released: true } });
+              }
+              assert.equal(request.method(), "POST");
+              assert.equal(request.headers()["if-match"], saved.etag);
+              holdAttempts.push({
+                key: request.headers()["idempotency-key"] ?? null,
+                body: request.postDataJSON(),
+              });
+              if (holdAttempts.length === 1)
+                return route.fulfill({
+                  status: 409,
+                  json: {
+                    ok: false,
+                    error: "slot_unavailable",
+                    message: "That window is no longer available.",
+                  },
+                });
+              return route.fulfill({
+                json: {
+                  ok: true,
+                  hold: {
+                    id: "held-window-id",
+                    draftId,
+                    status: "active",
+                    arrivalWindowStartAt: availableWindow.startAt,
+                    arrivalWindowEndAt: availableWindow.endAt,
+                    expiresAt: new Date(Date.now() + 300_000).toISOString(),
                   },
                 },
               });
@@ -1615,6 +1781,289 @@ for (const engine of [chromium, webkit]) {
               await expect(
                 page.getByText("Saved reference photo.", { exact: true }),
               ).toBeVisible();
+            } else if (scenario === "scheduling") {
+              const nextDetails = page.getByRole("button", {
+                name: "Continue to scheduling",
+                exact: true,
+              });
+              await nextDetails.click();
+              await expect(
+                page.locator("#partner-book-step-heading"),
+              ).toBeFocused();
+              const alternatives = page.locator(
+                "#partner-book-alternative-dates",
+              );
+              const help = page.locator("#partner-book-scheduling-help");
+              const continueButton = page.getByRole("button", {
+                name: "Continue",
+                exact: true,
+              });
+              const summary = page.locator("#partner-book-error-summary");
+              await expect(alternatives).toHaveJSProperty("open", false);
+              await expect(help).toHaveJSProperty("open", false);
+              await toggle(alternatives, true);
+              for (let index = 0; index < 3; index++) {
+                await expect(
+                  page.locator(`#partner-book-preferred-date-${index + 1}`),
+                ).toHaveValue(savedSchedule.preferredWindows[index]!.localDate);
+                await expect(
+                  page.locator(
+                    index === 0
+                      ? "#partner-book-preferred-time"
+                      : `#partner-book-preferred-time-${index + 1}`,
+                  ),
+                ).toHaveValue(savedSchedule.preferredWindows[index]!.timeOfDay);
+              }
+              await toggle(help, true);
+              await expect(
+                page.locator("#partner-book-schedule-assistance"),
+              ).toHaveValue("callback");
+              await page
+                .locator("#partner-book-schedule-assistance")
+                .selectOption("waitlist");
+              await toggle(help, false);
+
+              // Changing the first date's time cannot overwrite another choice,
+              // including the time selected before its optional date is entered.
+              await page.locator("#partner-book-preferred-date-2").fill("");
+              await page
+                .locator("#partner-book-preferred-time")
+                .selectOption("anytime");
+              await expect(
+                page.locator("#partner-book-preferred-time-2"),
+              ).toHaveValue("afternoon");
+              await expect(
+                page.locator("#partner-book-preferred-time-3"),
+              ).toHaveValue("anytime");
+              await page
+                .locator("#partner-book-preferred-time-3")
+                .selectOption("morning");
+              const compactPreferences = [
+                { ...savedSchedule.preferredWindows[0]!, timeOfDay: "anytime" },
+                { ...savedSchedule.preferredWindows[2]!, timeOfDay: "morning" },
+              ];
+              await expect
+                .poll(() => saved.preferredWindows)
+                .toEqual(compactPreferences);
+              await toggle(alternatives, false);
+              await expect(
+                alternatives.locator(":scope > summary"),
+              ).toContainText(/Morning|morning/);
+              await fits(page);
+              await screenshot(page, engine.name(), 375, "saved-scheduling");
+
+              // Optional dates do not replace the required first choice.
+              await page.locator("#partner-book-preferred-date-1").fill("");
+              await continueButton.click();
+              await expect(summary).toBeFocused();
+              await summary
+                .locator('a[href="#partner-book-preferred-date-1"]')
+                .click();
+              await expect(
+                page.locator("#partner-book-preferred-date-1"),
+              ).toBeFocused();
+              await page
+                .locator("#partner-book-preferred-date-1")
+                .fill(savedSchedule.preferredWindows[0]!.localDate);
+              if (
+                !(await alternatives.evaluate(
+                  (node) => (node as HTMLDetailsElement).open,
+                ))
+              )
+                await toggle(alternatives, true);
+              for (const invalidDate of [
+                savedSchedule.preferredWindows[0]!.localDate,
+                "2020-01-01",
+              ]) {
+                await page
+                  .locator("#partner-book-preferred-date-3")
+                  .fill(invalidDate);
+                await toggle(alternatives, false);
+                const before = validations;
+                await continueButton.click();
+                await expect(summary).toBeFocused();
+                await expect(alternatives).toHaveJSProperty("open", true);
+                await summary
+                  .locator('a[href="#partner-book-preferred-date-3"]')
+                  .click();
+                await expect(
+                  page.locator("#partner-book-preferred-date-3"),
+                ).toBeFocused();
+                assert.equal(
+                  validations,
+                  before,
+                  "Invalid optional dates are rejected before requesting availability",
+                );
+              }
+              await page
+                .locator("#partner-book-preferred-date-3")
+                .fill(savedSchedule.preferredWindows[2]!.localDate);
+              await toggle(alternatives, false);
+
+              // Outbound dates omit blank rows. Server index1 therefore belongs
+              // to date3, while local required-date errors always belong to date1.
+              for (const [field, id] of [
+                ["localDate", "partner-book-preferred-date-3"],
+                ["timeOfDay", "partner-book-preferred-time-3"],
+              ] as const) {
+                const message = `Check the saved alternative ${field}.`;
+                validationErrors = { [`preferredWindows.1.${field}`]: message };
+                await continueButton.click();
+                await expect(summary).toBeFocused();
+                await expect(alternatives).toHaveJSProperty("open", true);
+                await toggle(alternatives, false);
+                await summary
+                  .getByRole("link", { name: message, exact: true })
+                  .click();
+                await expect(alternatives).toHaveJSProperty("open", true);
+                await expect(page.locator(`#${id}`)).toBeFocused();
+                await toggle(alternatives, false);
+              }
+              validationErrors = {};
+              failAvailability = true;
+              await page
+                .getByRole("button", { name: "Back", exact: true })
+                .click();
+              await nextDetails.click();
+              await expect(page.locator("[data-booking-step]")).toHaveAttribute(
+                "data-booking-step",
+                "2",
+              );
+              await expect(
+                page.getByRole("button", { name: "Try again", exact: true }),
+              ).toBeVisible();
+              await expect(
+                page.getByText(/scheduling-recovery-ref/),
+              ).toBeVisible();
+              assert.deepEqual(saved.preferredWindows, compactPreferences);
+              assert.equal(saved.scheduleAssistancePreference, "waitlist");
+              assert.equal(
+                holdAttempts.length,
+                0,
+                "Review preferences never manufacture a held window",
+              );
+              failAvailability = false;
+              await page
+                .getByRole("button", { name: "Try again", exact: true })
+                .click();
+              await expect(
+                page.getByRole("button", { name: "Try again", exact: true }),
+              ).toHaveCount(0);
+              await expect(
+                page.locator("#partner-book-preferred-date-1"),
+              ).toBeEnabled();
+              assert.deepEqual(saved.preferredWindows, compactPreferences);
+
+              if (
+                !(await alternatives.evaluate(
+                  (node) => (node as HTMLDetailsElement).open,
+                ))
+              )
+                await toggle(alternatives, true);
+              await page.locator("#partner-book-preferred-date-3").fill("");
+              await toggle(alternatives, false);
+              await toggle(help, true);
+              await page
+                .locator("#partner-book-schedule-assistance")
+                .selectOption("none");
+              await toggle(help, false);
+              await expect
+                .poll(() => saved.preferredWindows)
+                .toEqual([compactPreferences[0]]);
+              await expect
+                .poll(() => saved.scheduleAssistancePreference)
+                .toBe("none");
+              await page.evaluate(
+                (snapshot) =>
+                  sessionStorage.setItem("fixture-scheduling-draft", snapshot),
+                JSON.stringify(saved),
+              );
+              await page.reload();
+              await nextDetails.click();
+              await expect(alternatives).toHaveJSProperty("open", false);
+              await expect(help).toHaveJSProperty("open", false);
+              await expect(
+                page.locator("#partner-book-preferred-date-1"),
+              ).toHaveValue(compactPreferences[0]!.localDate);
+              await expect(
+                page.locator("#partner-book-preferred-time"),
+              ).toHaveValue("anytime");
+              for (const id of [2, 3])
+                await expect(
+                  page.locator(`#partner-book-preferred-date-${id}`),
+                ).toHaveValue("");
+              await expect(
+                page.locator("#partner-book-schedule-assistance"),
+              ).toHaveValue("none");
+            } else if (scenario === "hold") {
+              await page
+                .getByRole("button", {
+                  name: "Continue to scheduling",
+                  exact: true,
+                })
+                .click();
+              await expect(
+                page.getByRole("combobox", {
+                  name: "Service date",
+                  exact: true,
+                }),
+              ).toBeVisible();
+              await expect(
+                page.getByRole("button", {
+                  name: "Refresh times",
+                  exact: true,
+                }),
+              ).toBeVisible();
+              const arrival = page.getByRole("button", {
+                name: /arrival window$/,
+              });
+              await expect(arrival).toHaveCount(1);
+              const next = page.getByRole("button", {
+                name: "Continue",
+                exact: true,
+              });
+              await expect(next).toBeDisabled();
+              await arrival.click();
+              await expect.poll(() => holdAttempts.length).toBe(1);
+              await expect.poll(() => availabilityServices.length).toBe(2);
+              await expect(arrival).toBeEnabled();
+              await expect(arrival).toHaveAttribute("aria-pressed", "false");
+              await expect(
+                page.getByText("Arrival window held:", { exact: true }),
+              ).toHaveCount(0);
+              await arrival.click();
+              await expect(
+                page.getByText("Arrival window held:", { exact: true }),
+              ).toBeVisible();
+              await expect(
+                page.getByText(/This temporary hold expires at/),
+              ).toHaveCount(1);
+              await expect(arrival).toHaveAttribute("aria-pressed", "true");
+              assert.equal(holdAttempts.length, 2);
+              for (const attempt of holdAttempts) {
+                assert.ok(attempt.key);
+                assert.deepEqual(attempt.body, {
+                  windowId: availableWindow.id,
+                });
+              }
+              await next.click();
+              await expect(page.locator("[data-booking-step]")).toHaveAttribute(
+                "data-booking-step",
+                "3",
+              );
+              await expect(
+                page.getByText(/arrival window currently held for you/),
+              ).toBeVisible();
+              await page
+                .getByRole("button", { name: "Back", exact: true })
+                .click();
+              await expect(arrival).toHaveAttribute("aria-pressed", "true");
+              await page
+                .getByRole("button", { name: "Back", exact: true })
+                .click();
+              await select.selectOption("facility_cleanout");
+              await expect.poll(() => holdReleases).toEqual(["held-window-id"]);
+              assert.deepEqual(saved.preferredWindows, []);
             } else if (scenario === "billing") {
               const billing = disclosure(page, "Work order and billing");
               const references = page.locator(

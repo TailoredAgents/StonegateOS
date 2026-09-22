@@ -1,3 +1,5 @@
+import { isAdvertisingAllowed } from "./cookie-consent";
+
 declare global {
   interface Window {
     gtag?: (...args: unknown[]) => void;
@@ -30,7 +32,8 @@ function normalizePhoneE164(value: string): string | null {
 
   if (digits.length === 10) return `+1${digits}`;
   if (digits.length === 11 && digits.startsWith("1")) return `+${digits}`;
-  if (trimmed.startsWith("+") && digits.length >= 11 && digits.length <= 15) return `+${digits}`;
+  if (trimmed.startsWith("+") && digits.length >= 11 && digits.length <= 15)
+    return `+${digits}`;
 
   return null;
 }
@@ -43,7 +46,9 @@ function normalizeEmail(value: string): string | null {
   return trimmed;
 }
 
-function normalizeAddress(input: EnhancedConversionsAddress | undefined): EnhancedConversionsAddress | undefined {
+function normalizeAddress(
+  input: EnhancedConversionsAddress | undefined,
+): EnhancedConversionsAddress | undefined {
   if (!input) return undefined;
   const normalized: EnhancedConversionsAddress = {};
   const firstName = input.first_name?.trim() ?? "";
@@ -65,12 +70,18 @@ function normalizeAddress(input: EnhancedConversionsAddress | undefined): Enhanc
   return Object.keys(normalized).length ? normalized : undefined;
 }
 
-export function setGoogleAdsEnhancedConversionsUserData(input: EnhancedConversionsUserData) {
+export function setGoogleAdsEnhancedConversionsUserData(
+  input: EnhancedConversionsUserData,
+) {
   try {
-    if (typeof window === "undefined") return;
+    if (typeof window === "undefined" || !isAdvertisingAllowed()) return;
 
-    const email = typeof input.email === "string" ? normalizeEmail(input.email) : null;
-    const phone = typeof input.phone_number === "string" ? normalizePhoneE164(input.phone_number) : null;
+    const email =
+      typeof input.email === "string" ? normalizeEmail(input.email) : null;
+    const phone =
+      typeof input.phone_number === "string"
+        ? normalizePhoneE164(input.phone_number)
+        : null;
     const address = normalizeAddress(input.address);
 
     const userData: EnhancedConversionsUserData = {};
@@ -95,21 +106,31 @@ export function setGoogleAdsEnhancedConversionsUserData(input: EnhancedConversio
   }
 }
 
-export function trackGoogleAdsConversion(sendTo: string, params?: Record<string, unknown>) {
+export function trackGoogleAdsConversion(
+  sendTo: string,
+  params?: Record<string, unknown>,
+) {
   const normalized = sendTo.trim();
   if (!normalized) return;
 
   try {
-    if (typeof window === "undefined") return;
+    if (typeof window === "undefined" || !isAdvertisingAllowed()) return;
     if (typeof window.gtag === "function") {
-      window.gtag("event", "conversion", { send_to: normalized, ...(params ?? {}) });
+      window.gtag("event", "conversion", {
+        send_to: normalized,
+        ...(params ?? {}),
+      });
       return;
     }
 
     window.dataLayer = window.dataLayer || [];
     if (Array.isArray(window.dataLayer)) {
       // Mirror the gtag() stub behavior: it pushes the `arguments` array into dataLayer.
-      window.dataLayer.push(["event", "conversion", { send_to: normalized, ...(params ?? {}) }]);
+      window.dataLayer.push([
+        "event",
+        "conversion",
+        { send_to: normalized, ...(params ?? {}) },
+      ]);
     }
   } catch (error) {
     console.warn("Google Ads conversion tracking failed", error);

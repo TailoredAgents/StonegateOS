@@ -9,6 +9,11 @@ import {
 import { resolvePartnerApiUrl } from "@/app/partners/lib/api-origin";
 import { resolvePublicOrigin } from "@/app/partners/lib/origin";
 import { ADMIN_SESSION_COOKIE, adminSessionMatches } from "@/lib/admin-session";
+import {
+  COOKIE_CONSENT_COOKIE,
+  isPublicTrackingPath,
+  parseCookiePreferences,
+} from "@/lib/cookie-consent";
 import { PARTNER_APPLICATION_SESSION_COOKIE } from "@/lib/partner-application-session";
 import {
   isValidPartnerSessionToken,
@@ -306,6 +311,17 @@ export async function middleware(request: NextRequest) {
   }
 
   const response = NextResponse.next();
+  const consent = parseCookiePreferences(
+    request.cookies.get(COOKIE_CONSENT_COOKIE)?.value,
+  );
+  if (
+    !isPublicTrackingPath(pathname) ||
+    consent?.advertising !== true ||
+    request.headers.get("Sec-GPC") === "1" ||
+    request.headers.get("DNT") === "1"
+  ) {
+    return response;
+  }
   const url = request.nextUrl;
   const hasTrackingParams = UTM_PARAMS.some((param) =>
     url.searchParams.has(param),
@@ -330,6 +346,7 @@ export async function middleware(request: NextRequest) {
     name: COOKIE_NAME,
     value: JSON.stringify(enriched),
     httpOnly: false,
+    secure: request.nextUrl.protocol === "https:",
     maxAge: 60 * 60 * 24 * 30,
     sameSite: "lax",
     path: "/",
