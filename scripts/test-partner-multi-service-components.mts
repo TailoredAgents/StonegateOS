@@ -93,7 +93,7 @@ const card = {
 const entry = `import React from 'react';import{createRoot}from'react-dom/client';
 import{PartnerBookingWizard}from'./src/app/partners/components/PartnerBookingWizard';
 import{PartnerMultiServiceRequestDetails}from'./src/app/partners/components/PartnerMultiServiceRequestDetails';
-const draft=JSON.parse(sessionStorage.getItem('saved-v2')||'null')||${JSON.stringify(initialDraft)};
+const draft=JSON.parse(document.getElementById('fixture-draft').textContent);
 const params=new URLSearchParams(location.search);const hidden=params.has('hidden');
 const detail={modelVersion:2,version:1,pricingVersion:1,quotedTotalCents:null,finalTotalCents:null,serviceLines:draft.serviceLines.map((line,index)=>({...line,label:${JSON.stringify(services)}.find(s=>s.key===line.serviceKey).label,status:index===0?'completed':'pending',rateSnapshot:null,pricingSnapshot:null,quotedAmountCents:null,priceDescription:null})),visits:params.has('scheduled')?[{id:'33333333-3333-4333-8333-333333333333',appointmentId:'44444444-4444-4444-8444-444444444444',status:params.has('change')?'scheduled':'completed',serviceLineIds:[draft.serviceLines[0].id],startAt:'2026-10-12T12:00:00Z',endAt:'2026-10-12T14:00:00Z',arrivalStartAt:'2026-10-12T12:00:00Z',arrivalEndAt:'2026-10-12T14:00:00Z',timezone:'America/New_York',version:1,minimumAmountCents:null}]:[]};
 
@@ -183,6 +183,7 @@ for (const engine of [chromium, webkit])
       { timeout: 90_000 },
       async () => {
         const built = await assets();
+        let saved: Record<string, any> = structuredClone(initialDraft);
         const server = createServer((request, response) => {
           if (request.url === "/client.js") {
             response.setHeader("Content-Type", "text/javascript");
@@ -192,8 +193,11 @@ for (const engine of [chromium, webkit])
             response.end(built.css);
           } else {
             response.setHeader("Content-Type", "text/html");
+            // Each document receives the mock backend's committed snapshot;
+            // saved answers must survive destruction of the previous page.
+            const snapshot = JSON.stringify(saved).replace(/</g, "\\u003c");
             response.end(
-              '<!doctype html><html lang="en"><head><meta name="viewport" content="width=device-width,initial-scale=1"><link rel="stylesheet" href="/styles.css"></head><body><div id="root"></div><script src="/client.js"></script></body></html>',
+              `<!doctype html><html lang="en"><head><meta name="viewport" content="width=device-width,initial-scale=1"><link rel="stylesheet" href="/styles.css"></head><body><div id="root"></div><script id="fixture-draft" type="application/json">${snapshot}</script><script src="/client.js"></script></body></html>`,
             );
           }
         });
@@ -244,7 +248,6 @@ for (const engine of [chromium, webkit])
             (id) => sessionStorage.setItem(`partner-request-step:${id}`, "1"),
             draftId,
           );
-          let saved: Record<string, any> = structuredClone(initialDraft);
           const patches: Record<string, any>[] = [];
           const submits: Record<string, any>[] = [];
           const visitChanges: Record<string, any>[] = [];
@@ -355,13 +358,7 @@ for (const engine of [chromium, webkit])
                 revision: saved.revision + 1,
                 etag: `"draft-${saved.revision + 1}"`,
               };
-              await route.fulfill({ json: { ok: true, draft: saved } });
-              await page.evaluate(
-                (value) =>
-                  sessionStorage.setItem("saved-v2", JSON.stringify(value)),
-                saved,
-              );
-              return;
+              return route.fulfill({ json: { ok: true, draft: saved } });
             }
             if (
               path.endsWith("/booking-drafts") &&
