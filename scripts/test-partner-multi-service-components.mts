@@ -159,10 +159,27 @@ function assets() {
   })());
 }
 
+const layouts = [
+  {
+    width: 1440,
+    height: 1000,
+    deviceScaleFactor: 1,
+    mobile: false,
+    zoom: null,
+  },
+  { width: 320, height: 1000, deviceScaleFactor: 1, mobile: true, zoom: null },
+  // Match the repository's deterministic 1280px desktop zoom projects.
+  { width: 640, height: 900, deviceScaleFactor: 2, mobile: false, zoom: 200 },
+  { width: 320, height: 740, deviceScaleFactor: 4, mobile: false, zoom: 400 },
+] as const;
+
 for (const engine of [chromium, webkit])
-  for (const width of [1440, 320]) {
+  for (const layout of layouts) {
+    const { width, height, deviceScaleFactor, mobile, zoom } = layout;
+    const zoomLabel = zoom ? ` effective ${zoom}% zoom` : "";
+    const screenshotName = `portal-${engine.name()}-${width}${zoom ? `-zoom-${zoom}` : ""}`;
     void test(
-      `${engine.name()} ${width}px: one request preserves eight service scopes, shared details and rates-only review`,
+      `${engine.name()} ${width}px${zoomLabel}: one request preserves eight service scopes, shared details and rates-only review`,
       { timeout: 90_000 },
       async () => {
         const built = await assets();
@@ -188,10 +205,38 @@ for (const engine of [chromium, webkit])
         const browser = await engine.launch();
         try {
           const page = await browser.newPage({
-            viewport: { width, height: 1000 },
-            isMobile: width === 320,
-            hasTouch: width === 320,
+            viewport: { width, height },
+            deviceScaleFactor,
+            isMobile: mobile,
+            hasTouch: mobile,
           });
+          const assertViewport = async (stage: string) => {
+            const measured = await page.evaluate(() => ({
+              cssWidth: document.documentElement.clientWidth,
+              contentWidth: document.documentElement.scrollWidth,
+              devicePixelRatio: window.devicePixelRatio,
+            }));
+            assert.equal(
+              measured.cssWidth,
+              width,
+              `${stage}: expected CSS viewport`,
+            );
+            assert.equal(
+              measured.devicePixelRatio,
+              deviceScaleFactor,
+              `${stage}: expected pixel density`,
+            );
+            assert.ok(
+              measured.contentWidth <= width + 1,
+              `${stage}: no horizontal page overflow`,
+            );
+            if (zoom)
+              assert.equal(
+                measured.cssWidth * measured.devicePixelRatio,
+                1280,
+                `${stage}: effective desktop zoom`,
+              );
+          };
           page.setDefaultTimeout(10_000);
           const errors: string[] = [];
           page.on("pageerror", (error) => errors.push(error.message));
@@ -374,6 +419,7 @@ for (const engine of [chromium, webkit])
             name: "Services for this request",
           });
           await expect(choices.getByRole("checkbox")).toHaveCount(8);
+          await assertViewport("Service selection");
           await expect(
             page.getByLabel("Service type", { exact: true }),
           ).toHaveCount(0);
@@ -390,9 +436,16 @@ for (const engine of [chromium, webkit])
             page.getByRole("link", { name: "Choose at least one service." }),
           ).toBeVisible();
           for (const definition of PARTNER_SERVICE_DEFINITIONS) {
-            await choices
-              .getByRole("checkbox", { name: definition.label, exact: true })
-              .check();
+            const choice = choices.getByRole("checkbox", {
+              name: definition.label,
+              exact: true,
+            });
+            if (zoom) {
+              await choice.focus();
+              await expect(choice).toBeFocused();
+              await choice.press("Space");
+            } else await choice.check();
+            await expect(choice).toBeChecked();
             const editor = page.getByRole("region", {
               name: `${definition.label} details`,
             });
@@ -417,6 +470,7 @@ for (const engine of [chromium, webkit])
               `${definition.key} fits viewport`,
             );
           }
+          await assertViewport("All eight services selected");
           const directory = process.env["PARTNER_MULTI_SERVICE_PREVIEW_DIR"];
           if (directory) {
             await expect(
@@ -424,7 +478,7 @@ for (const engine of [chromium, webkit])
             ).toHaveCount(0);
             mkdirSync(directory, { recursive: true });
             await page.screenshot({
-              path: `${directory}/portal-${engine.name()}-${width}-eight-services.png`,
+              path: `${directory}/${screenshotName}-eight-services.png`,
               fullPage: true,
             });
           }
@@ -561,9 +615,10 @@ for (const engine of [chromium, webkit])
           await expect(page.getByText("Saving…", { exact: true })).toHaveCount(
             0,
           );
+          await assertViewport("Review and submit");
           if (directory)
             await page.screenshot({
-              path: `${directory}/portal-${engine.name()}-${width}-review.png`,
+              path: `${directory}/${screenshotName}-review.png`,
               fullPage: true,
             });
           for (const definition of PARTNER_SERVICE_DEFINITIONS)

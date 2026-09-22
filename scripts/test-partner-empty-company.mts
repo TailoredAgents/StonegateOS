@@ -288,20 +288,55 @@ async function visit(
     await expect(account).toBeFocused();
     await account.press("ArrowDown");
     await expect(account).toHaveValue(selectedAccount);
+    await account.press("Escape");
     const channels = page.getByRole("region", {
       name: "Notification delivery channels",
       exact: true,
     });
     await channels.focus();
-    await channels.press("ArrowRight");
+    await expect(channels).toBeFocused();
+    await channels.press("Tab");
+    const firstChannel = channels.getByRole("checkbox").first();
+    if (
+      !(await firstChannel.evaluate(
+        (element) => element === document.activeElement,
+      ))
+    ) {
+      // Safari's default keyboard preference uses Option+Tab for checkboxes.
+      await channels.focus();
+      await channels.press("Alt+Tab");
+    }
+    await expect(firstChannel).toBeFocused();
     await expect
       .poll(() => channels.evaluate((element) => element.scrollLeft))
       .toBeGreaterThan(0);
+    const focusedBox = await firstChannel.boundingBox();
+    const focusedRegion = await channels.boundingBox();
+    assert.ok(focusedBox && focusedRegion);
+    assert.ok(
+      focusedBox.x >= focusedRegion.x &&
+        focusedBox.x + focusedBox.width <=
+          focusedRegion.x + focusedRegion.width,
+      "Keyboard focus reveals the enabled notification control",
+    );
     const sms = channels.getByRole("columnheader", {
       name: "SMS",
       exact: true,
     });
-    await sms.scrollIntoViewIfNeeded();
+    await channels.hover();
+    await page.mouse.wheel(500, 0);
+    await expect
+      .poll(async () => {
+        const region = await channels.boundingBox(),
+          column = await sms.boundingBox();
+        return Boolean(
+          region &&
+            column &&
+            column.x >= region.x &&
+            column.x + column.width <= region.x + region.width + 1,
+        );
+      })
+      .toBe(true);
     const regionBox = await channels.boundingBox();
     const smsBox = await sms.boundingBox();
     assert.ok(regionBox && smsBox);

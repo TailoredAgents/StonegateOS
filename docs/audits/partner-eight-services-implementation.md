@@ -25,28 +25,28 @@ New creation uses explicit `PARTNER_MULTI_SERVICE_REQUESTS_ENABLED`; optional `P
 - [x] Request queue, jobs, calendar, reports, proof and owner alerts show correct saved service names/details.
 - [x] Pricing-review/approval-ready alerts, reminders, retry/duplicate suppression.
 - [x] Permission/company isolation and disabled payment attempts.
-- [ ] Real database production-build journeys: Chromium/WebKit, desktop/phone, legacy/new mixed records.
-- [ ] Visual review: all eight selected, long names, keyboard/zoom, no unnecessary questions or repeated information.
+- [x] Real database production-build journeys: Chromium/WebKit, desktop/phone, legacy/new mixed records.
+- [x] Visual review: all eight selected, long names, keyboard/zoom, no unnecessary questions or repeated information.
 - [ ] Additive migration → compatible API/worker → Site → gated journey → gradual activation → live health/log checks.
 
 ## Verification evidence
 
-- Focused regression gate: 1,031 API tests and 234 Site tests passed after the saved-rate correction. The subsequent legacy-catalog correction passed 21 focused tests; the exact release commit must also pass the required CI workflow.
+- Focused regression gate in CI: 1,136 API tests and 234 Site tests passed, including database-enabled cases. The final release commit must also pass the complete required CI workflow.
 - Complete real PostgreSQL gate: 45 suites, 277 tests passed, with exit 0. Includes all eight rate models, activation, frozen rate versions, manual parent payments/refunds, cross-account guards, repeat work, precise visit ownership, cancellations, and proof/notification lifecycle.
-- Browser component gate: 12 tests passed across Chromium/WebKit and desktop/320px layouts (portal selections, photos, pricing, visit editing, and existing inbox recovery).
-- API and Site production builds and typechecks passed. Final builds are being repeated after legacy-draft compatibility and local Safari storage transport corrections.
-- Additional legacy appointment, payment, refund, and invitation compatibility: 185 tests passed. Staff resource/capacity/mobile action browser checks: four passed.
+- Browser component gate: 16 tests passed across Chromium/WebKit, desktop/phone, and effective 200%/400% desktop zoom (eight portal cases, four CRM cases, and four existing inbox recovery cases). Zoom cases select all eight services by keyboard and check layout on both the details and review steps. Three additional SSR-to-browser hydration tests pass, including Eastern-time midnight, noon, and daylight-saving boundaries.
+- Final API and Site production builds and typechecks passed. All four complete new-request browser journeys passed with zero client exceptions, and both legacy CRM handoff journeys passed with all submitted details and photos preserved.
+- Additional legacy appointment, payment, refund, and invitation compatibility: 185 tests passed. Staff resource/capacity/mobile action browser checks: four passed. Exact seven-suite CI compatibility lane: 41 tests passed; three capacity suites: 102 passed.
 - The broad repository `pnpm test` command has pre-existing failures: the exact baseline and release comparison both produced 129 failing suites / 207 failing tests, with identical failing names. No new failures remain in that comparison. The focused Partner Portal release gate is separate and must pass.
-- Production-build full journey and legacy CRM handoff remain release blockers until the final browser run and required CI pass.
+- Local release checks are complete. The final exact-commit GitHub workflow and staged live rollout remain pending.
 
 ## Design review
 
-Root visually inspected all-eight-selected portal phone layout, desktop timing, CRM pricing, and phone visit scheduling. Service checkboxes remain compact, one service editor opens at a time, and shared contact/access/billing/photos appear once. Pricing and scheduling are separate sections; the client sees rates, while only staff confirms the total. Mobile progress wording was shortened to avoid crowding. Timing copy now explicitly says Stonegate confirms each visit. Optional details remain collapsed. The staff rate editor opens one service at a time and uses correct singular/plural status wording. Mobile notification preferences remain inside their keyboard-accessible horizontal scroll region. The final review screen is captured only after autosave settles.
+Root visually inspected all-eight-selected portal phone layout, desktop timing, CRM pricing, and phone visit scheduling. Service checkboxes remain compact, one service editor opens at a time, and shared contact/access/billing/photos appear once. Pricing and scheduling are separate sections; the client sees rates, while only staff confirms the total. Mobile progress wording was shortened to avoid crowding. Timing copy now explicitly says Stonegate confirms each visit. Optional details remain collapsed. The staff rate editor opens one service at a time and uses correct singular/plural status wording. Mobile notification preferences remain inside their keyboard-accessible horizontal scroll region. A long native company selector caused Safari page overflow; its displayed value is now clipped within the control without changing the available choices. The browser checks exercise Safari’s native Option+Tab behavior where needed, rather than assuming identical browser keyboard defaults. The final review screen is captured only after autosave settles.
 
 The review found and corrected three lifecycle gaps: generic CRM status changes could reopen a closed visit, visit cancellations lacked the existing calendar deletion authorization evidence, and refund allocations assumed every bill had a single appointment. Final completion now queues proof generation and client updates only after the whole request is complete. Visit confirmation messages explicitly describe one visit rather than implying the whole project is scheduled.
 
 Older single-service drafts explicitly reload their authorized legacy catalog after draft recovery, preserving historical service choices, tiers, add-ons, and rate visibility when the new flow is enabled. New requests still receive only the eight intended choices.
 
-The disposable local browser environment uses HTTPS for both the website and object storage so WebKit exercises actual photo uploads without mixed-content exceptions or disabled TLS validation. This affects test scripts only.
+The disposable local browser environment uses HTTPS for both the website and object storage so WebKit exercises actual photo uploads without mixed-content exceptions or disabled TLS validation. The local transport changes affect test scripts only. A shared date formatter also removes real Safari hydration differences on settings, team access, and job pages; server and browser rendering now use the same timezone and date/time separator.
 
 No production deployment, rate changes, customer work, or external test messages have been performed for this release yet.
