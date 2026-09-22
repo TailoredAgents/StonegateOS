@@ -158,6 +158,11 @@ async function visit(
   await expect(
     page.getByRole("heading", { name: titles[path], exact: true, level: 1 }),
   ).toBeVisible({ timeout: 20_000 });
+  if (path === "help") {
+    // Let public-policy prefetches finish before the harness forces a new
+    // document navigation, which otherwise interrupts WebKit's fetch queue.
+    await page.waitForLoadState("networkidle", { timeout: 10_000 });
+  }
   const failureNotice = page.getByText(
     /Some information could not be refreshed|Your next job could not be loaded|The upgraded job workspace|Online requests are not available for this account|We couldn’t load your locations|could not be loaded|could(?:n’t|n't| not) (?:load|refresh)|incomplete response/i,
   );
@@ -1247,7 +1252,9 @@ for (const [engine, browserType] of [
             }),
           ).toHaveCount(1);
           await expect(
-            staffPage.getByText(`Local first company ${suffix}`, { exact: true }),
+            staffPage.getByText(`Local first company ${suffix}`, {
+              exact: true,
+            }),
           ).toBeVisible();
           await expect(
             staffPage.getByText(/The directory could not be loaded/),
