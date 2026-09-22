@@ -1,7 +1,3 @@
-import {
-  navigatePartnerBrowserPage,
-  reloadPartnerBrowserPage,
-} from "./lib/partner-browser-navigation";
 import { completeLocalPartnerRateSetup } from "./lib/partner-service-rate-browser-setup";
 import { localPartnerRehearsalDatabaseUrl } from "./lib/partner-local-rehearsal";
 import assert from "node:assert/strict";
@@ -144,7 +140,7 @@ async function restoreLegacyDraft(page: Page, draftId: string): Promise<void> {
   // Stop new form writes before reading the revision. A keepalive autosave
   // already sent during navigation may still finish, so retry only its 412
   // revision conflict with a new authenticated read and the latest scope.
-  await navigatePartnerBrowserPage(page, "about:blank");
+  await page.goto("about:blank");
   const endpoint = `${base}/api/partners/portal/booking-drafts/${draftId}`;
   for (let attempt = 0; attempt < 3; attempt++) {
     const current = await page.context().request.get(endpoint);
@@ -181,10 +177,7 @@ async function restoreLegacyDraft(page: Page, draftId: string): Promise<void> {
     assert.equal((await response.json()).ok, true);
     break;
   }
-  await navigatePartnerBrowserPage(
-    page,
-    `${base}/partners/book?draftId=${draftId}`,
-  );
+  await page.goto(`${base}/partners/book?draftId=${draftId}`);
   await requestStep(page, "Service details");
   const legacy = await openRow(page, "Saved request details");
   await expect(page.locator("#partner-book-item-count")).toHaveValue("7");
@@ -250,7 +243,7 @@ const expected = {
 };
 
 async function loginStaff(page: Page, id: string, returnTo?: string) {
-  await navigatePartnerBrowserPage(page, `${base}${returnTo ?? "/team/login"}`);
+  await page.goto(`${base}${returnTo ?? "/team/login"}`);
   if (returnTo) {
     await page.waitForURL((url) => url.pathname === "/team/login");
     assert.equal(new URL(page.url()).searchParams.get("returnTo"), returnTo);
@@ -296,10 +289,7 @@ async function staffRead(page: Page, path: string) {
 
 async function createCompany(staffPage: Page, page: Page, suffix: string) {
   const email = `crm-handoff-${suffix}@example.test`;
-  await navigatePartnerBrowserPage(
-    staffPage,
-    `${base}/team/partners?p_admin=accounts&p_setup=create`,
-  );
+  await staffPage.goto(`${base}/team/partners?p_admin=accounts&p_setup=create`);
   await staffPage
     .getByLabel("Company name", { exact: true })
     .fill(`Local CRM handoff ${suffix}`);
@@ -323,7 +313,7 @@ async function createCompany(staffPage: Page, page: Page, suffix: string) {
   await completeLocalPartnerRateSetup(staffPage);
   const invitation = await fixture({ action: "invitation", email });
   try {
-    await navigatePartnerBrowserPage(page, invitation.url);
+    await page.goto(invitation.url);
   } catch {
     throw Error("Local invitation navigation failed; token omitted.");
   }
@@ -688,8 +678,7 @@ for (const width of [1440, 375])
           "Legacy request remains available with the multi-service gate enabled",
         );
         assert.equal(legacyDraft.body.draft.modelVersion ?? 1, 1);
-        await navigatePartnerBrowserPage(
-          page,
+        await page.goto(
           `${base}/partners/book?draftId=${legacyDraft.body.draft.id}`,
         );
         await requestStep(page, "Service address");
@@ -748,7 +737,7 @@ for (const width of [1440, 375])
           )
           .toBe(2);
         // Restore a saved draft before adding media to exercise every populated field.
-        await reloadPartnerBrowserPage(page);
+        await page.reload();
         await requestStep(page, "Service details");
         await openRow(page, "Contact and access");
         await openRow(page, "Backup contact");
@@ -1289,7 +1278,7 @@ for (const width of [1440, 375])
         assert.equal(restrictedDetail.status, 403);
         assert.equal(restrictedDetail.body.request, undefined);
         await restrictedContext.close();
-        await navigatePartnerBrowserPage(staffPage, companyJobs);
+        await staffPage.goto(companyJobs);
         await staffPage
           .getByRole("button", {
             name: new RegExp(
@@ -1307,10 +1296,7 @@ for (const width of [1440, 375])
               path: `${directory}/crm-request-${width}.png`,
             });
         }
-        await navigatePartnerBrowserPage(
-          staffPage,
-          confirmedCalendarUrl.toString(),
-        );
+        await staffPage.goto(confirmedCalendarUrl.toString());
         // Follow the actual confirmation link without selecting a calendar event.
         await expect(
           staffPage.locator(`[data-partner-request="${jobId}"]`),
@@ -1338,13 +1324,12 @@ for (const width of [1440, 375])
           .getByRole("button", { name: "Add note", exact: true })
           .click();
         assert.equal((await noteResponse).status(), 200);
-        await reloadPartnerBrowserPage(staffPage);
+        await staffPage.reload();
         await assertStaffPanel(staffPage);
         await expect(
           staffPage.getByText(expected.staffNote, { exact: true }),
         ).toBeVisible();
-        await navigatePartnerBrowserPage(
-          staffPage,
+        await staffPage.goto(
           `${base}/mobile?screen=calendar&date=${requestedDates[0]}&jobId=${after.appointment.id}`,
         );
         await openRow(staffPage, "Request details");
@@ -1360,7 +1345,7 @@ for (const width of [1440, 375])
             exact: true,
           }),
         ).toBeVisible();
-        await reloadPartnerBrowserPage(page);
+        await page.reload();
         assert.equal(
           (await portal(page, `jobs/${jobId}`)).job.status,
           "confirmed",
