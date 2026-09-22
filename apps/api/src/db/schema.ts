@@ -12715,6 +12715,10 @@ export const partnerRateCardVersions = pgTable(
     version: integer("version").notNull(),
     currency: varchar("currency", { length: 3 }).default("USD").notNull(),
     visitMinimumAmount: text("visit_minimum_amount"),
+    quoteRequiredServiceKeys: text("quote_required_service_keys")
+      .array()
+      .notNull()
+      .default([]),
     pricingModelVersion: integer("pricing_model_version").default(1).notNull(),
     portalVisible: boolean("portal_visible").default(true).notNull(),
     status: text("status").default("draft").notNull(),

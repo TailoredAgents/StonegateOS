@@ -216,7 +216,7 @@ export async function invitePartnerAsStaff(
   if (account.setupStatus !== "complete")
     throw new TeamMutationFailure(
       "conflict",
-      "Publish all required service rates and activate this company before inviting people.",
+      "Publish agreed rates or Quote required for each service and activate this company before inviting people.",
     );
   const [anyMember] = await tx
     .select({ id: partnerAccountMemberships.id })
@@ -316,7 +316,7 @@ export async function enablePartnerRelationshipAsStaff(
     if (!published || published.source !== "structured" || !published.complete)
       throw new TeamMutationFailure(
         "conflict",
-        "Publish current rates for all eight services and their required variants before activating this company.",
+        "Publish agreed rates or Quote required for each of the eight services before activating this company.",
       );
     if (!account.serviceContactName || !account.serviceContactEmail)
       throw new TeamMutationFailure(

@@ -327,7 +327,7 @@ export async function savePartnerRelationship(
             : success.data.deliveryStatus === "unchanged"
               ? "No new invitation was created. Check current invitations and company access before retrying."
               : kind === "create"
-                ? "Company details saved. Set its service rates before activating access or sending an invitation."
+                ? "Company details saved. Set agreed rates or Quote required for each service before activating access or sending an invitation."
                 : "Invitation queued. Delivery status is shown in Invitations.",
     };
   } catch {

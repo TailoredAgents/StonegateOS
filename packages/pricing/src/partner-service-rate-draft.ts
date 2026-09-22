@@ -3,6 +3,7 @@ import {
   getPartnerServiceDefinition,
   PARTNER_SERVICE_RATE_UNIT_LABELS,
   PartnerServiceRateSchema,
+  PartnerQuoteRequiredServicesSchema,
   type PartnerServiceRate,
 } from "./partner-services";
 
@@ -11,6 +12,7 @@ import {
 export const PartnerServiceRateDraftSchema = z
   .object({
     currency: z.string().regex(/^[A-Z]{3}$/u),
+    quoteRequiredServiceKeys: PartnerQuoteRequiredServicesSchema.optional(),
     visitMinimum: z.string().trim().max(30).nullable(),
     effectiveFrom: z.string().datetime({ offset: true }),
     effectiveTo: z.string().datetime({ offset: true }).nullable(),
@@ -97,6 +99,7 @@ export const PartnerPublishedServiceRateCardSchema = z.object({
   portalVisible: z.boolean(),
   source: z.enum(["structured", "legacy"]),
   rates: z.array(PartnerServiceRateSchema),
+  quoteRequiredServiceKeys: PartnerQuoteRequiredServicesSchema.optional(),
   legacyItems: z.array(
     z.object({
       id: z.string().uuid(),

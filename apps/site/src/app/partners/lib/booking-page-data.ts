@@ -7,6 +7,7 @@ import { z } from "zod";
 import {
   PartnerServiceLinesInputSchema,
   PartnerServiceRateSchema,
+  PartnerQuoteRequiredServicesSchema,
 } from "@myst-os/pricing";
 import { isPartnerLocation, toBookingLocation } from "./booking-location";
 import type {
@@ -479,6 +480,7 @@ const structuredRatesSchema = z.object({
     .regex(/^(?:0|[1-9]\d{0,7})(?:\.\d{1,4})?$/u)
     .nullable(),
   rates: z.array(PartnerServiceRateSchema).max(100),
+  quoteRequiredServiceKeys: PartnerQuoteRequiredServicesSchema.optional(),
   legacyItems: z
     .array(
       z.object({

@@ -151,6 +151,70 @@ describe("structured partner rate authority", () => {
       false,
     );
   });
+  it("counts explicit quote-required services as configured without treating blanks as quotes", () => {
+    const card = completeTestPartnerRateCard();
+    card.rates = card.rates.filter(
+      (rate) => !["painting", "drywall-repair-paint"].includes(rate.serviceKey),
+    );
+    expect(getPartnerRateCompleteness(card.rates).complete).toBe(false);
+    card.quoteRequiredServiceKeys = ["painting", "drywall-repair-paint"];
+    expect(
+      PartnerServiceRateDraftSchema.parse(card).quoteRequiredServiceKeys,
+    ).toEqual(card.quoteRequiredServiceKeys);
+    expect(PartnerServiceRateCardInputSchema.safeParse(card).success).toBe(
+      true,
+    );
+    expect(
+      getPartnerRateCompleteness(card.rates, card.quoteRequiredServiceKeys),
+    ).toEqual({ complete: true, missing: [] });
+    for (const keys of [["painting", "painting"], ["unknown-service"]]) {
+      expect(
+        PartnerServiceRateCardInputSchema.safeParse({
+          ...card,
+          quoteRequiredServiceKeys: keys,
+        }).success,
+      ).toBe(false);
+    }
+    expect(
+      PartnerServiceRateCardInputSchema.safeParse({
+        ...completeTestPartnerRateCard(),
+        quoteRequiredServiceKeys: ["painting"],
+      }).success,
+    ).toBe(false);
+  });
+  it("loads published quote choices and narrows them to each service without prices", async () => {
+    const card = completeTestPartnerRateCard();
+    const quoteRequiredServiceKeys = ["painting", "drywall-repair-paint"];
+    const rows = card.rates
+      .filter((rate) => !quoteRequiredServiceKeys.includes(rate.serviceKey))
+      .map((rate) => row(rate));
+    const stored = version({ quoteRequiredServiceKeys });
+    const published = await loadPartnerPublishedServiceRateCard(
+      reader([[stored], rows]),
+      { accountId },
+    );
+    expect(published).toMatchObject({
+      complete: true,
+      quoteRequiredServiceKeys,
+    });
+    const service = await loadPartnerServiceRateSnapshot(
+      reader([[stored], rows]),
+      { accountId, serviceKey: "painting" },
+    );
+    expect(service).toMatchObject({
+      rates: [],
+      quoteRequiredServiceKeys: ["painting"],
+    });
+    await expect(
+      loadPartnerPublishedServiceRateCard(
+        reader([
+          [stored],
+          [row(card.rates.find((rate) => rate.serviceKey === "painting"))],
+        ]),
+        { accountId },
+      ),
+    ).rejects.toThrow("conflicting_pricing");
+  });
   it("requires every variant for activation but permits an existing partner's partial card", () => {
     const card = completeTestPartnerRateCard();
     expect(getPartnerRateCompleteness(card.rates).complete).toBe(true);

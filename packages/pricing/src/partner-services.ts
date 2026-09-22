@@ -13,6 +13,13 @@ export const PARTNER_SERVICE_KEYS = [
 ] as const;
 export const PartnerServiceKeyV2Schema = z.enum(PARTNER_SERVICE_KEYS);
 export type PartnerServiceKeyV2 = z.infer<typeof PartnerServiceKeyV2Schema>;
+export const PartnerQuoteRequiredServicesSchema = z
+  .array(PartnerServiceKeyV2Schema)
+  .max(PARTNER_SERVICE_KEYS.length)
+  .refine(
+    (keys) => new Set(keys).size === keys.length,
+    "Choose each quote-required service only once.",
+  );
 export type PartnerServiceScopeField = {
   key: string;
   label: string;
@@ -427,9 +434,20 @@ export const PartnerServiceRateCardInputSchema = z
     effectiveFrom: z.string().datetime({ offset: true }),
     effectiveTo: z.string().datetime({ offset: true }).nullable().default(null),
     rates: z.array(PartnerServiceRateSchema).max(200),
+    quoteRequiredServiceKeys: PartnerQuoteRequiredServicesSchema.optional(),
   })
   .strict()
   .superRefine((card, context) => {
+    if (
+      card.rates.some((rate) =>
+        card.quoteRequiredServiceKeys?.includes(rate.serviceKey),
+      )
+    )
+      context.addIssue({
+        code: "custom",
+        path: ["quoteRequiredServiceKeys"],
+        message: "Choose agreed rates or Quote required for each service.",
+      });
     if (new Set(card.rates.map((rate) => rate.key)).size !== card.rates.length)
       context.addIssue({
         code: "custom",
@@ -451,8 +469,11 @@ export type PartnerServiceRateCardInput = z.infer<
 >;
 export function getPartnerRateCompleteness(
   rates: readonly PartnerServiceRate[],
+  quoteRequiredServiceKeys: readonly PartnerServiceKeyV2[] = [],
 ) {
-  const missing = PARTNER_SERVICE_DEFINITIONS.flatMap((service) =>
+  const missing = PARTNER_SERVICE_DEFINITIONS.filter(
+    (service) => !quoteRequiredServiceKeys.includes(service.key),
+  ).flatMap((service) =>
     service.variants
       .filter(
         (variant) =>

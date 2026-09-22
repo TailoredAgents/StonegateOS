@@ -58,7 +58,7 @@ const lines = PARTNER_SERVICE_DEFINITIONS.map((service, index) => {
 });
 const entry = `import React from'react';import{createRoot}from'react-dom/client';import{PartnerMultiServiceReview}from'./src/app/team/components/PartnerMultiServiceReview';import{PartnerRescheduleReviews}from'./src/app/team/components/PartnerRescheduleReviews';
 window.__saves=[];window.__previews=[];window.__holdPreviews=false;window.__throwSave=false;window.__changed=0;window.__decisions=[];window.__requestAccepted=false;
-const priced=new URLSearchParams(location.search).has('priced');const data={modelVersion:2,version:1,pricingVersion:1,quotedTotalCents:priced?80000:null,finalTotalCents:null,serviceLines:${JSON.stringify(lines)}.map(line=>({...line,quotedAmountCents:priced?10000:null})),visits:new URLSearchParams(location.search).has('visit')?[{id:'66666666-6666-4666-8666-666666666666',appointmentId:'77777777-7777-4777-8777-777777777777',status:'scheduled',serviceLineIds:['11111111-1111-4111-8111-000000000001'],startAt:'2026-10-12T13:00:00Z',endAt:'2026-10-12T15:00:00Z',arrivalStartAt:'2026-10-12T13:00:00Z',arrivalEndAt:'2026-10-12T15:00:00Z',timezone:'America/New_York',version:1,minimumAmountCents:null}]:[]};
+const priced=new URLSearchParams(location.search).has('priced');const data={modelVersion:2,version:1,pricingVersion:1,quotedTotalCents:priced?80000:null,finalTotalCents:null,serviceLines:${JSON.stringify(lines)}.map(line=>({...line,quotedAmountCents:priced?10000:null,...(new URLSearchParams(location.search).has('quote-required')&&['painting','drywall-repair-paint'].includes(line.serviceKey)?{rateSnapshot:{...line.rateSnapshot,rates:[],status:'quote_required'},currentRateSnapshot:{...line.currentRateSnapshot,rates:[],status:'quote_required'}}:{})})),visits:new URLSearchParams(location.search).has('visit')?[{id:'66666666-6666-4666-8666-666666666666',appointmentId:'77777777-7777-4777-8777-777777777777',status:'scheduled',serviceLineIds:['11111111-1111-4111-8111-000000000001'],startAt:'2026-10-12T13:00:00Z',endAt:'2026-10-12T15:00:00Z',arrivalStartAt:'2026-10-12T13:00:00Z',arrivalEndAt:'2026-10-12T15:00:00Z',timezone:'America/New_York',version:1,minimumAmountCents:null}]:[]};
 createRoot(document.getElementById('root')).render(<main className="mx-auto max-w-xl px-4 py-5">{new URLSearchParams(location.search).has('request')?<PartnerRescheduleReviews embedded canDecide accountId="22222222-2222-4222-8222-222222222222" requestId="88888888-8888-4888-8888-888888888888"/>:<PartnerMultiServiceReview accountId="22222222-2222-4222-8222-222222222222" bookingId="33333333-3333-4333-8333-333333333333" data={data} preferredWindows={[{localDate:'2026-10-12',timeOfDay:'morning'}]} canEdit onChanged={()=>{window.__changed++}}/>}</main>);`;
 let compiled: Promise<{ script: Uint8Array; css: string }> | undefined;
 function assets() {
@@ -185,7 +185,7 @@ for (const engine of [chromium, webkit])
           page.setDefaultTimeout(8000);
           const errors: string[] = [];
           page.on("pageerror", (error) => errors.push(error.message));
-          await page.goto(`http://127.0.0.1:${address.port}/`);
+          await page.goto(`http://127.0.0.1:${address.port}/?quote-required`);
           const pricing = page.getByRole("region", { name: "Request pricing" });
           await expect(pricing.locator("details[open]")).toHaveCount(1);
           for (const line of lines) {
@@ -202,6 +202,17 @@ for (const engine of [chromium, webkit])
             )
               await details.locator("summary").click();
             await expect(pricing.locator("details[open]")).toHaveCount(1);
+            if (
+              ["painting", "drywall-repair-paint"].includes(line.serviceKey)
+            ) {
+              await expect(details).toContainText("Quote required");
+              await expect(
+                details.getByRole("link", { name: "Set company rates" }),
+              ).toHaveCount(0);
+              await expect(
+                details.getByLabel("Agreed rate", { exact: true }),
+              ).toHaveCount(0);
+            }
             await details
               .getByLabel("Service total ($)", { exact: true })
               .fill("100");

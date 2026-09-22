@@ -9,7 +9,7 @@ export const partnerServiceRateSnapshotSchema = z.object({
   currency: z.string(),
   visitMinimum: z.string().nullable(),
   rates: z.array(PartnerServiceRateSchema),
-  status: z.enum(["published", "missing", "hidden"]),
+  status: z.enum(["published", "quote_required", "missing", "hidden"]),
 });
 export const partnerRequestServiceLineSchema = z.object({
   id: z.string().uuid(),

@@ -1247,6 +1247,13 @@
       "when": 1796428800000,
       "tag": "0180_partner_parent_refund_allocation_scope",
       "breakpoints": true
+    },
+    {
+      "idx": 178,
+      "version": "7",
+      "when": 1796515200000,
+      "tag": "0181_partner_quote_required_services",
+      "breakpoints": true
     }
   ]
 }

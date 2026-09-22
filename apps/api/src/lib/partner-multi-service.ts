@@ -114,6 +114,9 @@ function publicRateSnapshot(
       rates: [],
       status: "missing" as const,
     };
+  const quoteRequired =
+    Array.isArray(value["quoteRequiredServiceKeys"]) &&
+    value["quoteRequiredServiceKeys"].includes(line.serviceKey);
   const parsed = partnerServiceRateSnapshotSchema.safeParse({
     versionId: value["rateCardVersionId"] ?? null,
     currency: value["currency"] ?? "USD",
@@ -124,12 +127,14 @@ function publicRateSnapshot(
   if (!parsed.success) throw new Error("partner_service_rate_snapshot_invalid");
   return {
     ...parsed.data,
-    status: requiredServiceRateVariants(line.serviceKey, line.scope).every(
-      (variant) =>
-        parsed.data.rates.some((rate) => rate.variantKey === variant),
-    )
-      ? ("published" as const)
-      : ("missing" as const),
+    status: quoteRequired
+      ? ("quote_required" as const)
+      : requiredServiceRateVariants(line.serviceKey, line.scope).every(
+            (variant) =>
+              parsed.data.rates.some((rate) => rate.variantKey === variant),
+          )
+        ? ("published" as const)
+        : ("missing" as const),
   };
 }
 
@@ -371,11 +376,11 @@ async function requireRates(
     if (!snapshot)
       throw new TeamMutationFailure(
         "conflict",
-        `Publish the requested ${line.serviceLabel} rates for this company before pricing or scheduling it.`,
+        `Publish agreed rates or Quote required for ${line.serviceLabel} before pricing or scheduling it.`,
         {
           fieldErrors: {
             rates:
-              "A published rate is required for each requested service variant.",
+              "Publish rates for each requested variant or mark the service Quote required.",
           },
         },
       );

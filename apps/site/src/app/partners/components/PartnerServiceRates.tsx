@@ -15,9 +15,31 @@ export function PartnerServiceRates({
 }: {
   serviceKey: string;
   card: BookingStructuredRates | null;
-  status: BookingStructuredRatesStatus;
+  status: BookingStructuredRatesStatus | "quote_required";
   compact?: boolean;
 }) {
+  if (
+    status !== "hidden" &&
+    (status === "quote_required" ||
+      card?.quoteRequiredServiceKeys?.some((key) => key === serviceKey))
+  )
+    return (
+      <div
+        className={
+          compact
+            ? "mt-2 text-xs text-slate-600"
+            : "mt-4 rounded-lg bg-slate-50 p-3 text-sm text-slate-700"
+        }
+      >
+        <p className="font-semibold">Quote required</p>
+        {!compact ? (
+          <p className="mt-1">
+            Stonegate will review your scope and photos and provide a price for
+            this request.
+          </p>
+        ) : null}
+      </div>
+    );
   const definition = getPartnerServiceDefinition(serviceKey);
   const rates =
     card?.rates.filter((rate) => rate.serviceKey === serviceKey) ?? [];
