@@ -109,6 +109,7 @@ export async function GET(request: NextRequest): Promise<Response> {
                 currency: card.currency,
                 visitMinimum: card.visitMinimum,
                 rates: card.rates,
+                quoteRequiredServiceKeys: card.quoteRequiredServiceKeys ?? [],
                 legacyItems: card.legacyItems,
               }
             : null,

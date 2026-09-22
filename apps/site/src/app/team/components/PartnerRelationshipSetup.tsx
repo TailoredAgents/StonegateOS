@@ -351,9 +351,9 @@ export function PartnerRelationshipSetup({
               />
             </label>
             <p className="text-sm leading-6 text-slate-600 sm:col-span-2">
-              Save the company details, enter its service rates, then activate
-              access and send the Administrator invitation. No email is sent in
-              this first step.
+              Save the company details, choose agreed rates or Quote required
+              for each service, then activate access and send the Administrator
+              invitation. No email is sent in this first step.
             </p>
             <button type="submit" disabled={busy !== null} className={BUTTON}>
               {busy === "create" ? "Creating…" : "Create company and continue"}
@@ -475,9 +475,8 @@ export function PartnerRelationshipSetup({
             <div className="mt-5 space-y-3 border-t border-slate-200 pt-5">
               <h3 className="font-semibold">Activate and invite</h3>
               <p className="text-sm text-slate-600">
-                The company is not active yet. Publish current rates for all
-                eight services, including each required variant, before sending
-                the invitation.
+                The company is not active yet. Publish agreed rates or Quote
+                required for each service before sending the invitation.
               </p>
               <p className="break-words text-sm">
                 Administrator: {context.account.contactName} ·{" "}
@@ -491,7 +490,7 @@ export function PartnerRelationshipSetup({
                   onClick={() =>
                     void save("enable", {
                       reason:
-                        "Company details and all required service rates reviewed for activation.",
+                        "Company details and service pricing choices reviewed for activation.",
                     })
                   }
                 >

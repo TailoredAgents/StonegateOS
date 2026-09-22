@@ -44,6 +44,7 @@ function parseSavedSnapshot(
     effectiveFrom: value["effectiveFrom"],
     effectiveTo: value["effectiveTo"],
     rates: value["rates"],
+    quoteRequiredServiceKeys: value["quoteRequiredServiceKeys"],
   });
   if (
     !metadata.success ||
@@ -79,9 +80,17 @@ export async function resolveApplicableServiceRates(
   const rateSources: z.infer<typeof rateSourceSchema>[] = [];
   const knownVariants = new Set<string>();
   let portalVisible = true;
+  let quoteRequired = false;
   const merge = (value: Record<string, unknown> | null) => {
     const snapshot = parseSavedSnapshot(value, line.serviceKey);
     if (!snapshot) return;
+    // An explicit quote choice is usable for a manually reviewed job amount.
+    // It never erases negotiated rates already saved on this request.
+    if (
+      !rates.length &&
+      snapshot.quoteRequiredServiceKeys?.some((key) => key === line.serviceKey)
+    )
+      quoteRequired = true;
     primary ??= snapshot;
     portalVisible &&= snapshot.portalVisible;
     const additions = snapshot.rates.filter(
@@ -103,7 +112,7 @@ export async function resolveApplicableServiceRates(
     for (const rate of additions) knownVariants.add(rate.variantKey);
   };
   const complete = () =>
-    required.every((variant) => knownVariants.has(variant));
+    quoteRequired || required.every((variant) => knownVariants.has(variant));
   merge(line.pricingSnapshot);
   if (!complete()) merge(line.rateSnapshot);
   if (!complete()) merge(await loadPublished());
@@ -112,6 +121,9 @@ export async function resolveApplicableServiceRates(
   return {
     ...selected,
     rates,
+    quoteRequiredServiceKeys: quoteRequired
+      ? [line.serviceKey as PartnerServiceRate["serviceKey"]]
+      : [],
     portalVisible,
     rateSources,
     minimumRateCardVersionId:

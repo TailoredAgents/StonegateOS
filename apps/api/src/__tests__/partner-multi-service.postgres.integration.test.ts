@@ -407,6 +407,81 @@ suite("multi-service requests / real PostgreSQL", () => {
       ),
     ).rejects.toMatchObject({ code: "conflict" });
   });
+  it("accepts a quote-required request and allows a reviewed job price without permanent painting rates", async () => {
+    const f = await fixture();
+    const card = completeTestPartnerRateCard();
+    card.quoteRequiredServiceKeys = ["painting", "drywall-repair-paint"];
+    await f.db.transaction((tx) =>
+      savePartnerServiceRates(tx, f.mutation(1), f.accountId, {
+        action: "publish",
+        portalVisible: true,
+        card,
+      }),
+    );
+    const { jobId } = await f.submit();
+    const request = await getPartnerMultiServiceRequest(
+      f.db,
+      f.accountId,
+      jobId,
+      { currentRates: true, rates: true, financials: true },
+    );
+    expect(
+      request!.serviceLines.find((line) => line.serviceKey === "painting")
+        ?.rateSnapshot,
+    ).toMatchObject({ status: "quote_required", rates: [] });
+    const hidden = await getPartnerMultiServiceRequest(
+      f.db,
+      f.accountId,
+      jobId,
+      { rates: false, financials: false },
+    );
+    expect(
+      hidden!.serviceLines.find((line) => line.serviceKey === "painting")
+        ?.rateSnapshot,
+    ).toMatchObject({ status: "hidden", rates: [] });
+    await expect(
+      f.db.transaction((tx) =>
+        createPartnerMultiServiceVisit(
+          tx,
+          f.mutation(1),
+          jobId,
+          f.visit(),
+          NOW,
+        ),
+      ),
+    ).rejects.toMatchObject({ code: "conflict" });
+    await f.db.transaction((tx) =>
+      pricePartnerMultiServiceRequest(
+        tx,
+        f.mutation(1),
+        jobId,
+        f.prices([25000, 10000]),
+        NOW,
+      ),
+    );
+    const [parent] = await f.db
+      .select()
+      .from(partnerBookings)
+      .where(eq(partnerBookings.id, jobId));
+    expect(parent?.quotedTotalCents).toBe(35000);
+    const lines = await f.db
+      .select()
+      .from(partnerBookingServiceLines)
+      .where(eq(partnerBookingServiceLines.partnerBookingId, jobId));
+    expect(
+      lines.find((line) => line.serviceKey === "painting")?.pricingSnapshot,
+    ).toMatchObject({ rates: [], quoteRequiredServiceKeys: ["painting"] });
+    const version = parent!.version;
+    await f.db.transaction((tx) =>
+      createPartnerMultiServiceVisit(
+        tx,
+        f.mutation(version),
+        jobId,
+        f.visit(),
+        NOW,
+      ),
+    );
+  });
   it("keeps submitted rates and visit minimum after newer publications before pricing and scheduling", async () => {
     const f = await fixture();
     await f.rates();

@@ -299,6 +299,7 @@ export function PartnerMultiServiceReview({
                   line.currentRateSnapshot ??
                   line.pricingSnapshot ??
                   line.rateSnapshot;
+                const quoteRequired = snapshot?.status === "quote_required";
                 const rates = snapshot?.rates ?? [],
                   price = prices[line.id]!;
                 return (
@@ -313,11 +314,13 @@ export function PartnerMultiServiceReview({
                     <summary className="flex min-h-11 cursor-pointer items-center justify-between gap-3 text-sm font-semibold">
                       <span>{line.label}</span>
                       <span className="shrink-0 text-xs font-normal">
-                        {!rates.length
+                        {!rates.length && !quoteRequired
                           ? "Rate not set yet"
                           : price.amount
                             ? money(Math.round(Number(price.amount) * 100))
-                            : "Price needed"}
+                            : quoteRequired
+                              ? "Quote required"
+                              : "Price needed"}
                       </span>
                     </summary>
                     <fieldset
@@ -325,7 +328,7 @@ export function PartnerMultiServiceReview({
                       disabled={busy}
                     >
                       <legend className="sr-only">{line.label}</legend>
-                      {!rates.length ? (
+                      {!rates.length && !quoteRequired ? (
                         <p className="text-sm text-amber-900">
                           Rate not set yet.{" "}
                           <a
@@ -338,45 +341,52 @@ export function PartnerMultiServiceReview({
                         </p>
                       ) : (
                         <>
-                          <label className="block text-sm">
-                            Agreed rate
-                            <select
-                              className={inputClass}
-                              value={price.rateKey}
-                              onChange={(event) => {
-                                const rate = rates.find(
-                                  (item) => item.key === event.target.value,
-                                );
-                                let amount = price.amount;
-                                if (rate && price.quantity) {
-                                  try {
-                                    amount = (
-                                      multiplyPartnerRateToCents(
-                                        rate.unitAmount,
-                                        price.quantity,
-                                      ) / 100
-                                    ).toFixed(2);
-                                  } catch {
-                                    amount = "";
+                          {quoteRequired ? (
+                            <p className="text-sm text-slate-600">
+                              Quote required. Enter the price reviewed for this
+                              request and explain it in the price review note.
+                            </p>
+                          ) : (
+                            <label className="block text-sm">
+                              Agreed rate
+                              <select
+                                className={inputClass}
+                                value={price.rateKey}
+                                onChange={(event) => {
+                                  const rate = rates.find(
+                                    (item) => item.key === event.target.value,
+                                  );
+                                  let amount = price.amount;
+                                  if (rate && price.quantity) {
+                                    try {
+                                      amount = (
+                                        multiplyPartnerRateToCents(
+                                          rate.unitAmount,
+                                          price.quantity,
+                                        ) / 100
+                                      ).toFixed(2);
+                                    } catch {
+                                      amount = "";
+                                    }
                                   }
-                                }
-                                changePrice(line.id, {
-                                  rateKey: event.target.value,
-                                  amount,
-                                });
-                              }}
-                            >
-                              <option value="">Enter reviewed amount</option>
-                              {rates.map((rate) => (
-                                <option key={rate.key} value={rate.key}>
-                                  {formatPartnerServiceRate(
-                                    rate,
-                                    snapshot?.currency ?? "USD",
-                                  )}
-                                </option>
-                              ))}
-                            </select>
-                          </label>
+                                  changePrice(line.id, {
+                                    rateKey: event.target.value,
+                                    amount,
+                                  });
+                                }}
+                              >
+                                <option value="">Enter reviewed amount</option>
+                                {rates.map((rate) => (
+                                  <option key={rate.key} value={rate.key}>
+                                    {formatPartnerServiceRate(
+                                      rate,
+                                      snapshot?.currency ?? "USD",
+                                    )}
+                                  </option>
+                                ))}
+                              </select>
+                            </label>
+                          )}
                           {price.rateKey ? (
                             <label className="block text-sm">
                               Reviewed quantity
@@ -450,15 +460,17 @@ export function PartnerMultiServiceReview({
               className={teamButtonClass("primary", "sm")}
               disabled={
                 busy ||
-                data.serviceLines.some(
-                  (line) =>
+                data.serviceLines.some((line) => {
+                  const snapshot =
+                    line.currentRateSnapshot ??
+                    line.pricingSnapshot ??
+                    line.rateSnapshot;
+                  return (
                     line.status !== "canceled" &&
-                    !(
-                      line.currentRateSnapshot ??
-                      line.pricingSnapshot ??
-                      line.rateSnapshot
-                    )?.rates.length,
-                )
+                    !snapshot?.rates.length &&
+                    snapshot?.status !== "quote_required"
+                  );
+                })
               }
             >
               Confirm price

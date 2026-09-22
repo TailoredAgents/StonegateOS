@@ -65,6 +65,8 @@ function editorCard(
           effectiveFrom: data.published.effectiveFrom,
           effectiveTo: data.published.effectiveTo,
           rates: data.published.rates,
+          quoteRequiredServiceKeys:
+            data.published.quoteRequiredServiceKeys ?? [],
         }
       : {
           currency: "USD",
@@ -238,7 +240,12 @@ export function PartnerServiceRatesEditor({
     if (action === "publish") {
       // Empty amount rows stay in the saved draft, not in the published card.
       const populatedIndices = nextCard.rates.flatMap((rate, index) =>
-        rate.unitAmount.trim() ? [index] : [],
+        rate.unitAmount.trim() &&
+        !nextCard.quoteRequiredServiceKeys?.some(
+          (key) => key === rate.serviceKey,
+        )
+          ? [index]
+          : [],
       );
       const parsed = PartnerServiceRateCardInputSchema.safeParse({
         ...nextCard,
@@ -339,7 +346,7 @@ export function PartnerServiceRatesEditor({
       message:
         action === "draft"
           ? "Draft saved. The partner's published rates are unchanged."
-          : "Rates published as a new version. Existing request snapshots are unchanged. Blank amounts remain unpriced.",
+          : "Service pricing published. Quote-required services will be priced per request. Other blank amounts remain unpriced.",
     });
   }
   if (!data || !card)
@@ -385,8 +392,8 @@ export function PartnerServiceRatesEditor({
           Service rates
         </h3>
         <p className="mt-1 text-sm text-slate-600">
-          Set this company&apos;s agreed rates. A rate is not a job total. Empty
-          amounts remain unpriced.
+          Choose agreed rates or Quote required for each service. Quote-required
+          services need no preset price. A rate is not a job total.
         </p>
       </div>
       {notice ? (
@@ -494,6 +501,8 @@ export function PartnerServiceRatesEditor({
           Show published rates to partner users with billing access
         </label>
         {PARTNER_SERVICE_DEFINITIONS.map((service) => {
+          const quoteRequired =
+            card.quoteRequiredServiceKeys?.includes(service.key) ?? false;
           const enteredRateCount = card.rates.filter(
             (rate) => rate.serviceKey === service.key && rate.unitAmount,
           ).length;
@@ -516,341 +525,392 @@ export function PartnerServiceRatesEditor({
               <summary className="min-h-14 cursor-pointer py-3 font-semibold">
                 <span>{service.label}</span>
                 <span className="ml-2 text-xs font-normal text-slate-500">
-                  {enteredRateCount} {enteredRateCount === 1 ? "rate" : "rates"}{" "}
-                  entered
+                  {quoteRequired
+                    ? "Quote required"
+                    : `${enteredRateCount} ${enteredRateCount === 1 ? "rate" : "rates"} entered`}
                 </span>
               </summary>
               <div className="space-y-4 pb-4">
-                {card.rates.map((rate, index) =>
-                  rate.serviceKey !== service.key ? null : (
-                    <div
-                      key={rate.key}
-                      data-partner-rate-index={index}
-                      className="space-y-3 rounded-lg bg-slate-50 p-3"
-                    >
-                      <div className="flex flex-wrap items-center justify-between gap-2">
-                        <h4 className="text-sm font-semibold">
-                          {
-                            service.variants.find(
-                              (variant) => variant.key === rate.variantKey,
-                            )?.label
-                          }
-                        </h4>
-                        {card.rates.filter(
-                          (entry) =>
-                            entry.serviceKey === rate.serviceKey &&
-                            entry.variantKey === rate.variantKey,
-                        ).length > 1 ? (
-                          <button
-                            type="button"
-                            className="min-h-11 px-2 text-sm text-rose-800 underline"
-                            onClick={() =>
-                              changeCard({
-                                rates: card.rates.filter((_, i) => i !== index),
-                              })
-                            }
-                          >
-                            Remove rate
-                          </button>
-                        ) : null}
-                      </div>
-                      <div className="grid gap-3 sm:grid-cols-3">
-                        <label
-                          className="text-sm font-medium"
-                          htmlFor={`partner-rate-${index}-label`}
+                <div>
+                  <label
+                    className="block text-sm font-medium"
+                    htmlFor={`partner-pricing-${service.key}`}
+                  >
+                    Pricing for {service.label}
+                  </label>
+                  <select
+                    id={`partner-pricing-${service.key}`}
+                    className={FIELD}
+                    value={quoteRequired ? "quote_required" : "agreed_rates"}
+                    onChange={(event) =>
+                      changeCard({
+                        quoteRequiredServiceKeys:
+                          event.target.value === "quote_required"
+                            ? [
+                                ...(card.quoteRequiredServiceKeys ?? []).filter(
+                                  (key) => key !== service.key,
+                                ),
+                                service.key,
+                              ]
+                            : (card.quoteRequiredServiceKeys ?? []).filter(
+                                (key) => key !== service.key,
+                              ),
+                      })
+                    }
+                  >
+                    <option value="agreed_rates">Agreed rates</option>
+                    <option value="quote_required">Quote required</option>
+                  </select>
+                </div>
+                {quoteRequired ? (
+                  <p className="text-sm text-slate-600">
+                    Partners can request this service. Stonegate reviews the
+                    work and provides a price for each request.
+                  </p>
+                ) : (
+                  <>
+                    {card.rates.map((rate, index) =>
+                      rate.serviceKey !== service.key ? null : (
+                        <div
+                          key={rate.key}
+                          data-partner-rate-index={index}
+                          className="space-y-3 rounded-lg bg-slate-50 p-3"
                         >
-                          Rate name
-                          <input
-                            id={`partner-rate-${index}-label`}
-                            className={FIELD}
-                            value={rate.label}
-                            maxLength={160}
-                            {...errorAttributes(index, "label")}
-                            onChange={(event) =>
-                              changeRate(index, { label: event.target.value })
-                            }
-                          />
-                        </label>
-                        <label
-                          className="text-sm font-medium"
-                          htmlFor={`partner-rate-${index}-unit`}
-                        >
-                          Price per
-                          <select
-                            id={`partner-rate-${index}-unit`}
-                            className={FIELD}
-                            value={rate.unit}
-                            {...errorAttributes(index, "unit")}
-                            onChange={(event) =>
-                              changeRate(index, {
-                                unit: event.target.value as Rate["unit"],
-                              })
-                            }
-                          >
-                            {Object.entries(
-                              PARTNER_SERVICE_RATE_UNIT_LABELS,
-                            ).map(([key, label]) => (
-                              <option key={key} value={key}>
-                                {label}
-                              </option>
-                            ))}
-                          </select>
-                        </label>
-                        <label
-                          className="text-sm font-medium"
-                          htmlFor={`partner-rate-${index}-amount`}
-                        >
-                          Rate (USD)
-                          <input
-                            id={`partner-rate-${index}-amount`}
-                            className={FIELD}
-                            inputMode="decimal"
-                            value={rate.unitAmount}
-                            maxLength={30}
-                            placeholder="Enter agreed rate"
-                            {...errorAttributes(index, "unitAmount")}
-                            onChange={(event) =>
-                              changeRate(index, {
-                                unitAmount: event.target.value,
-                              })
-                            }
-                          />
-                        </label>
-                      </div>
-                      <label
-                        className="block text-sm font-medium"
-                        htmlFor={`partner-rate-${index}-measurement`}
-                      >
-                        What this rate covers
-                        <input
-                          id={`partner-rate-${index}-measurement`}
-                          className={FIELD}
-                          value={rate.measurement}
-                          maxLength={2000}
-                          {...errorAttributes(index, "measurement")}
-                          placeholder="Define the size, surface or work included"
-                          onChange={(event) =>
-                            changeRate(index, {
-                              measurement: event.target.value,
-                            })
-                          }
-                        />
-                      </label>
-                      {rate.unit === "load" ? (
-                        <label
-                          className="block text-sm font-medium"
-                          htmlFor={`partner-rate-${index}-load`}
-                        >
-                          Full-load capacity (cubic yards)
-                          <input
-                            id={`partner-rate-${index}-load`}
-                            className={FIELD}
-                            inputMode="decimal"
-                            value={rate.fullLoadCubicYards ?? ""}
-                            maxLength={30}
-                            {...errorAttributes(index, "fullLoadCubicYards")}
-                            onChange={(event) =>
-                              changeRate(index, {
-                                fullLoadCubicYards: event.target.value,
-                              })
-                            }
-                          />
-                        </label>
-                      ) : null}
-                      {rate.unit === "room" ? (
-                        <div className="grid gap-3 sm:grid-cols-2">
-                          {(
-                            [
-                              [
-                                "roomMaxSquareFeet",
-                                "Maximum room floor area (sq ft)",
-                              ],
-                              [
-                                "roomMaxHeightFeet",
-                                "Maximum ceiling height (ft)",
-                              ],
-                            ] as const
-                          ).map(([key, label]) => (
-                            <label
-                              key={key}
-                              className="text-sm font-medium"
-                              htmlFor={`partner-rate-${index}-${key}`}
-                            >
-                              {label}
-                              <input
-                                id={`partner-rate-${index}-${key}`}
-                                className={FIELD}
-                                inputMode="decimal"
-                                value={rate[key] ?? ""}
-                                maxLength={30}
-                                onChange={(event) =>
-                                  changeRate(index, {
-                                    [key]: event.target.value,
+                          <div className="flex flex-wrap items-center justify-between gap-2">
+                            <h4 className="text-sm font-semibold">
+                              {
+                                service.variants.find(
+                                  (variant) => variant.key === rate.variantKey,
+                                )?.label
+                              }
+                            </h4>
+                            {card.rates.filter(
+                              (entry) =>
+                                entry.serviceKey === rate.serviceKey &&
+                                entry.variantKey === rate.variantKey,
+                            ).length > 1 ? (
+                              <button
+                                type="button"
+                                className="min-h-11 px-2 text-sm text-rose-800 underline"
+                                onClick={() =>
+                                  changeCard({
+                                    rates: card.rates.filter(
+                                      (_, i) => i !== index,
+                                    ),
                                   })
                                 }
-                                aria-invalid={Boolean(fieldError(index, key))}
-                                aria-describedby={
-                                  fieldError(index, key)
-                                    ? `partner-rate-${index}-${key}-error`
-                                    : undefined
+                              >
+                                Remove rate
+                              </button>
+                            ) : null}
+                          </div>
+                          <div className="grid gap-3 sm:grid-cols-3">
+                            <label
+                              className="text-sm font-medium"
+                              htmlFor={`partner-rate-${index}-label`}
+                            >
+                              Rate name
+                              <input
+                                id={`partner-rate-${index}-label`}
+                                className={FIELD}
+                                value={rate.label}
+                                maxLength={160}
+                                {...errorAttributes(index, "label")}
+                                onChange={(event) =>
+                                  changeRate(index, {
+                                    label: event.target.value,
+                                  })
                                 }
                               />
-                              {fieldError(index, key) ? (
-                                <span
-                                  id={`partner-rate-${index}-${key}-error`}
-                                  className="mt-1 block text-sm text-rose-700"
-                                >
-                                  {fieldError(index, key)}
-                                </span>
-                              ) : null}
                             </label>
-                          ))}
-                        </div>
-                      ) : null}
-                      {service.key === "painting" ||
-                      service.key === "drywall-repair-paint" ? (
-                        <div className="grid gap-3 sm:grid-cols-2">
-                          <label
-                            className="text-sm font-medium"
-                            htmlFor={`partner-rate-${index}-materials`}
-                          >
-                            Who supplies materials?
-                            <select
-                              id={`partner-rate-${index}-materials`}
-                              className={FIELD}
-                              value={rate.materials ?? ""}
-                              {...errorAttributes(index, "materials")}
-                              onChange={(event) =>
-                                changeRate(index, {
-                                  materials: event.target.value
-                                    ? (event.target.value as Rate["materials"])
-                                    : null,
-                                })
-                              }
+                            <label
+                              className="text-sm font-medium"
+                              htmlFor={`partner-rate-${index}-unit`}
                             >
-                              <option value="">Choose</option>
-                              <option value="stonegate">Stonegate</option>
-                              <option value="partner">Partner</option>
-                              <option value="mixed">
-                                Both — describe below
-                              </option>
-                            </select>
-                          </label>
+                              Price per
+                              <select
+                                id={`partner-rate-${index}-unit`}
+                                className={FIELD}
+                                value={rate.unit}
+                                {...errorAttributes(index, "unit")}
+                                onChange={(event) =>
+                                  changeRate(index, {
+                                    unit: event.target.value as Rate["unit"],
+                                  })
+                                }
+                              >
+                                {Object.entries(
+                                  PARTNER_SERVICE_RATE_UNIT_LABELS,
+                                ).map(([key, label]) => (
+                                  <option key={key} value={key}>
+                                    {label}
+                                  </option>
+                                ))}
+                              </select>
+                            </label>
+                            <label
+                              className="text-sm font-medium"
+                              htmlFor={`partner-rate-${index}-amount`}
+                            >
+                              Rate (USD)
+                              <input
+                                id={`partner-rate-${index}-amount`}
+                                className={FIELD}
+                                inputMode="decimal"
+                                value={rate.unitAmount}
+                                maxLength={30}
+                                placeholder="Enter agreed rate"
+                                {...errorAttributes(index, "unitAmount")}
+                                onChange={(event) =>
+                                  changeRate(index, {
+                                    unitAmount: event.target.value,
+                                  })
+                                }
+                              />
+                            </label>
+                          </div>
                           <label
-                            className="text-sm font-medium"
-                            htmlFor={`partner-rate-${index}-coats`}
+                            className="block text-sm font-medium"
+                            htmlFor={`partner-rate-${index}-measurement`}
                           >
-                            Included coats
+                            What this rate covers
                             <input
-                              id={`partner-rate-${index}-coats`}
-                              type="number"
-                              min={1}
-                              max={10}
+                              id={`partner-rate-${index}-measurement`}
                               className={FIELD}
-                              value={rate.coats ?? ""}
-                              {...errorAttributes(index, "coats")}
+                              value={rate.measurement}
+                              maxLength={2000}
+                              {...errorAttributes(index, "measurement")}
+                              placeholder="Define the size, surface or work included"
                               onChange={(event) =>
                                 changeRate(index, {
-                                  coats: event.target.value
-                                    ? Number(event.target.value)
-                                    : null,
+                                  measurement: event.target.value,
                                 })
                               }
                             />
                           </label>
+                          {rate.unit === "load" ? (
+                            <label
+                              className="block text-sm font-medium"
+                              htmlFor={`partner-rate-${index}-load`}
+                            >
+                              Full-load capacity (cubic yards)
+                              <input
+                                id={`partner-rate-${index}-load`}
+                                className={FIELD}
+                                inputMode="decimal"
+                                value={rate.fullLoadCubicYards ?? ""}
+                                maxLength={30}
+                                {...errorAttributes(
+                                  index,
+                                  "fullLoadCubicYards",
+                                )}
+                                onChange={(event) =>
+                                  changeRate(index, {
+                                    fullLoadCubicYards: event.target.value,
+                                  })
+                                }
+                              />
+                            </label>
+                          ) : null}
+                          {rate.unit === "room" ? (
+                            <div className="grid gap-3 sm:grid-cols-2">
+                              {(
+                                [
+                                  [
+                                    "roomMaxSquareFeet",
+                                    "Maximum room floor area (sq ft)",
+                                  ],
+                                  [
+                                    "roomMaxHeightFeet",
+                                    "Maximum ceiling height (ft)",
+                                  ],
+                                ] as const
+                              ).map(([key, label]) => (
+                                <label
+                                  key={key}
+                                  className="text-sm font-medium"
+                                  htmlFor={`partner-rate-${index}-${key}`}
+                                >
+                                  {label}
+                                  <input
+                                    id={`partner-rate-${index}-${key}`}
+                                    className={FIELD}
+                                    inputMode="decimal"
+                                    value={rate[key] ?? ""}
+                                    maxLength={30}
+                                    onChange={(event) =>
+                                      changeRate(index, {
+                                        [key]: event.target.value,
+                                      })
+                                    }
+                                    aria-invalid={Boolean(
+                                      fieldError(index, key),
+                                    )}
+                                    aria-describedby={
+                                      fieldError(index, key)
+                                        ? `partner-rate-${index}-${key}-error`
+                                        : undefined
+                                    }
+                                  />
+                                  {fieldError(index, key) ? (
+                                    <span
+                                      id={`partner-rate-${index}-${key}-error`}
+                                      className="mt-1 block text-sm text-rose-700"
+                                    >
+                                      {fieldError(index, key)}
+                                    </span>
+                                  ) : null}
+                                </label>
+                              ))}
+                            </div>
+                          ) : null}
+                          {service.key === "painting" ||
+                          service.key === "drywall-repair-paint" ? (
+                            <div className="grid gap-3 sm:grid-cols-2">
+                              <label
+                                className="text-sm font-medium"
+                                htmlFor={`partner-rate-${index}-materials`}
+                              >
+                                Who supplies materials?
+                                <select
+                                  id={`partner-rate-${index}-materials`}
+                                  className={FIELD}
+                                  value={rate.materials ?? ""}
+                                  {...errorAttributes(index, "materials")}
+                                  onChange={(event) =>
+                                    changeRate(index, {
+                                      materials: event.target.value
+                                        ? (event.target
+                                            .value as Rate["materials"])
+                                        : null,
+                                    })
+                                  }
+                                >
+                                  <option value="">Choose</option>
+                                  <option value="stonegate">Stonegate</option>
+                                  <option value="partner">Partner</option>
+                                  <option value="mixed">
+                                    Both — describe below
+                                  </option>
+                                </select>
+                              </label>
+                              <label
+                                className="text-sm font-medium"
+                                htmlFor={`partner-rate-${index}-coats`}
+                              >
+                                Included coats
+                                <input
+                                  id={`partner-rate-${index}-coats`}
+                                  type="number"
+                                  min={1}
+                                  max={10}
+                                  className={FIELD}
+                                  value={rate.coats ?? ""}
+                                  {...errorAttributes(index, "coats")}
+                                  onChange={(event) =>
+                                    changeRate(index, {
+                                      coats: event.target.value
+                                        ? Number(event.target.value)
+                                        : null,
+                                    })
+                                  }
+                                />
+                              </label>
+                            </div>
+                          ) : null}
+                          <div className="grid gap-3 sm:grid-cols-2">
+                            <label
+                              className="text-sm font-medium"
+                              htmlFor={`partner-rate-${index}-included`}
+                            >
+                              Included work
+                              <textarea
+                                id={`partner-rate-${index}-included`}
+                                rows={2}
+                                className={FIELD}
+                                value={rate.inclusions.join("\n")}
+                                {...errorAttributes(index, "inclusions")}
+                                onChange={(event) =>
+                                  changeRate(index, {
+                                    inclusions: lines(event.target.value),
+                                  })
+                                }
+                                placeholder="One item per line"
+                              />
+                            </label>
+                            <label
+                              className="text-sm font-medium"
+                              htmlFor={`partner-rate-${index}-excluded`}
+                            >
+                              Exclusions (optional)
+                              <textarea
+                                id={`partner-rate-${index}-excluded`}
+                                rows={2}
+                                className={FIELD}
+                                value={rate.exclusions.join("\n")}
+                                {...errorAttributes(index, "exclusions")}
+                                onChange={(event) =>
+                                  changeRate(index, {
+                                    exclusions: lines(event.target.value),
+                                  })
+                                }
+                                placeholder="One item per line"
+                              />
+                            </label>
+                          </div>
+                          {Object.entries(RATE_FIELD_LABELS)
+                            .filter(
+                              ([key]) =>
+                                ![
+                                  "roomMaxSquareFeet",
+                                  "roomMaxHeightFeet",
+                                ].includes(key) && fieldError(index, key),
+                            )
+                            .map(([key, label]) => (
+                              <p
+                                key={key}
+                                id={`partner-rate-${index}-${key}-error`}
+                                className="text-sm text-rose-700"
+                              >
+                                {label}:{" "}
+                                {key === "inclusions" &&
+                                rate.inclusions.every((value) => !value.trim())
+                                  ? "List the work included in this rate."
+                                  : fieldError(index, key)}
+                              </p>
+                            ))}
                         </div>
-                      ) : null}
-                      <div className="grid gap-3 sm:grid-cols-2">
-                        <label
-                          className="text-sm font-medium"
-                          htmlFor={`partner-rate-${index}-included`}
+                      ),
+                    )}
+                    <div className="flex flex-wrap gap-2">
+                      {service.variants.map((variant) => (
+                        <button
+                          key={variant.key}
+                          type="button"
+                          className={BUTTON}
+                          onClick={() =>
+                            changeCard({
+                              rates: [
+                                ...card.rates,
+                                blankRate(
+                                  service.key,
+                                  variant.key,
+                                  "_" + crypto.randomUUID().slice(0, 8),
+                                ),
+                              ],
+                            })
+                          }
                         >
-                          Included work
-                          <textarea
-                            id={`partner-rate-${index}-included`}
-                            rows={2}
-                            className={FIELD}
-                            value={rate.inclusions.join("\n")}
-                            {...errorAttributes(index, "inclusions")}
-                            onChange={(event) =>
-                              changeRate(index, {
-                                inclusions: lines(event.target.value),
-                              })
-                            }
-                            placeholder="One item per line"
-                          />
-                        </label>
-                        <label
-                          className="text-sm font-medium"
-                          htmlFor={`partner-rate-${index}-excluded`}
-                        >
-                          Exclusions (optional)
-                          <textarea
-                            id={`partner-rate-${index}-excluded`}
-                            rows={2}
-                            className={FIELD}
-                            value={rate.exclusions.join("\n")}
-                            {...errorAttributes(index, "exclusions")}
-                            onChange={(event) =>
-                              changeRate(index, {
-                                exclusions: lines(event.target.value),
-                              })
-                            }
-                            placeholder="One item per line"
-                          />
-                        </label>
-                      </div>
-                      {Object.entries(RATE_FIELD_LABELS)
-                        .filter(
-                          ([key]) =>
-                            ![
-                              "roomMaxSquareFeet",
-                              "roomMaxHeightFeet",
-                            ].includes(key) && fieldError(index, key),
-                        )
-                        .map(([key, label]) => (
-                          <p
-                            key={key}
-                            id={`partner-rate-${index}-${key}-error`}
-                            className="text-sm text-rose-700"
-                          >
-                            {label}:{" "}
-                            {key === "inclusions" &&
-                            rate.inclusions.every((value) => !value.trim())
-                              ? "List the work included in this rate."
-                              : fieldError(index, key)}
-                          </p>
-                        ))}
+                          Add{" "}
+                          {service.variants.length > 1
+                            ? variant.label.toLowerCase()
+                            : "another"}{" "}
+                          rate
+                        </button>
+                      ))}
                     </div>
-                  ),
+                  </>
                 )}
-                <div className="flex flex-wrap gap-2">
-                  {service.variants.map((variant) => (
-                    <button
-                      key={variant.key}
-                      type="button"
-                      className={BUTTON}
-                      onClick={() =>
-                        changeCard({
-                          rates: [
-                            ...card.rates,
-                            blankRate(
-                              service.key,
-                              variant.key,
-                              "_" + crypto.randomUUID().slice(0, 8),
-                            ),
-                          ],
-                        })
-                      }
-                    >
-                      Add{" "}
-                      {service.variants.length > 1
-                        ? variant.label.toLowerCase()
-                        : "another"}{" "}
-                      rate
-                    </button>
-                  ))}
-                </div>
               </div>
             </details>
           );

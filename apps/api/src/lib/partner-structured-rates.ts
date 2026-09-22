@@ -4,6 +4,8 @@ import {
   getPartnerRateCompleteness,
   PartnerServiceRateCardInputSchema,
   PartnerServiceRateSchema,
+  PartnerQuoteRequiredServicesSchema,
+  type PartnerServiceKeyV2,
   type PartnerServiceRate,
 } from "@myst-os/pricing";
 import type { z } from "zod";
@@ -34,6 +36,7 @@ export type PartnerPublishedServiceRateCard = {
   portalVisible: boolean;
   source: "structured" | "legacy";
   rates: PartnerServiceRate[];
+  quoteRequiredServiceKeys?: PartnerServiceKeyV2[];
   legacyItems: Array<{
     id: string;
     serviceKey: string;
@@ -90,7 +93,15 @@ export async function loadPartnerPublishedServiceRateCard(
       }
       throw new Error("partner_rate_snapshot_mixed_models");
     });
+    const quoteRequiredServiceKeys = PartnerQuoteRequiredServicesSchema.parse(
+      version.quoteRequiredServiceKeys ?? [],
+    );
+    if (
+      rates.some((rate) => quoteRequiredServiceKeys.includes(rate.serviceKey))
+    )
+      throw new Error("partner_rate_snapshot_conflicting_pricing");
     return {
+      quoteRequiredServiceKeys,
       rateCardVersionId: version.id,
       version: version.version,
       currency: version.currency,
@@ -101,7 +112,7 @@ export async function loadPartnerPublishedServiceRateCard(
       source: "structured",
       rates,
       legacyItems: [],
-      ...getPartnerRateCompleteness(rates),
+      ...getPartnerRateCompleteness(rates, quoteRequiredServiceKeys),
     };
   }
   // Accounts without an effective version retain the existing flat card. Once a
@@ -165,7 +176,16 @@ export async function loadPartnerServiceRateSnapshot(
   const rates = card.rates.filter(
     (rate) => rate.serviceKey === input.serviceKey,
   );
-  return card.source === "structured" ? { ...card, rates } : null;
+  return card.source === "structured"
+    ? {
+        ...card,
+        rates,
+        quoteRequiredServiceKeys:
+          card.quoteRequiredServiceKeys?.filter(
+            (key) => key === input.serviceKey,
+          ) ?? [],
+      }
+    : null;
 }
 
 export async function readPartnerServiceRateEditor(
@@ -239,7 +259,13 @@ export async function savePartnerServiceRates(
   if (input.action === "publish") {
     const parsed = PartnerServiceRateCardInputSchema.safeParse({
       ...input.card,
-      rates: input.card.rates.filter((rate) => rate.unitAmount.trim()),
+      rates: input.card.rates.filter(
+        (rate) =>
+          rate.unitAmount.trim() &&
+          !input.card.quoteRequiredServiceKeys?.includes(
+            rate.serviceKey as PartnerServiceKeyV2,
+          ),
+      ),
     });
     if (!parsed.success)
       throw new TeamMutationFailure(
@@ -278,6 +304,7 @@ export async function savePartnerServiceRates(
         supersedesId: previous?.id ?? null,
         createdByTeamMemberId: mutation.actor.id,
         visitMinimumAmount: parsed.data.visitMinimum,
+        quoteRequiredServiceKeys: parsed.data.quoteRequiredServiceKeys ?? [],
         portalVisible: input.portalVisible,
       })
       .returning({ id: partnerRateCardVersions.id });

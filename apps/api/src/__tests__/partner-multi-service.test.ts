@@ -380,6 +380,46 @@ describe("saved multi-service rate authority", () => {
     rateSnapshot,
     pricingSnapshot,
   });
+  it("keeps a submitted quote-required choice without reading later permanent prices", async () => {
+    const quoted = {
+      ...snapshot("100.00"),
+      rates: [],
+      quoteRequiredServiceKeys: ["painting"],
+    };
+    const result = await resolveApplicableServiceRates(evidence(quoted), () => {
+      throw Error("Unexpected later rates");
+    });
+    expect(result).toMatchObject({
+      rates: [],
+      quoteRequiredServiceKeys: ["painting"],
+      rateSources: [],
+      visitMinimum: "75.00",
+    });
+    expect(
+      await resolveApplicableServiceRates(evidence(quoted, result), () => {
+        throw Error("Unexpected later rates");
+      }),
+    ).toEqual(result);
+  });
+  it("allows staff to explicitly configure a previously unpriced request for individual quoting", async () => {
+    const current = {
+      ...snapshot("100.00"),
+      rates: [],
+      quoteRequiredServiceKeys: ["painting"],
+    };
+    expect(
+      await resolveApplicableServiceRates(evidence(null), () =>
+        Promise.resolve(current),
+      ),
+    ).toMatchObject({ rates: [], quoteRequiredServiceKeys: ["painting"] });
+    const saved = snapshot("100.00");
+    saved.rates = saved.rates.filter((rate) => rate.variantKey === "interior");
+    expect(
+      await resolveApplicableServiceRates(evidence(saved), () =>
+        Promise.resolve(current),
+      ),
+    ).toBeNull();
+  });
   it("uses complete pricing evidence before submitted rates and never reads a later card", async () => {
     const priced = snapshot("100.00");
     const resolved = await resolveApplicableServiceRates(

@@ -162,6 +162,78 @@ suite("structured partner rate setup / real PostgreSQL", () => {
       portalAccessEnabled: true,
     });
   });
+  it("activates with agreed rates plus quote-required painting and patch repair, preserving versioned choices", async () => {
+    const f = await fixture();
+    const card = completeTestPartnerRateCard();
+    card.quoteRequiredServiceKeys = ["painting", "drywall-repair-paint"];
+    // Hidden draft entries survive switching modes, but are never published as prices.
+    card.rates.find((rate) => rate.serviceKey === "painting")!.unitAmount = "";
+    const saved = await f.db.transaction((tx) =>
+      savePartnerServiceRates(tx, f.mutation, f.accountId, {
+        action: "publish",
+        portalVisible: true,
+        card,
+      }),
+    );
+    const published = await loadPartnerPublishedServiceRateCard(f.db, {
+      accountId: f.accountId,
+    });
+    expect(published).toMatchObject({
+      complete: true,
+      quoteRequiredServiceKeys: card.quoteRequiredServiceKeys,
+    });
+    expect(
+      published!.rates.some((rate) =>
+        card.quoteRequiredServiceKeys!.includes(rate.serviceKey),
+      ),
+    ).toBe(false);
+    const [version] = await f.db
+      .select()
+      .from(partnerRateCardVersions)
+      .where(eq(partnerRateCardVersions.id, saved.publishedVersionId!));
+    expect(version?.quoteRequiredServiceKeys).toEqual(
+      card.quoteRequiredServiceKeys,
+    );
+    const enabled = await f.db.transaction((tx) =>
+      enablePartnerRelationshipAsStaff(tx, f.mutation, f.accountId),
+    );
+    expect(enabled.deliveryStatus).toBe("queued");
+    const [active] = await f.db
+      .select()
+      .from(partnerAccounts)
+      .where(eq(partnerAccounts.id, f.accountId));
+    expect(active).toMatchObject({
+      portalSetupStatus: "complete",
+      portalAccessEnabled: true,
+    });
+    await f.db.transaction((tx) =>
+      savePartnerServiceRates(
+        tx,
+        { ...f.mutation, expectedVersion: "2" },
+        f.accountId,
+        {
+          action: "publish",
+          portalVisible: true,
+          card: completeTestPartnerRateCard(),
+        },
+      ),
+    );
+    expect(
+      (
+        await loadPartnerPublishedServiceRateCard(f.db, {
+          accountId: f.accountId,
+        })
+      )?.quoteRequiredServiceKeys,
+    ).toEqual([]);
+    const [original] = await f.db
+      .select()
+      .from(partnerRateCardVersions)
+      .where(eq(partnerRateCardVersions.id, saved.publishedVersionId!));
+    expect(original?.quoteRequiredServiceKeys).toEqual([
+      "painting",
+      "drywall-repair-paint",
+    ]);
+  });
   it("saves blank drafts without inventing prices and keeps published snapshots immutable", async () => {
     const f = await fixture();
     const draft = completeTestPartnerRateCard();
