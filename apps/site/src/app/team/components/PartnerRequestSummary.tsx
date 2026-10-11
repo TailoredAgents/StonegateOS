@@ -1,10 +1,10 @@
 "use client";
 import { useSyncExternalStore } from "react";
 import Link from "next/link";
-import type { Route } from "next";
 import type { PartnerRequestInboxCounts } from "@myst-os/sdk";
 import { loadPartnerRequestInbox } from "../actions/partner-request-inbox";
 import { teamButtonClass } from "./team-ui";
+import { partnerAdministrationHref } from "../partner-entry-navigation";
 
 type Snapshot = { counts: PartnerRequestInboxCounts | null; error: boolean };
 const empty: Snapshot = { counts: null, error: false };
@@ -86,11 +86,12 @@ export function PartnerRequestShortcut({ accountId }: { accountId?: string }) {
       ? (counts.byCompany[accountId] ?? 0)
       : counts.needsAttention
     : null;
-  const href =
-    "/team/partners?p_admin=requests" +
-    (accountId
-      ? `&p_company=${encodeURIComponent(accountId)}&p_company_section=jobs`
-      : "");
+  const href = partnerAdministrationHref({
+    view: "requests",
+    ...(accountId
+      ? { companyId: accountId, companySection: "jobs" as const }
+      : {}),
+  });
   return (
     <div className="flex min-w-0 flex-wrap items-center justify-between gap-3 rounded-xl border border-[color:var(--team-border)] bg-[color:var(--team-surface)] p-4">
       <div>
@@ -108,7 +109,7 @@ export function PartnerRequestShortcut({ accountId }: { accountId?: string }) {
                 : `${count} ${count === 1 ? "request needs" : "requests need"} attention.`}
         </p>
       </div>
-      <Link href={href as Route} className={teamButtonClass("secondary")}>
+      <Link href={href} className={teamButtonClass("secondary")}>
         Review requests
       </Link>
     </div>

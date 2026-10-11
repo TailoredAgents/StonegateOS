@@ -15,7 +15,12 @@ import {
   type CalendarView,
 } from "../lib/calendar-time";
 import { teamSurfaceHref } from "../surface-registry";
-import { TEAM_CARD } from "./team-ui";
+import {
+  TEAM_CARD,
+  TEAM_EMPTY_STATE,
+  TEAM_INPUT_COMPACT,
+  teamButtonClass,
+} from "./team-ui";
 import {
   buildRevenueSummaryByDay,
   formatCalendarEventAmounts,
@@ -369,7 +374,7 @@ export function CalendarViewer({
               setSelectedId(null);
               updateCalendarUrl({ anchorDay: today, selectedEventId: null });
             }}
-            className="inline-flex min-h-11 items-center rounded-full border border-slate-200 bg-white px-4 py-2 text-xs font-semibold text-slate-700 hover:border-primary-300 hover:text-primary-700"
+            className={teamButtonClass("secondary", "sm")}
           >
             Today
           </button>
@@ -377,7 +382,7 @@ export function CalendarViewer({
             type="button"
             onClick={handlePrev}
             aria-label="Previous calendar period"
-            className="inline-flex min-h-11 items-center rounded-full bg-slate-200 px-4 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-300"
+            className={teamButtonClass("secondary", "sm")}
           >
             Prev
           </button>
@@ -385,11 +390,11 @@ export function CalendarViewer({
             type="button"
             onClick={handleNext}
             aria-label="Next calendar period"
-            className="inline-flex min-h-11 items-center rounded-full bg-slate-200 px-4 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-300"
+            className={teamButtonClass("secondary", "sm")}
           >
             Next
           </button>
-          <div className="w-full pt-1 text-base font-semibold text-slate-900 sm:w-auto sm:pt-0">
+          <div className="w-full pt-1 text-base font-semibold text-[color:var(--team-text)] sm:w-auto sm:pt-0">
             {title}
           </div>
         </div>
@@ -399,7 +404,7 @@ export function CalendarViewer({
           role="group"
           aria-label="Calendar view"
         >
-          <div className="hidden items-center gap-2 pr-2 text-[11px] font-semibold text-slate-600 sm:flex">
+          <div className="hidden items-center gap-2 pr-2 text-[11px] font-semibold text-[color:var(--team-text-muted)] sm:flex">
             <span className="inline-flex items-center gap-1">
               <span className="h-2 w-2 rounded-full bg-emerald-500" />
               Confirmed
@@ -420,11 +425,10 @@ export function CalendarViewer({
               setView("day");
               updateCalendarUrl({ view: "day" });
             }}
-            className={`min-h-11 rounded-full px-4 py-2 text-xs font-semibold ${
-              view === "day"
-                ? "bg-primary-600 text-white"
-                : "bg-slate-200 text-slate-700 hover:bg-slate-300"
-            }`}
+            className={teamButtonClass(
+              view === "day" ? "primary" : "secondary",
+              "sm",
+            )}
           >
             Day
           </button>
@@ -435,11 +439,10 @@ export function CalendarViewer({
               setView("week");
               updateCalendarUrl({ view: "week" });
             }}
-            className={`min-h-11 rounded-full px-4 py-2 text-xs font-semibold ${
-              view === "week"
-                ? "bg-primary-600 text-white"
-                : "bg-slate-200 text-slate-700 hover:bg-slate-300"
-            }`}
+            className={teamButtonClass(
+              view === "week" ? "primary" : "secondary",
+              "sm",
+            )}
           >
             Week
           </button>
@@ -450,11 +453,10 @@ export function CalendarViewer({
               setView("month");
               updateCalendarUrl({ view: "month" });
             }}
-            className={`min-h-11 rounded-full px-4 py-2 text-xs font-semibold ${
-              view === "month"
-                ? "bg-primary-600 text-white"
-                : "bg-slate-200 text-slate-700 hover:bg-slate-300"
-            }`}
+            className={teamButtonClass(
+              view === "month" ? "primary" : "secondary",
+              "sm",
+            )}
           >
             Month
           </button>
@@ -464,10 +466,13 @@ export function CalendarViewer({
       <div className={`${TEAM_CARD} p-3`}>
         <div className="mb-2 flex min-h-11 flex-wrap items-center justify-between gap-2">
           <div>
-            <h2 className="text-sm font-semibold text-slate-900">
+            <h2 className="text-sm font-semibold text-[color:var(--team-text)]">
               Calendar filters
             </h2>
-            <p className="text-xs text-slate-600" aria-live="polite">
+            <p
+              className="text-xs text-[color:var(--team-text-muted)]"
+              aria-live="polite"
+            >
               {activeFilterCount > 0
                 ? `${activeFilterCount} active ${activeFilterCount === 1 ? "filter" : "filters"} - showing ${filteredEvents.length} of ${events.length} items.`
                 : `Showing all ${events.length} calendar items.`}
@@ -477,21 +482,21 @@ export function CalendarViewer({
             type="button"
             onClick={resetCalendarFilters}
             disabled={activeFilterCount === 0}
-            className="inline-flex min-h-11 items-center rounded-full border border-slate-200 bg-white px-4 py-2 text-xs font-semibold text-slate-700 hover:border-primary-300 disabled:cursor-not-allowed disabled:opacity-50"
+            className={teamButtonClass("secondary", "sm")}
           >
             Reset filters
             {activeFilterCount > 0 ? ` (${activeFilterCount})` : ""}
           </button>
         </div>
         <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-4">
-          <label className="flex flex-col gap-1 text-xs font-semibold text-slate-700">
+          <label className="flex flex-col gap-1 text-xs font-semibold text-[color:var(--team-text-muted)]">
             <span>Status</span>
             <select
               value={filters.status ?? ""}
               onChange={(event) =>
                 updateCalendarFilter("calStatus", event.target.value)
               }
-              className="min-h-11 rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm font-medium text-slate-800"
+              className={TEAM_INPUT_COMPACT}
             >
               <option value="">All statuses</option>
               {statusOptions.map((status) => (
@@ -501,14 +506,14 @@ export function CalendarViewer({
               ))}
             </select>
           </label>
-          <label className="flex flex-col gap-1 text-xs font-semibold text-slate-700">
+          <label className="flex flex-col gap-1 text-xs font-semibold text-[color:var(--team-text-muted)]">
             <span>Crew member</span>
             <select
               value={filters.crewMemberId ?? ""}
               onChange={(event) =>
                 updateCalendarFilter("calCrew", event.target.value)
               }
-              className="min-h-11 rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm font-medium text-slate-800"
+              className={TEAM_INPUT_COMPACT}
             >
               <option value="">All crew</option>
               {crewFilterOptions.map((member) => (
@@ -518,28 +523,28 @@ export function CalendarViewer({
               ))}
             </select>
           </label>
-          <label className="flex flex-col gap-1 text-xs font-semibold text-slate-700">
+          <label className="flex flex-col gap-1 text-xs font-semibold text-[color:var(--team-text-muted)]">
             <span>Source</span>
             <select
               value={filters.source ?? ""}
               onChange={(event) =>
                 updateCalendarFilter("calSource", event.target.value)
               }
-              className="min-h-11 rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm font-medium text-slate-800"
+              className={TEAM_INPUT_COMPACT}
             >
               <option value="">CRM and Google</option>
               <option value="db">CRM appointments</option>
               <option value="google">Google events</option>
             </select>
           </label>
-          <label className="flex flex-col gap-1 text-xs font-semibold text-slate-700">
+          <label className="flex flex-col gap-1 text-xs font-semibold text-[color:var(--team-text-muted)]">
             <span>Scheduling</span>
             <select
               value={filters.conflictsOnly ? "only" : ""}
               onChange={(event) =>
                 updateCalendarFilter("calConflict", event.target.value)
               }
-              className="min-h-11 rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm font-medium text-slate-800"
+              className={TEAM_INPUT_COMPACT}
             >
               <option value="">All items</option>
               <option value="only">Conflicts only</option>
@@ -565,13 +570,13 @@ export function CalendarViewer({
       <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_380px]">
         <div className="min-w-0">
           {filteredEvents.length === 0 ? (
-            <div className="rounded-xl border border-slate-200 bg-white/90 p-6 text-center shadow-sm">
-              <h2 className="text-base font-semibold text-slate-900">
+            <div className={`${TEAM_EMPTY_STATE} text-center`}>
+              <h2 className="text-base font-semibold text-[color:var(--team-text)]">
                 {events.length === 0
                   ? "No calendar items in this period"
                   : "No calendar items match these filters"}
               </h2>
-              <p className="mt-1 text-sm text-slate-600">
+              <p className="mt-1 text-sm text-[color:var(--team-text-muted)]">
                 {events.length === 0
                   ? "CRM appointments and Google events will appear here when scheduled."
                   : "Change or reset the active filters to see the hidden items."}
@@ -580,7 +585,7 @@ export function CalendarViewer({
                 <button
                   type="button"
                   onClick={resetCalendarFilters}
-                  className="mt-4 inline-flex min-h-11 items-center rounded-full bg-primary-600 px-4 py-2 text-sm font-semibold text-white hover:bg-primary-700"
+                  className={`mt-4 ${teamButtonClass("primary")}`}
                 >
                   Clear all filters
                 </button>

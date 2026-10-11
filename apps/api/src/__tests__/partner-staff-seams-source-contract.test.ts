@@ -15,11 +15,17 @@ const SITE_TEAM_ROOT = resolve(API_ROOT, "../site/src/app/team");
 const ACCOUNT_ID = "11111111-1111-4111-8111-111111111111";
 
 function apiSource(relativePath: string): string {
-  return readFileSync(resolve(API_ROOT, relativePath), "utf8");
+  return readFileSync(resolve(API_ROOT, relativePath), "utf8").replace(
+    /\r\n?/gu,
+    "\n",
+  );
 }
 
 function siteSource(relativePath: string): string {
-  return readFileSync(resolve(SITE_TEAM_ROOT, relativePath), "utf8");
+  return readFileSync(resolve(SITE_TEAM_ROOT, relativePath), "utf8").replace(
+    /\r\n?/gu,
+    "\n",
+  );
 }
 
 function exportedActionSource(source: string, name: string): string {

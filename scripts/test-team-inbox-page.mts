@@ -16,6 +16,7 @@ const siteRequire = createRequire(`${repo}/apps/site/package.json`);
 const artifact = join(repo, "artifacts/team-inbox-page");
 const fixture = await mkdtemp(join(tmpdir(), "stonegate-inbox-page-"));
 const fixtureSite = join(fixture, "apps/site");
+const directoryLinkType = process.platform === "win32" ? "junction" : "dir";
 const id = (n: number) =>
   `00000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
 const employeeId = id(1),
@@ -139,6 +140,31 @@ const api = createServer(async (req, res) => {
       sessionId: "fixture-session",
       authMethod: "team_session",
       teamMember: member,
+    });
+  if (
+    method === "GET" &&
+    path === "/api/admin/partner-management/v1/request-inbox"
+  )
+    return send({
+      ok: true,
+      requests: [],
+      counts: {
+        needsAttention: 0,
+        waitingOnClient: 0,
+        handled: 0,
+        byKind: {
+          service: 0,
+          reschedule: 0,
+          cancellation: 0,
+          change: 0,
+          billing: 0,
+          address: 0,
+        },
+        byCompany: {},
+      },
+      page: { nextCursor: null },
+      generatedAt: new Date().toISOString(),
+      group: null,
     });
   if (method === "GET" && path === "/api/admin/inbox/threads") {
     let filtered = threads;
@@ -297,12 +323,20 @@ try {
       !["node_modules", ".next", ".contentlayer"].includes(basename(path)) &&
       !basename(path).startsWith(".env"),
   });
-  await symlink(`${repo}/packages`, join(fixture, "packages"), "dir");
-  await symlink(`${repo}/node_modules`, join(fixture, "node_modules"), "dir");
+  await symlink(
+    `${repo}/packages`,
+    join(fixture, "packages"),
+    directoryLinkType,
+  );
+  await symlink(
+    `${repo}/node_modules`,
+    join(fixture, "node_modules"),
+    directoryLinkType,
+  );
   await symlink(
     `${repo}/apps/site/node_modules`,
     join(fixtureSite, "node_modules"),
-    "dir",
+    directoryLinkType,
   );
   await cp(`${repo}/package.json`, join(fixture, "package.json"));
   const guard = join(fixture, "local-network-only.cjs");

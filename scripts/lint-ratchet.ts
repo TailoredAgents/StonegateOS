@@ -1,5 +1,6 @@
 import { spawnSync } from "node:child_process";
 import { readFileSync, writeFileSync } from "node:fs";
+import { createRequire } from "node:module";
 import { dirname, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -29,6 +30,7 @@ type LintBaseline = {
 };
 
 const workspaceRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
+const require = createRequire(import.meta.url);
 const baselinePath = resolve(workspaceRoot, "quality/lint-baseline.json");
 const apps = ["api", "site"] as const;
 const update = process.argv.includes("--update");
@@ -55,11 +57,16 @@ function sortRecord<T>(value: Record<string, T>): Record<string, T> {
 }
 
 function collectApp(app: (typeof apps)[number]): AppBaseline {
+  const appRoot = resolve(workspaceRoot, `apps/${app}`);
+  const eslintPackage = require.resolve("eslint/package.json", {
+    paths: [appRoot],
+  });
+  const eslintCli = resolve(dirname(eslintPackage), "bin/eslint.js");
   const result = spawnSync(
-    resolve(workspaceRoot, `apps/${app}/node_modules/.bin/eslint`),
-    [".", "--format", "json"],
+    process.execPath,
+    [eslintCli, ".", "--format", "json"],
     {
-      cwd: resolve(workspaceRoot, `apps/${app}`),
+      cwd: appRoot,
       encoding: "utf8",
       maxBuffer: 64 * 1024 * 1024,
       env: process.env,
@@ -89,7 +96,8 @@ function collectApp(app: (typeof apps)[number]): AppBaseline {
     for (const message of file.messages) {
       if (message.severity !== 2) continue;
       totalErrors += 1;
-      const rule = message.ruleId ?? (message.fatal ? "__fatal__" : "__unknown__");
+      const rule =
+        message.ruleId ?? (message.fatal ? "__fatal__" : "__unknown__");
       counts[rule] = (counts[rule] ?? 0) + 1;
     }
     if (Object.keys(counts).length > 0) {
@@ -145,14 +153,7 @@ if (!touchedBase) {
   );
 }
 const touchedFiles = new Set(
-  runGit([
-    "diff",
-    "--name-only",
-    touchedBase,
-    "--",
-    "apps/api",
-    "apps/site",
-  ])
+  runGit(["diff", "--name-only", touchedBase, "--", "apps/api", "apps/site"])
     .split("\n")
     .filter(Boolean),
 );

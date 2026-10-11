@@ -257,13 +257,13 @@ describe("canonical property writers and instant-quote relationships", () => {
 
   it.each([
     "app/api/web/persistence.ts",
-    "app/api/portal/properties/route.ts",
+    "src/lib/partner-portal-v2-scheduling/service.ts",
     "app/api/webhooks/twilio/voice/route.ts",
     "app/api/webhooks/twilio/call-status/route.ts",
     "app/api/admin/tools/contact/route.ts",
     "app/api/admin/booking/book/route.ts",
     "app/api/junk-quote/book/route.ts",
-  ])("routes %s through the canonical association writer", (relativePath) => {
+  ])("routes canonical writes in %s through the association writer", (relativePath) => {
     expect(apiSource(relativePath)).toContain("resolveOrCreateContactProperty");
   });
 
@@ -342,12 +342,25 @@ describe("canonical property writers and instant-quote relationships", () => {
     },
   );
 
-  it("lets a partner book a shared property through its association", () => {
-    const route = apiSource("app/api/portal/bookings/route.ts");
+  it("retires contact-scoped V1 writes and preserves canonical V2 projections", () => {
+    const propertiesRoute = apiSource("app/api/portal/properties/route.ts");
+    const bookingsRoute = apiSource("app/api/portal/bookings/route.ts");
+    const scheduling = apiSource(
+      "src/lib/partner-portal-v2-scheduling/service.ts",
+    );
 
-    expect(route).toContain("contactProperties");
-    expect(route).toContain(
-      "eq(contactProperties.contactId, auth.partnerUser.orgContactId)",
+    expect(propertiesRoute).toContain("return getPartnerLocations(request)");
+    expect(propertiesRoute).toContain('error: "legacy_route_retired"');
+    expect(propertiesRoute).toContain('status: 410');
+    expect(propertiesRoute).toContain("/api/portal/v2/locations");
+    expect(bookingsRoute).toContain("return getPartnerJobs(request)");
+    expect(bookingsRoute).toContain('error: "legacy_route_retired"');
+    expect(bookingsRoute).toContain('status: 410');
+    expect(bookingsRoute).toContain("/api/portal/v2/booking-drafts");
+    expect(scheduling).toContain("resolveOrCreateContactProperty(input.tx");
+    expect(scheduling).toContain('relationship: "partner_service_location"');
+    expect(scheduling).toContain(
+      "eq(partnerAccountLocations.partnerAccountId, input.actor.accountId)",
     );
   });
 

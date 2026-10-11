@@ -4,6 +4,7 @@ import {
   normalizeQuoteWorkspaceMode,
   quoteWorkspaceHref,
   resolveQuoteWorkspaceRoute,
+  safeQuoteWorkspaceReturnPath,
 } from "../../../site/src/app/team/quotes-workspace";
 
 const REPO_ROOT = join(process.cwd(), "../..");
@@ -46,6 +47,33 @@ describe("canonical Team quote workspaces", () => {
     expect(quoteWorkspaceHref("instant")).toBe("/team/quotes/instant");
   });
 
+  it("preserves only validated non-Quote Team origins", () => {
+    const origin = "/team/contacts?contactId=contact-1&subview=jobs-quotes";
+    const url = new URL(
+      quoteWorkspaceHref("create", {
+        query: {
+          contactId: "contact-1",
+          quote_return: "https://attacker.example/team/contacts",
+        },
+        returnTo: origin,
+      }),
+      "https://stonegate.example",
+    );
+    expect(url.searchParams.get("quote_return")).toBe(origin);
+    expect(safeQuoteWorkspaceReturnPath(origin)).toBe(origin);
+    for (const unsafe of [
+      "https://attacker.example/team/contacts",
+      "//attacker.example/team/contacts",
+      "/team/quotes/manage",
+      "/team/quotes/create?contactId=contact-1",
+      "/team?tab=quotes",
+      "/team/login",
+      "/team/contacts#private",
+    ]) {
+      expect(safeQuoteWorkspaceReturnPath(unsafe)).toBeNull();
+    }
+  });
+
   it("loads only the active quote workspace and canonicalizes legacy input", () => {
     const hub = read("apps/site/src/app/team/components/QuotesHubSection.tsx");
     const route = read("apps/site/src/app/team/[...workspace]/page.tsx");
@@ -64,7 +92,9 @@ describe("canonical Team quote workspaces", () => {
     expect(route).toContain("quoteMode: mode");
     expect(legacyDetailRoute).toContain('quoteWorkspaceHref("instant"');
     expect(legacyDetailRoute).toContain("instantQuoteId: id");
-    expect(hub).toContain("<InstantQuoteDetail quoteId={instantQuoteId} />");
+    expect(hub).toContain(
+      "<InstantQuoteDetail quoteId={instantQuoteId} returnTo={returnTo} />",
+    );
   });
 
   it("fails truthfully and keeps quote mutations permission-correct", () => {

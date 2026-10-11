@@ -63,7 +63,13 @@ type InstantQuoteDto = {
   tightenedAfterMoreMedia?: boolean;
 };
 
-export async function InstantQuoteDetail({ quoteId }: { quoteId: string }) {
+export async function InstantQuoteDetail({
+  quoteId,
+  returnTo,
+}: {
+  quoteId: string;
+  returnTo?: string | null;
+}) {
   if (!UUID_PATTERN.test(quoteId)) {
     return (
       <div
@@ -141,6 +147,7 @@ export async function InstantQuoteDetail({ quoteId }: { quoteId: string }) {
           propertyId: handoffResult.handoff.propertyId,
           instantQuoteId: handoffResult.handoff.instantQuoteId,
         },
+        returnTo,
       })
     : null;
 

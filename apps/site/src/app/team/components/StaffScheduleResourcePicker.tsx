@@ -5,6 +5,7 @@ import {
   loadStaffAppointmentResources,
   type StaffResourceOptions,
 } from "../actions/scheduling-resources";
+import { PARTNER_SCHEDULING_HREF } from "../partner-entry-navigation";
 
 export function StaffScheduleResourcePicker({
   appointmentId,
@@ -77,7 +78,7 @@ export function StaffScheduleResourcePicker({
             <p role="status" className="text-sm text-amber-900">
               {data.warning}{" "}
               <Link
-                href="/team/partners/scheduling"
+                href={PARTNER_SCHEDULING_HREF}
                 className="inline-flex min-h-11 items-center font-semibold underline"
               >
                 {compact

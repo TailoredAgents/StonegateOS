@@ -8,7 +8,10 @@ const REPO_ROOT = resolve(
 );
 
 function source(relativePath: string): string {
-  return readFileSync(resolve(REPO_ROOT, relativePath), "utf8");
+  return readFileSync(resolve(REPO_ROOT, relativePath), "utf8").replace(
+    /\r\n?/gu,
+    "\n",
+  );
 }
 
 describe("partner V2 scheduling-safe service catalog", () => {

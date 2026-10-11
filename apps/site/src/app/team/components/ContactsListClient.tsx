@@ -1025,6 +1025,9 @@ function ContactCard({
               className={`${teamButtonClass("secondary", "sm")} gap-2`}
               href={quoteWorkspaceHref("create", {
                 query: { contactId: contactState.id },
+                returnTo: teamSurfaceHref("contacts", {
+                  query: { contactId: contactState.id },
+                }),
               })}
             >
               <FileText className="h-4 w-4" aria-hidden="true" />

@@ -1,5 +1,7 @@
 # StonegateOS — System Overview (Source of Truth)
 
+> **Superseded on 2026-10-10.** This historical overview is retained for context but no longer represents current route, mobile, Partner, schema, or release status. Use `CURRENT_SYSTEM_OVERVIEW.md` and `CAPABILITY_MATRIX.md`.
+
 This document maps what this repo is, what it runs in production, and where the major workflows live in code.
 
 If you’re new here, also read:

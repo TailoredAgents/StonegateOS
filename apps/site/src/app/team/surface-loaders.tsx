@@ -38,6 +38,7 @@ export type TeamSurfaceLoaderContext = {
     partnerTargetType?: string;
     partnerTargetId?: string;
     memberId?: string;
+    returnTo?: string | null;
   };
   expenses: {
     view?: string;
@@ -96,6 +97,7 @@ export type TeamSurfaceLoaderContext = {
       preview?: string;
       previewJobId?: string;
       outboundReturn?: string;
+      returnTo?: string;
     };
   };
   contacts: {

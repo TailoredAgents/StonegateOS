@@ -10,6 +10,7 @@ import { teamSurfaceHref } from "../surface-registry";
 import { TEAM_TIME_ZONE } from "../lib/timezone";
 import {
   TEAM_CARD_PADDED,
+  TEAM_INPUT_COMPACT,
   TEAM_SECTION_SUBTITLE,
   TEAM_SECTION_TITLE,
   teamButtonClass,
@@ -70,8 +71,7 @@ type ExpensesSummaryPayload = {
   dailyTotals: Array<{ day: string; totalCents: number }>;
 };
 
-const INPUT_CLASS =
-  "min-h-11 rounded-xl border border-slate-200 bg-white px-3 py-2 text-slate-900 focus:border-teal-500 focus:outline-none focus:ring-2 focus:ring-teal-200";
+const INPUT_CLASS = TEAM_INPUT_COMPACT;
 
 const EXPENSE_PAGE_LIMIT = 25;
 const EXPENSE_VIEWS = ["add", "ledger", "summary"] as const;
@@ -356,7 +356,7 @@ function statusClass(status: ExpenseLifecycleStatus): string {
   if (status === "draft") return "bg-amber-100 text-amber-800";
   if (status === "posted") return "bg-emerald-100 text-emerald-800";
   if (status === "corrected") return "bg-indigo-100 text-indigo-800";
-  return "bg-slate-200 text-slate-700";
+  return "bg-[color:var(--team-surface-muted)] text-[color:var(--team-text-muted)]";
 }
 
 function ExpenseFields({
@@ -369,7 +369,9 @@ function ExpenseFields({
   return (
     <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
       <label className="flex flex-col gap-1">
-        <span className="text-xs font-medium text-slate-600">Date</span>
+        <span className="text-xs font-medium text-[color:var(--team-text-muted)]">
+          Date
+        </span>
         <input
           name="paidDate"
           type="date"
@@ -379,7 +381,9 @@ function ExpenseFields({
         />
       </label>
       <label className="flex flex-col gap-1">
-        <span className="text-xs font-medium text-slate-600">Amount (USD)</span>
+        <span className="text-xs font-medium text-[color:var(--team-text-muted)]">
+          Amount (USD)
+        </span>
         <input
           name="amount"
           type="number"
@@ -396,7 +400,9 @@ function ExpenseFields({
         />
       </label>
       <label className="flex flex-col gap-1">
-        <span className="text-xs font-medium text-slate-600">Category</span>
+        <span className="text-xs font-medium text-[color:var(--team-text-muted)]">
+          Category
+        </span>
         <input
           name="category"
           list="expense-categories"
@@ -408,7 +414,9 @@ function ExpenseFields({
         />
       </label>
       <label className="flex flex-col gap-1">
-        <span className="text-xs font-medium text-slate-600">Vendor</span>
+        <span className="text-xs font-medium text-[color:var(--team-text-muted)]">
+          Vendor
+        </span>
         <input
           name="vendor"
           maxLength={240}
@@ -418,7 +426,7 @@ function ExpenseFields({
         />
       </label>
       <label className="flex flex-col gap-1">
-        <span className="text-xs font-medium text-slate-600">
+        <span className="text-xs font-medium text-[color:var(--team-text-muted)]">
           Payment method
         </span>
         <select
@@ -437,7 +445,7 @@ function ExpenseFields({
       </label>
       <div className="hidden sm:block" aria-hidden="true" />
       <label className="flex flex-col gap-1">
-        <span className="text-xs font-medium text-slate-600">
+        <span className="text-xs font-medium text-[color:var(--team-text-muted)]">
           Coverage start
         </span>
         <input
@@ -452,7 +460,9 @@ function ExpenseFields({
         />
       </label>
       <label className="flex flex-col gap-1">
-        <span className="text-xs font-medium text-slate-600">Coverage end</span>
+        <span className="text-xs font-medium text-[color:var(--team-text-muted)]">
+          Coverage end
+        </span>
         <input
           name="coverageEndDate"
           type="date"
@@ -463,7 +473,9 @@ function ExpenseFields({
         />
       </label>
       <label className="flex flex-col gap-1 sm:col-span-2">
-        <span className="text-xs font-medium text-slate-600">Notes</span>
+        <span className="text-xs font-medium text-[color:var(--team-text-muted)]">
+          Notes
+        </span>
         <textarea
           name="memo"
           rows={3}
@@ -475,14 +487,16 @@ function ExpenseFields({
       </label>
       {includeReceipt ? (
         <label className="flex flex-col gap-1 sm:col-span-2">
-          <span className="text-xs font-medium text-slate-600">Receipt</span>
+          <span className="text-xs font-medium text-[color:var(--team-text-muted)]">
+            Receipt
+          </span>
           <input
             name="receiptFile"
             type="file"
             accept="image/jpeg,image/png,image/webp,image/heic,image/heif,application/pdf"
             className={INPUT_CLASS}
           />
-          <span className="text-[11px] text-slate-500">
+          <span className="text-[11px] text-[color:var(--team-text-soft)]">
             JPEG, PNG, WebP, HEIC, or PDF; maximum 10 MB. A new file replaces a
             draft&apos;s current receipt.
           </span>
@@ -509,7 +523,7 @@ function ExpenseActions({
   }
   if (expense.externallyManaged) {
     return (
-      <p className="text-xs text-slate-500">
+      <p className="text-xs text-[color:var(--team-text-soft)]">
         Managed by its payout or provider workflow. Changes are unavailable
         here.
       </p>
@@ -517,7 +531,7 @@ function ExpenseActions({
   }
   if (expense.reversalOfExpenseId) {
     return (
-      <p className="text-xs text-slate-500">
+      <p className="text-xs text-[color:var(--team-text-soft)]">
         Generated reversal. This ledger evidence is immutable.
       </p>
     );
@@ -540,8 +554,8 @@ function ExpenseActions({
             Post expense
           </button>
         </form>
-        <details className="rounded-xl border border-slate-200 bg-slate-50 p-3">
-          <summary className="min-h-11 cursor-pointer py-2 font-semibold text-slate-800">
+        <details className="rounded-xl border border-[color:var(--team-border)] bg-[color:var(--team-surface-muted)] p-3">
+          <summary className="min-h-11 cursor-pointer py-2 font-semibold text-[color:var(--team-text)]">
             Edit draft
           </summary>
           <form
@@ -568,11 +582,11 @@ function ExpenseActions({
 
   return (
     <div className="grid gap-3 lg:grid-cols-2">
-      <details className="rounded-xl border border-slate-200 bg-slate-50 p-3">
-        <summary className="min-h-11 cursor-pointer py-2 font-semibold text-slate-800">
+      <details className="rounded-xl border border-[color:var(--team-border)] bg-[color:var(--team-surface-muted)] p-3">
+        <summary className="min-h-11 cursor-pointer py-2 font-semibold text-[color:var(--team-text)]">
           Correct expense
         </summary>
-        <p className="mb-3 text-xs text-slate-600">
+        <p className="mb-3 text-xs text-[color:var(--team-text-muted)]">
           Creates a linked reversal and replacement atomically. The original
           receipt and values remain available as evidence.
         </p>
@@ -586,7 +600,7 @@ function ExpenseActions({
           <ExpenseFields expense={expense} includeReceipt={false} />
           {expense.coveredByFixedCostSeriesId ? (
             <label className="flex flex-col gap-1">
-              <span className="text-xs font-medium text-slate-600">
+              <span className="text-xs font-medium text-[color:var(--team-text-muted)]">
                 Overview treatment
               </span>
               <select
@@ -600,14 +614,14 @@ function ExpenseActions({
                 </option>
                 <option value="">Count the replacement separately</option>
               </select>
-              <span className="text-[11px] text-slate-500">
+              <span className="text-[11px] text-[color:var(--team-text-soft)]">
                 Choose separately if this correction no longer matches the fixed
                 monthly amount or category.
               </span>
             </label>
           ) : null}
           <label className="flex flex-col gap-1">
-            <span className="text-xs font-medium text-slate-600">
+            <span className="text-xs font-medium text-[color:var(--team-text-muted)]">
               Correction reason
             </span>
             <textarea
@@ -863,11 +877,11 @@ export async function ExpensesSection({
         <div id="expense-add" className={TEAM_CARD_PADDED}>
           <h3
             id="expense-add-title"
-            className="text-lg font-semibold text-slate-900"
+            className="text-lg font-semibold text-[color:var(--team-text)]"
           >
             Add draft
           </h3>
-          <p className="mt-1 text-sm text-slate-600">
+          <p className="mt-1 text-sm text-[color:var(--team-text-muted)]">
             Drafts are editable and excluded from totals until you post them.
           </p>
           <form
@@ -875,7 +889,7 @@ export async function ExpensesSection({
             method="post"
             encType="multipart/form-data"
             aria-labelledby="expense-add-title"
-            className="mt-4 space-y-4 text-sm text-slate-700"
+            className="mt-4 space-y-4 text-sm text-[color:var(--team-text-muted)]"
           >
             <input type="hidden" name="idempotencyKey" value={randomUUID()} />
             <ExpenseFields includeReceipt />
@@ -888,10 +902,10 @@ export async function ExpensesSection({
         <div id="expense-summary" className={TEAM_CARD_PADDED}>
           <div className="flex items-start justify-between gap-4">
             <div>
-              <h3 className="text-lg font-semibold text-slate-900">
+              <h3 className="text-lg font-semibold text-[color:var(--team-text)]">
                 Posted spend summary
               </h3>
-              <p className="mt-1 text-sm text-slate-600">
+              <p className="mt-1 text-sm text-[color:var(--team-text-muted)]">
                 Drafts are excluded. Corrections and voids are calculated from
                 their immutable ledger entries.
               </p>
@@ -939,7 +953,7 @@ export async function ExpensesSection({
             </div>
           ) : null}
           {summary?.ok ? (
-            <ul className="mt-4 space-y-2 text-sm text-slate-700">
+            <ul className="mt-4 space-y-2 text-sm text-[color:var(--team-text-muted)]">
               {[
                 { label: "Month to date", window: summary.windows.monthToDate },
                 { label: "Last 30 days", window: summary.windows.last30Days },
@@ -947,15 +961,17 @@ export async function ExpensesSection({
               ].map(({ label, window }) => (
                 <li
                   key={label}
-                  className="flex items-center justify-between rounded-lg border border-slate-200 bg-slate-50 px-3 py-2"
+                  className="flex items-center justify-between rounded-lg border border-[color:var(--team-border)] bg-[color:var(--team-surface-muted)] px-3 py-2"
                 >
                   <div>
-                    <div className="font-semibold text-slate-900">{label}</div>
-                    <div className="text-xs text-slate-600">
+                    <div className="font-semibold text-[color:var(--team-text)]">
+                      {label}
+                    </div>
+                    <div className="text-xs text-[color:var(--team-text-muted)]">
                       {window.count} current posted entries
                     </div>
                   </div>
-                  <div className="text-right font-semibold text-slate-900">
+                  <div className="text-right font-semibold text-[color:var(--team-text)]">
                     {fmtMoney(window.totalCents, summary.currency)}
                   </div>
                 </li>
@@ -964,19 +980,19 @@ export async function ExpensesSection({
           ) : null}
           {summary?.dailyTotals?.length ? (
             <div className="mt-5">
-              <h4 className="text-sm font-semibold text-slate-900">
+              <h4 className="text-sm font-semibold text-[color:var(--team-text)]">
                 Last seven days
               </h4>
               <div className="mt-2 grid grid-cols-2 gap-2 text-xs sm:grid-cols-3">
                 {summary.dailyTotals.map((row) => (
                   <div
                     key={row.day}
-                    className="rounded-2xl border border-slate-200 bg-white px-3 py-2"
+                    className="rounded-2xl border border-[color:var(--team-border)] bg-[color:var(--team-surface)] px-3 py-2"
                   >
-                    <div className="font-semibold text-slate-900">
+                    <div className="font-semibold text-[color:var(--team-text)]">
                       {row.day}
                     </div>
-                    <div className="text-slate-600">
+                    <div className="text-[color:var(--team-text-muted)]">
                       {fmtMoney(row.totalCents, summary.currency)}
                     </div>
                   </div>
@@ -989,10 +1005,10 @@ export async function ExpensesSection({
         <div id="expense-ledger" className={TEAM_CARD_PADDED}>
           <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
             <div>
-              <h3 className="text-lg font-semibold text-slate-900">
+              <h3 className="text-lg font-semibold text-[color:var(--team-text)]">
                 Expense ledger
               </h3>
-              <p className="mt-1 text-sm text-slate-600">
+              <p className="mt-1 text-sm text-[color:var(--team-text-muted)]">
                 Stable pages of {EXPENSE_PAGE_LIMIT} entries. Draft, posted,
                 corrected, voided, and generated reversals are explicit.
               </p>
@@ -1003,12 +1019,12 @@ export async function ExpensesSection({
           <form
             action="/team/expenses"
             method="get"
-            className="mt-5 grid gap-3 rounded-2xl border border-slate-200 bg-slate-50 p-3 sm:grid-cols-2 lg:grid-cols-4"
+            className="mt-5 grid gap-3 rounded-2xl border border-[color:var(--team-border)] bg-[color:var(--team-surface-muted)] p-3 sm:grid-cols-2 lg:grid-cols-4"
             aria-label="Expense ledger filters"
           >
             <input type="hidden" name="expenseView" value="ledger" />
             <label className="flex flex-col gap-1 sm:col-span-2">
-              <span className="text-xs font-medium text-slate-700">
+              <span className="text-xs font-medium text-[color:var(--team-text-muted)]">
                 Search vendor, category, or memo
               </span>
               <input
@@ -1020,7 +1036,9 @@ export async function ExpensesSection({
               />
             </label>
             <label className="flex flex-col gap-1">
-              <span className="text-xs font-medium text-slate-700">From</span>
+              <span className="text-xs font-medium text-[color:var(--team-text-muted)]">
+                From
+              </span>
               <input
                 name="expenseFrom"
                 type="date"
@@ -1029,7 +1047,7 @@ export async function ExpensesSection({
               />
             </label>
             <label className="flex flex-col gap-1">
-              <span className="text-xs font-medium text-slate-700">
+              <span className="text-xs font-medium text-[color:var(--team-text-muted)]">
                 Through
               </span>
               <input
@@ -1040,7 +1058,9 @@ export async function ExpensesSection({
               />
             </label>
             <label className="flex flex-col gap-1">
-              <span className="text-xs font-medium text-slate-700">Status</span>
+              <span className="text-xs font-medium text-[color:var(--team-text-muted)]">
+                Status
+              </span>
               <select
                 name="expenseStatus"
                 defaultValue={filters.status ?? ""}
@@ -1054,7 +1074,7 @@ export async function ExpensesSection({
               </select>
             </label>
             <label className="flex flex-col gap-1">
-              <span className="text-xs font-medium text-slate-700">
+              <span className="text-xs font-medium text-[color:var(--team-text-muted)]">
                 Finance review
               </span>
               <select
@@ -1068,7 +1088,7 @@ export async function ExpensesSection({
               </select>
             </label>
             <label className="flex flex-col gap-1">
-              <span className="text-xs font-medium text-slate-700">
+              <span className="text-xs font-medium text-[color:var(--team-text-muted)]">
                 Category
               </span>
               <input
@@ -1081,7 +1101,9 @@ export async function ExpensesSection({
               />
             </label>
             <label className="flex flex-col gap-1">
-              <span className="text-xs font-medium text-slate-700">Source</span>
+              <span className="text-xs font-medium text-[color:var(--team-text-muted)]">
+                Source
+              </span>
               <select
                 name="expenseSource"
                 defaultValue={filters.source ?? ""}
@@ -1160,7 +1182,7 @@ export async function ExpensesSection({
           ) : null}
 
           {!ledgerProblem && listPayload?.expenses.length === 0 ? (
-            <div className="mt-4 rounded-xl border border-slate-200 bg-slate-50 p-4 text-sm text-slate-700">
+            <div className="mt-4 rounded-xl border border-[color:var(--team-border)] bg-[color:var(--team-surface-muted)] p-4 text-sm text-[color:var(--team-text-muted)]">
               {listPayload.page.hasPrevious || listPayload.page.hasMore
                 ? "This page no longer has entries. Use the available page control to return to ledger results."
                 : activeFilters
@@ -1173,7 +1195,7 @@ export async function ExpensesSection({
               {listPayload.expenses.map((expense) => (
                 <article
                   key={expense.id}
-                  className="rounded-2xl border border-slate-200 bg-white px-4 py-4 text-sm text-slate-700"
+                  className="rounded-2xl border border-[color:var(--team-border)] bg-[color:var(--team-surface)] px-4 py-4 text-sm text-[color:var(--team-text-muted)]"
                   aria-labelledby={`expense-${expense.id}`}
                 >
                   <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
@@ -1181,7 +1203,7 @@ export async function ExpensesSection({
                       <div className="flex flex-wrap items-center gap-2">
                         <h4
                           id={`expense-${expense.id}`}
-                          className="font-semibold text-slate-900"
+                          className="font-semibold text-[color:var(--team-text)]"
                         >
                           {fmtDay(expense.paidAt)} ·{" "}
                           {expense.category ?? "Uncategorized"}
@@ -1202,17 +1224,17 @@ export async function ExpensesSection({
                           </span>
                         ) : null}
                       </div>
-                      <p className="mt-1 break-words text-xs text-slate-600">
+                      <p className="mt-1 break-words text-xs text-[color:var(--team-text-muted)]">
                         {[expense.vendor, expense.memo]
                           .filter(Boolean)
                           .join(" — ") || "No additional details"}
                       </p>
-                      <p className="mt-1 text-[11px] text-slate-500">
+                      <p className="mt-1 text-[11px] text-[color:var(--team-text-soft)]">
                         Source: {expense.source.replace(/_/gu, " ")} · Version{" "}
                         {expense.version}
                       </p>
                       {expense.coverageStartAt || expense.coverageEndAt ? (
-                        <p className="mt-1 text-[11px] text-slate-500">
+                        <p className="mt-1 text-[11px] text-[color:var(--team-text-soft)]">
                           Covers{" "}
                           {expense.coverageStartAt
                             ? fmtDay(expense.coverageStartAt)
@@ -1244,7 +1266,7 @@ export async function ExpensesSection({
                       ) : null}
                     </div>
                     <div className="flex flex-wrap items-center gap-2 sm:justify-end">
-                      <div className="text-base font-semibold text-slate-900">
+                      <div className="text-base font-semibold text-[color:var(--team-text)]">
                         {fmtMoney(expense.amountCents, expense.currency)}
                       </div>
                       {expense.receipt ? (
@@ -1266,7 +1288,7 @@ export async function ExpensesSection({
                   (canWrite &&
                     (expense.lifecycleStatus === "draft" ||
                       expense.lifecycleStatus === "posted")) ? (
-                    <div className="mt-4 border-t border-slate-100 pt-4">
+                    <div className="mt-4 border-t border-[color:var(--team-border)] pt-4">
                       <ExpenseActions expense={expense} canWrite={canWrite} />
                     </div>
                   ) : null}
@@ -1277,10 +1299,10 @@ export async function ExpensesSection({
 
           {!ledgerProblem && listPayload ? (
             <nav
-              className="mt-5 flex flex-col gap-3 border-t border-slate-200 pt-4 sm:flex-row sm:items-center sm:justify-between"
+              className="mt-5 flex flex-col gap-3 border-t border-[color:var(--team-border)] pt-4 sm:flex-row sm:items-center sm:justify-between"
               aria-label="Expense ledger pages"
             >
-              <div className="text-sm text-slate-600">
+              <div className="text-sm text-[color:var(--team-text-muted)]">
                 Page {pageNumber ?? 1} · {listPayload.expenses.length} entries
               </div>
               <div className="flex flex-wrap gap-2">

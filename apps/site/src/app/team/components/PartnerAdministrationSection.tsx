@@ -27,6 +27,11 @@ import {
 import { teamSurfaceHref } from "../surface-registry";
 import { quoteWorkspaceHref } from "../quotes-workspace";
 import {
+  partnerAdministrationHref,
+  partnerSchedulingHref,
+  type PartnerAdministrationView,
+} from "../partner-entry-navigation";
+import {
   normalizePartnerCompanySection,
   partnerCompanyHref,
   type PartnerCompanySection,
@@ -69,26 +74,7 @@ import {
   teamButtonClass,
 } from "./team-ui";
 
-type AdministrationView =
-  | "requests"
-  | "administration"
-  | "account-merges"
-  | "accounts"
-  | "operations"
-  | "applications"
-  | "billing-disputes"
-  | "cancellation-requests"
-  | "change-requests"
-  | "commercial"
-  | "domains"
-  | "people"
-  | "memberships"
-  | "invitations"
-  | "join-requests"
-  | "location-reviews"
-  | "quarantine"
-  | "security"
-  | "relationships";
+type AdministrationView = PartnerAdministrationView;
 
 type PartnerAdministrationFilters = {
   requestStatus?: string;
@@ -111,6 +97,7 @@ type PartnerAdministrationFilters = {
   preview?: string;
   previewJobId?: string;
   outboundReturn?: string;
+  returnTo?: string;
 };
 
 type CollectionPayload = {
@@ -593,28 +580,6 @@ function statusTone(value: unknown): string {
     return "bg-rose-50 text-rose-800";
   }
   return "bg-slate-100 text-slate-700";
-}
-
-function partnerAdminHref(input: {
-  view: AdministrationView;
-  q?: string;
-  status?: string;
-  cursor?: string;
-  selectedId?: string;
-  selectedUserId?: string;
-  companyId?: string;
-  companySection?: PartnerCompanySection;
-}): ReturnType<typeof teamSurfaceHref> {
-  const query = new URLSearchParams({ p_admin: input.view });
-  if (input.q) query.set("p_admin_q", input.q);
-  if (input.status) query.set("p_admin_status", input.status);
-  if (input.cursor) query.set("p_admin_cursor", input.cursor);
-  const selectedId = input.selectedId ?? input.selectedUserId;
-  if (selectedId) query.set("p_selected", selectedId);
-  if (input.companyId) query.set("p_company", input.companyId);
-  if (input.companySection)
-    query.set("p_company_section", input.companySection);
-  return teamSurfaceHref("partners", { query });
 }
 
 function rowPresentation(
@@ -1268,9 +1233,11 @@ function parsePartnerQuoteStaffContext(
 function PartnerQuoteContextPanel({
   context,
   error,
+  returnTo,
 }: {
   context: PartnerQuoteStaffContext | null;
   error: string;
+  returnTo: string;
 }) {
   return (
     <section
@@ -1340,6 +1307,7 @@ function PartnerQuoteContextPanel({
                       partnerTargetType: target.type,
                       partnerTargetId: target.id,
                     },
+                    returnTo,
                   })}
                 >
                   Create quote for this {target.type}
@@ -1552,6 +1520,7 @@ export async function PartnerAdministrationSection({
   filters?: PartnerAdministrationFilters;
 }): Promise<React.ReactElement> {
   const principal = await requireCurrentTeamPrincipal();
+  const returnTo = filters?.returnTo;
   const availableViews = VIEW_CONFIG.filter((candidate) =>
     hasTeamPermission(principal, candidate.permission),
   );
@@ -1717,13 +1686,17 @@ export async function PartnerAdministrationSection({
             availableViews={availableViews}
             canCreate={canCreatePartner}
             canViewResources={hasTeamPermission(principal, "policy.read")}
+            returnTo={returnTo}
           />
           <div role="alert" className={TEAM_EMPTY_STATE}>
             This company or section could not be opened. Check your access or
             try again. No other company has been opened in its place.
             <div className="mt-3">
               <Link
-                href="/team/partners?p_admin=accounts"
+                href={partnerAdministrationHref({
+                  view: "accounts",
+                  returnTo,
+                })}
                 className={teamButtonClass("secondary")}
               >
                 Back to companies
@@ -1739,6 +1712,7 @@ export async function PartnerAdministrationSection({
       accountName={display(company["name"], "Company")}
       section={companySection}
       sections={companySections}
+      returnTo={returnTo}
     />
   ) : null;
 
@@ -1750,6 +1724,7 @@ export async function PartnerAdministrationSection({
           availableViews={availableViews}
           canCreate={canCreatePartner}
           canViewResources={hasTeamPermission(principal, "policy.read")}
+          returnTo={returnTo}
         />
         <PartnersSection filters={filters} />
       </section>
@@ -1764,6 +1739,7 @@ export async function PartnerAdministrationSection({
           availableViews={availableViews}
           canCreate={canCreatePartner}
           canViewResources={hasTeamPermission(principal, "policy.read")}
+          returnTo={returnTo}
         />
         {view === "administration" ? companyNavigation : null}
         {view === "requests" ? (
@@ -1778,6 +1754,7 @@ export async function PartnerAdministrationSection({
             initialQuery={filters?.adminQuery}
             initialRequestKey={filters?.requestKey}
             alertGroupId={filters?.alertGroupId}
+            returnTo={returnTo}
           />
         ) : (
           <PartnerOwnerAlertSettings />
@@ -1803,12 +1780,14 @@ export async function PartnerAdministrationSection({
           availableViews={availableViews}
           canCreate={canCreatePartner}
           canViewResources={hasTeamPermission(principal, "policy.read")}
+          returnTo={returnTo}
         />
         {companyNavigation}
         {!company ? (
           <PartnerPortalOperationsPanel
             principal={principal}
             rangeDays={rangeDays}
+            returnTo={returnTo}
           />
         ) : null}
         {company ? (
@@ -1824,7 +1803,12 @@ export async function PartnerAdministrationSection({
               .map((item) => (
                 <a
                   key={item.id}
-                  href={partnerCompanyHref(companyId, "jobs", item.id)}
+                  href={partnerCompanyHref(
+                    companyId,
+                    "jobs",
+                    item.id,
+                    returnTo,
+                  )}
                   className={teamButtonClass("secondary", "sm")}
                 >
                   {item.label}
@@ -2020,6 +2004,7 @@ export async function PartnerAdministrationSection({
         availableViews={availableViews}
         canCreate={canCreatePartner}
         canViewResources={hasTeamPermission(principal, "policy.read")}
+        returnTo={returnTo}
       />
       {companyNavigation}
       {company && companySection === "people" ? (
@@ -2034,7 +2019,12 @@ export async function PartnerAdministrationSection({
             .map((item) => (
               <a
                 key={item.id}
-                href={partnerCompanyHref(companyId, "people", item.id)}
+                href={partnerCompanyHref(
+                  companyId,
+                  "people",
+                  item.id,
+                  returnTo,
+                )}
                 className={teamButtonClass(
                   item.id === view ? "primary" : "secondary",
                   "sm",
@@ -2048,7 +2038,7 @@ export async function PartnerAdministrationSection({
       ) : null}
       {company && companySection === "jobs" ? (
         <a
-          href={partnerCompanyHref(companyId, "jobs")}
+          href={partnerCompanyHref(companyId, "jobs", undefined, returnTo)}
           className={teamButtonClass("secondary", "sm")}
         >
           Back to company jobs
@@ -2058,7 +2048,7 @@ export async function PartnerAdministrationSection({
       companySection === "settings" &&
       hasTeamPermission(principal, "policy.read") ? (
         <Link
-          href="/team/partners/scheduling"
+          href={partnerSchedulingHref(returnTo)}
           className="inline-flex min-h-11 items-center text-sm font-semibold text-primary-900 underline"
         >
           Manage scheduling crews, trucks & equipment
@@ -2124,11 +2114,14 @@ export async function PartnerAdministrationSection({
               ) : null}
             </div>
             <form
-              action="/team/partners"
+              action={teamSurfaceHref("partners")}
               method="get"
               className="grid w-full max-w-2xl gap-2 sm:grid-cols-[minmax(0,1fr)_12rem_auto]"
             >
               <input type="hidden" name="p_admin" value={view} />
+              {returnTo ? (
+                <input type="hidden" name="p_return" value={returnTo} />
+              ) : null}
               {companyId ? (
                 <>
                   <input type="hidden" name="p_company" value={companyId} />
@@ -2220,7 +2213,12 @@ export async function PartnerAdministrationSection({
           <div className="flex justify-end">
             <Link
               className={teamButtonClass("secondary", "sm")}
-              href={partnerAdminHref({ view: "security", q, status })}
+              href={partnerAdministrationHref({
+                view: "security",
+                q,
+                status,
+                returnTo,
+              })}
             >
               Close identity review
             </Link>
@@ -2248,7 +2246,12 @@ export async function PartnerAdministrationSection({
             <div className="flex justify-end">
               <Link
                 className={teamButtonClass("secondary", "sm")}
-                href={partnerAdminHref({ view: "commercial", q, status })}
+                href={partnerAdministrationHref({
+                  view: "commercial",
+                  q,
+                  status,
+                  returnTo,
+                })}
               >
                 Back to all company billing
               </Link>
@@ -2275,6 +2278,26 @@ export async function PartnerAdministrationSection({
             <PartnerQuoteContextPanel
               context={quoteStaffContext}
               error={quoteStaffContextError}
+              returnTo={
+                company
+                  ? String(
+                      partnerCompanyHref(
+                        companyId,
+                        "billing",
+                        "commercial",
+                        returnTo,
+                      ),
+                    )
+                  : String(
+                      partnerAdministrationHref({
+                        view: "commercial",
+                        q,
+                        status,
+                        selectedId: selectedCommercialAccountId,
+                        returnTo,
+                      }),
+                    )
+              }
             />
           ) : null}
           <details className="rounded-xl border border-[color:var(--team-border)] p-4">
@@ -2314,13 +2337,14 @@ export async function PartnerAdministrationSection({
           </p>
           <Link
             className={`${teamButtonClass("secondary", "sm")} mt-4`}
-            href={partnerAdminHref({
+            href={partnerAdministrationHref({
               view,
               q,
               status,
               selectedUserId: selectedIdentityId,
               companyId,
               companySection: companyId ? companySection : undefined,
+              returnTo,
             })}
           >
             Retry first page
@@ -2427,7 +2451,12 @@ export async function PartnerAdministrationSection({
                 </div>
                 {view === "accounts" && !company ? (
                   <a
-                    href={partnerCompanyHref(display(item["id"], ""))}
+                    href={partnerCompanyHref(
+                      display(item["id"], ""),
+                      "details",
+                      undefined,
+                      returnTo,
+                    )}
                     className={`${teamButtonClass("secondary")} mt-4`}
                   >
                     Open company
@@ -2444,7 +2473,12 @@ export async function PartnerAdministrationSection({
                     </p>
                     {companySections.includes("people") ? (
                       <a
-                        href={partnerCompanyHref(companyId, "people")}
+                        href={partnerCompanyHref(
+                          companyId,
+                          "people",
+                          undefined,
+                          returnTo,
+                        )}
                         className={teamButtonClass("secondary")}
                       >
                         View company contacts and invitations
@@ -3712,12 +3746,13 @@ export async function PartnerAdministrationSection({
                   <div className="mt-3">
                     <Link
                       className={teamButtonClass("secondary", "sm")}
-                      href={partnerAdminHref({
+                      href={partnerAdministrationHref({
                         view: "security",
                         selectedUserId:
                           view === "people"
                             ? display(item["id"], "")
                             : display(item["partnerUserId"], ""),
+                        returnTo,
                       })}
                     >
                       Review global identity security
@@ -3809,12 +3844,18 @@ export async function PartnerAdministrationSection({
                         className={teamButtonClass("secondary", "sm")}
                         href={
                           companyId
-                            ? partnerCompanyHref(companyId, "billing")
-                            : partnerAdminHref({
+                            ? partnerCompanyHref(
+                                companyId,
+                                "billing",
+                                undefined,
+                                returnTo,
+                              )
+                            : partnerAdministrationHref({
                                 view: "commercial",
                                 q,
                                 status,
                                 selectedId: display(item["id"], ""),
+                                returnTo,
                               })
                         }
                         aria-current={
@@ -4273,13 +4314,14 @@ export async function PartnerAdministrationSection({
             {cursor ? (
               <Link
                 className={teamButtonClass("secondary", "sm")}
-                href={partnerAdminHref({
+                href={partnerAdministrationHref({
                   view,
                   q,
                   status,
                   companyId,
                   companySection: companyId ? companySection : undefined,
                   selectedId: selectedIdentityId || selectedCommercialAccountId,
+                  returnTo,
                 })}
               >
                 First page
@@ -4288,7 +4330,7 @@ export async function PartnerAdministrationSection({
             {payload.page.hasMore && payload.page.nextCursor ? (
               <Link
                 className={teamButtonClass("primary", "sm")}
-                href={partnerAdminHref({
+                href={partnerAdministrationHref({
                   view,
                   q,
                   status,
@@ -4296,6 +4338,7 @@ export async function PartnerAdministrationSection({
                   companySection: companyId ? companySection : undefined,
                   cursor: payload.page.nextCursor,
                   selectedId: selectedIdentityId || selectedCommercialAccountId,
+                  returnTo,
                 })}
               >
                 Next page
@@ -4522,21 +4565,24 @@ function AdministrationHeader({
   availableViews,
   canCreate = false,
   canViewResources = false,
+  returnTo,
 }: {
   activeView: AdministrationView;
   availableViews: typeof VIEW_CONFIG;
   canCreate?: boolean;
   canViewResources?: boolean;
+  returnTo?: string;
 }): React.ReactElement {
   return (
     <PartnerAdministrationNavigation
       canCreate={canCreate}
+      returnTo={returnTo}
       destinations={[
         ...availableViews.map((view) => ({
           id: view.id,
           label:
             view.id === "commercial" ? "Billing & service terms" : view.label,
-          href: String(partnerAdminHref({ view: view.id })),
+          href: partnerAdministrationHref({ view: view.id, returnTo }),
           active: activeView === view.id,
         })),
         ...(canViewResources
@@ -4544,7 +4590,7 @@ function AdministrationHeader({
               {
                 id: "scheduling",
                 label: "Scheduling resources",
-                href: "/team/partners/scheduling",
+                href: partnerSchedulingHref(returnTo),
                 active: false,
               },
             ]

@@ -1,5 +1,8 @@
 export * from "./schemas";
 export * from "./team-contracts";
+export * from "./team-return-path";
+export * from "./partner-request-details";
+export * from "./partner-request-inbox";
 export * from "./openai-provider";
 export * from "./meta-provider";
 export * from "./google-calendar-provider";
@@ -9,4 +12,5 @@ export * from "./twilio-provider";
 export * from "./provider-test-runtime";
 export * from "./agent-action-contracts";
 export { MystSDK } from "./http/client";
+export * from "./partner-multi-service";
 //# sourceMappingURL=index.d.ts.map

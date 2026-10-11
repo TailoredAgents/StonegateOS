@@ -1254,6 +1254,13 @@
       "when": 1796515200000,
       "tag": "0181_partner_quote_required_services",
       "breakpoints": true
+    },
+    {
+      "idx": 179,
+      "version": "7",
+      "when": 1796601600000,
+      "tag": "0182_team_partner_permission_baselines",
+      "breakpoints": true
     }
   ]
 }

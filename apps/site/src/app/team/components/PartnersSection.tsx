@@ -105,6 +105,7 @@ export async function PartnersSection({
         principal={principal}
         orgContactId={selectedId}
         selectedJobId={previewJobId || null}
+        returnTo={resolvedFilters.returnTo}
       />
     );
   }
@@ -366,7 +367,7 @@ export async function PartnersSection({
               {canReadAccounts ? (
                 <Link
                   className={`${teamButtonClass("secondary", "sm")} mt-3 min-h-11`}
-                  href={partnerCompanyAccessHref()}
+                  href={partnerCompanyAccessHref(resolvedFilters.returnTo)}
                 >
                   {canInvitePartners
                     ? "Set up partner access"
@@ -619,10 +620,17 @@ export async function PartnersSection({
       <div className={TEAM_CARD_PADDED}>
         <form
           method="get"
-          action="/team/partners"
+          action={teamSurfaceHref("partners")}
           className="grid gap-3 rounded-2xl border border-slate-200 bg-white p-4"
         >
           <input type="hidden" name="p_admin" value="relationships" />
+          {resolvedFilters.returnTo ? (
+            <input
+              type="hidden"
+              name="p_return"
+              value={resolvedFilters.returnTo}
+            />
+          ) : null}
           {outboundReturnLocation ? (
             <input
               type="hidden"
@@ -712,6 +720,7 @@ export async function PartnersSection({
               href={buildPartnersHref({
                 filters: {
                   outboundReturn: resolvedFilters.outboundReturn,
+                  returnTo: resolvedFilters.returnTo,
                 },
               })}
             >

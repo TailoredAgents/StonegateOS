@@ -45,6 +45,7 @@ import {
   teamButtonClass,
   teamStatePanelClass,
 } from "./team-ui";
+import { quoteWorkspaceHref } from "../quotes-workspace";
 
 const STEP_DETAILS: Record<
   QuoteV2ComposerStep,
@@ -252,6 +253,7 @@ export type QuoteV2ComposerClientProps = {
   initialContactId?: string;
   initialPropertyId?: string;
   partnerContext?: QuoteV2PartnerContext;
+  returnTo?: string | null;
 };
 
 export default function QuoteV2ComposerClient({
@@ -264,6 +266,7 @@ export default function QuoteV2ComposerClient({
   initialContactId,
   initialPropertyId,
   partnerContext,
+  returnTo,
 }: QuoteV2ComposerClientProps) {
   const client = React.useMemo(() => new QuoteV2StaffClient(), []);
   const [step, setStep] = React.useState<QuoteV2ComposerStep>("client_project");
@@ -1154,13 +1157,13 @@ export default function QuoteV2ComposerClient({
         ) : null}
         <div className="mt-5 flex flex-wrap justify-center gap-2">
           <Link
-            href="/team/quotes/manage"
+            href={quoteWorkspaceHref("manage", { returnTo })}
             className={teamButtonClass("primary")}
           >
             Open quote management
           </Link>
           <Link
-            href="/team/quotes/create"
+            href={quoteWorkspaceHref("create", { returnTo })}
             className={teamButtonClass("secondary")}
           >
             Create another quote

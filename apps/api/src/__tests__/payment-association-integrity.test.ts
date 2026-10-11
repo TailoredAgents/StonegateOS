@@ -350,7 +350,7 @@ describe("legacy payment association source contract", () => {
         const source = readFileSync(file, "utf8");
         return source.includes("/api/payments/${") &&
           (source.includes("}/attach") || source.includes("}/detach"))
-          ? [path.relative(siteRoot, file)]
+          ? [path.relative(siteRoot, file).replaceAll("\\", "/")]
           : [];
       })
       .sort();

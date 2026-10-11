@@ -9,6 +9,7 @@ import {
   TEAM_SECTION_TITLE,
   teamButtonClass,
 } from "./team-ui";
+import { partnerAdministrationHref } from "../partner-entry-navigation";
 
 type RangeDays = 1 | 7 | 14 | 30;
 type RateKey =
@@ -196,9 +197,11 @@ function formatRate(value: number | null): string {
 export async function PartnerPortalOperationsPanel({
   principal,
   rangeDays = 7,
+  returnTo,
 }: {
   principal: TeamRequestPrincipal;
   rangeDays?: RangeDays;
+  returnTo?: string;
 }): Promise<React.ReactElement> {
   let report: OperationsReport | null = null;
   let error = "";
@@ -251,7 +254,11 @@ export async function PartnerPortalOperationsPanel({
             {RANGE_DAYS.map((days) => (
               <Link
                 key={days}
-                href={`/team/partners?p_admin=operations&p_admin_status=${days}`}
+                href={partnerAdministrationHref({
+                  view: "operations",
+                  status: String(days),
+                  returnTo,
+                })}
                 aria-current={rangeDays === days ? "page" : undefined}
                 className={teamButtonClass(
                   rangeDays === days ? "primary" : "secondary",

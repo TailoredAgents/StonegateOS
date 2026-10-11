@@ -1,5 +1,7 @@
 # Mobile App Plan
 
+> **Historical launch plan.** Several unchecked items below are implemented in current source or recorded release audits. Do not use this checklist as current mobile status. Use `CAPABILITY_MATRIX.md` and `STONEGATE_SYSTEM_ALIGNMENT_PLAN.md`; preserve this file as implementation history.
+
 This is the living implementation plan for bringing StonegateOS to a production-ready phone app without disturbing the desktop Team Console.
 
 ## Goal

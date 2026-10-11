@@ -39,7 +39,9 @@ function listRouteFiles(root: string): string[] {
       if (entry.isDirectory()) {
         visit(absolutePath);
       } else if (entry.name === "route.ts") {
-        routes.push(path.relative(API_ROOT, absolutePath));
+        routes.push(
+          path.relative(API_ROOT, absolutePath).replaceAll("\\", "/"),
+        );
       }
     }
   };
@@ -156,6 +158,134 @@ function partnerDelegatedGuard(routeMethod: RouteMethodSource): {
   verify: () => void;
 } | null {
   const prefix = "app/api/admin/partner-management/v1/";
+  const routeKey = `${routeMethod.method} ${routeMethod.route}`;
+  if (routeKey === `GET ${prefix}service-requests/route.ts`) {
+    const permissions = ["partners.accounts.read", "appointments.read"];
+    const index = routeMethod.methodSource.indexOf("requirePermission(");
+    return {
+      index,
+      permissions,
+      verify: () => {
+        expect(index).toBeGreaterThanOrEqual(0);
+        expect(routeMethod.methodSource).toContain(
+          "for (const permission of [",
+        );
+        for (const permission of permissions)
+          expect(routeMethod.methodSource).toContain(`"${permission}"`);
+        expect(routeMethod.methodSource).toContain(
+          "const denied = await requirePermission(request, permission)",
+        );
+        expect(routeMethod.methodSource).toContain(
+          "if (denied) return denied;",
+        );
+        expect(index).toBeLessThan(
+          routeMethod.methodSource.indexOf(
+            "listPartnerServiceReviews(request.nextUrl.searchParams)",
+          ),
+        );
+      },
+    };
+  }
+
+  const relationshipOperations: Record<
+    string,
+    {
+      helper:
+        | "getPartnerRelationshipContext"
+        | "handlePartnerRelationshipWrite";
+      kind?: "create" | "invite" | "workflow" | "resend" | "revoke" | "enable";
+      permissions: string[];
+    }
+  > = {
+    [`POST ${prefix}accounts/route.ts`]: {
+      helper: "handlePartnerRelationshipWrite",
+      kind: "create",
+      permissions: ["partners.accounts.manage", "partners.invitations.send"],
+    },
+    [`POST ${prefix}accounts/[accountId]/enable/route.ts`]: {
+      helper: "handlePartnerRelationshipWrite",
+      kind: "enable",
+      permissions: ["partners.accounts.manage"],
+    },
+    [`GET ${prefix}accounts/[accountId]/workflow/route.ts`]: {
+      helper: "getPartnerRelationshipContext",
+      permissions: ["partners.accounts.read"],
+    },
+    [`POST ${prefix}accounts/[accountId]/workflow/route.ts`]: {
+      helper: "handlePartnerRelationshipWrite",
+      kind: "workflow",
+      permissions: ["partners.accounts.manage"],
+    },
+    [`POST ${prefix}invitations/route.ts`]: {
+      helper: "handlePartnerRelationshipWrite",
+      kind: "invite",
+      permissions: ["partners.invitations.send"],
+    },
+    [`POST ${prefix}invitations/resend/route.ts`]: {
+      helper: "handlePartnerRelationshipWrite",
+      kind: "resend",
+      permissions: ["partners.invitations.send"],
+    },
+    [`POST ${prefix}invitations/revoke/route.ts`]: {
+      helper: "handlePartnerRelationshipWrite",
+      kind: "revoke",
+      permissions: ["partners.invitations.revoke"],
+    },
+  };
+  const relationship = relationshipOperations[routeKey];
+  if (relationship) {
+    const helperSource = fs.readFileSync(
+      path.resolve(
+        API_ROOT,
+        "src/lib/partner-relationship-management-route.ts",
+      ),
+      "utf8",
+    );
+    const helperStart = helperSource.indexOf(
+      `function ${relationship.helper}(`,
+    );
+    const helperRest = helperSource.slice(helperStart);
+    const nextHelper = /\nexport (?:async )?function /u.exec(helperRest);
+    const helper = helperRest.slice(0, nextHelper?.index ?? helperRest.length);
+    const index = routeMethod.methodSource.indexOf(`${relationship.helper}(`);
+    return {
+      index,
+      permissions: relationship.permissions,
+      verify: () => {
+        expect(helperStart).toBeGreaterThanOrEqual(0);
+        expect(index).toBeGreaterThanOrEqual(0);
+        expect(routeMethod.fileSource).toContain(
+          'from "@/lib/partner-relationship-management-route"',
+        );
+        expect(routeMethod.methodSource.slice(0, index)).not.toMatch(
+          /\brequest\.(?:arrayBuffer|formData|json|text)\s*\(|\b(?:fetch|getDb)\s*\(/u,
+        );
+        for (const permission of relationship.permissions)
+          expect(helper).toContain(`"${permission}"`);
+
+        if (relationship.kind) {
+          expect(routeMethod.methodSource).toContain(`"${relationship.kind}"`);
+          const guardIndex = helper.indexOf("beginTeamMutation(");
+          expect(guardIndex).toBeGreaterThanOrEqual(0);
+          expect(guardIndex).toBeLessThan(helper.indexOf("getDb()"));
+          expect(guardIndex).toBeLessThan(
+            helper.indexOf("readBoundedJsonRequest("),
+          );
+          expect(helper).toContain('principalTypes: ["human"]');
+          expect(helper).toContain("requiresIdempotency: true");
+          expect(helper).toContain(
+            "if (!boundary.ok) return boundary.response;",
+          );
+        } else {
+          const guardIndex = helper.indexOf("requirePermission(");
+          expect(guardIndex).toBeGreaterThanOrEqual(0);
+          expect(guardIndex).toBeLessThan(helper.indexOf("getDb()"));
+          expect(helper).toContain("if (denied) return denied;");
+        }
+      },
+    };
+  }
+
   const structuredRoutes: Record<
     string,
     { helper: string; file: string; operation?: string; permissions: string[] }

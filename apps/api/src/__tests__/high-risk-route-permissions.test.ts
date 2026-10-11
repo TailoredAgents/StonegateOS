@@ -199,9 +199,11 @@ describe("high-risk route permission contracts", () => {
     "$method $path requires $permission before parsing or effects",
     (contract) => {
       const source = methodSource(contract);
-      const guardIndex = Math.max(
-        source.indexOf("requirePermission("),
-        source.indexOf("beginTeamMutation("),
+      const guardIndex = Math.min(
+        ...[
+          source.indexOf("requirePermission("),
+          source.indexOf("beginTeamMutation("),
+        ].filter((index) => index >= 0),
       );
       const permissionIndex = source.indexOf(
         `"${contract.permission}"`,

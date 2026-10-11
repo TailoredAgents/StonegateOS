@@ -382,7 +382,7 @@ describe("Outbound operator experience", () => {
     expect(contactActions).toContain("unambiguous time");
     expect(outbound).toContain('action="/team/sales/outbound"');
     expect(outbound).not.toContain('action="/team"');
-    expect(partners).toContain('action="/team/partners"');
+    expect(partners).toContain('action={teamSurfaceHref("partners")}');
     expect(partners).toContain('name="p_admin" value="relationships"');
     expect(partners).not.toContain('action="/team"');
     expect(selection).toContain(

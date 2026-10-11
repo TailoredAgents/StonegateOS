@@ -2,7 +2,9 @@ import fs from "node:fs";
 import path from "node:path";
 
 function source(relativePath: string): string {
-  return fs.readFileSync(path.join(process.cwd(), relativePath), "utf8");
+  return fs
+    .readFileSync(path.join(process.cwd(), relativePath), "utf8")
+    .replace(/\r\n?/gu, "\n");
 }
 
 describe("Partner job change request lifecycle", () => {

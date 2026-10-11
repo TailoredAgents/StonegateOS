@@ -1,10 +1,7 @@
 import { NextRequest } from "next/server";
 import { jest as esmJest } from "@jest/globals";
 
-type JestWithEsmMocks = Pick<
-  typeof globalThis.jest,
-  "clearAllMocks" | "fn"
-> & {
+type JestWithEsmMocks = Pick<typeof globalThis.jest, "clearAllMocks" | "fn"> & {
   unstable_mockModule: (
     moduleName: string,
     moduleFactory: () => unknown,
@@ -257,7 +254,7 @@ function resetState(): void {
       contactId: CONTACT_ID,
       status: "sent",
       revision: 3,
-      expiresAt: new Date("2026-09-06T16:00:00.000Z"),
+      expiresAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000),
       refreshRequestedAt: null,
     },
     auditWrites: [],

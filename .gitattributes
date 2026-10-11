@@ -1,0 +1,3 @@
+# Contentlayer's numeric front-matter parser retains carriage returns. Keep
+# MDX content on LF across Windows and Linux so page metadata is not skipped.
+apps/site/content/**/*.mdx text eol=lf

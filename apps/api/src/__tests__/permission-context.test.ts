@@ -133,8 +133,6 @@ describe("permission principal resolution", () => {
       sessionId: "11111111-1111-4111-8111-111111111111",
       authMethod: "team_session",
       authenticatedAt: expect.any(String) as unknown,
-      assuranceLevel: "aal1",
-      mfaVerifiedAt: null,
     });
   });
 
@@ -162,8 +160,6 @@ describe("permission principal resolution", () => {
       sessionId: "11111111-1111-4111-8111-111111111111",
       authMethod: "break_glass",
       authenticatedAt: expect.any(String) as unknown,
-      assuranceLevel: "aal1",
-      mfaVerifiedAt: null,
     });
   });
 
@@ -188,8 +184,6 @@ describe("permission principal resolution", () => {
       principalLabel: null,
       sessionId: null,
       authenticatedAt: null,
-      assuranceLevel: null,
-      mfaVerifiedAt: null,
     });
   });
 

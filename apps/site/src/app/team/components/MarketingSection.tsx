@@ -1030,7 +1030,12 @@ export async function MarketingSection(props: {
               )}
             </div>
 
-            <div className="mt-3 hidden overflow-x-auto sm:block">
+            <div
+              className="mt-3 hidden overflow-x-auto sm:block"
+              role="region"
+              aria-label="Google Ads account performance table"
+              tabIndex={0}
+            >
               <table className="min-w-[860px] text-left text-sm">
                 <thead>
                   <tr className="text-xs font-semibold uppercase tracking-wide text-slate-500">
@@ -1146,7 +1151,12 @@ export async function MarketingSection(props: {
                 )}
               </div>
 
-              <div className="mt-3 hidden overflow-x-auto sm:block">
+              <div
+                className="mt-3 hidden overflow-x-auto sm:block"
+                role="region"
+                aria-label="Google Ads campaign performance table"
+                tabIndex={0}
+              >
                 <table className="min-w-full text-left text-sm">
                   <thead>
                     <tr className="text-xs font-semibold uppercase tracking-wide text-slate-500">

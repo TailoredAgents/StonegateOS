@@ -1,11 +1,28 @@
-jest.mock("nanoid", () => ({ nanoid: jest.fn(() => "test-public-token") }));
-
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import { NextRequest } from "next/server";
-import { POST as intakeLead } from "../../app/api/web/lead-intake/route";
-import { POST as holdQuote } from "../../app/api/public/quotes/[token]/hold/route";
-import { POST as bookQuote } from "../../app/api/public/quotes/[token]/book/route";
+import { jest } from "@jest/globals";
+
+jest.unstable_mockModule("nanoid", () => ({
+  nanoid: jest.fn(() => "test-public-token"),
+}));
+jest.unstable_mockModule("@/lib/quote-v2-scheduling-route", () => ({
+  maybeHandleQuoteV2Availability: jest.fn(() =>
+    Promise.resolve({ handled: false }),
+  ),
+  maybeHandleQuoteV2Book: jest.fn(() => Promise.resolve({ handled: false })),
+  maybeHandleQuoteV2Hold: jest.fn(() => Promise.resolve({ handled: false })),
+}));
+
+const { POST: intakeLead } = await import(
+  "../../app/api/web/lead-intake/route"
+);
+const { POST: holdQuote } = await import(
+  "../../app/api/public/quotes/[token]/hold/route"
+);
+const { POST: bookQuote } = await import(
+  "../../app/api/public/quotes/[token]/book/route"
+);
 
 const ROOT = path.resolve(__dirname, "../../../..");
 const source = (relativePath: string): string =>

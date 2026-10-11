@@ -6,7 +6,7 @@ Use this checklist for changes that affect live operations (Stonegate or any TA 
 
 This checklist applies to:
 
-- `apps/site` (public site + `/team` + `/partners`)
+- `apps/site` (public site, booking, Quote V2, `/team`, `/mobile`, and `/partners`)
 - `apps/api` (API + admin routes)
 - `outbox-worker` (background jobs)
 
@@ -18,17 +18,25 @@ This checklist applies to:
 
 2. Validate locally (or in a dev/staging deployment)
    - `pnpm -w build`
-   - If you changed DB schema: `pnpm -w db:migrate`
+   - `pnpm docs:check`
+   - If you changed DB schema: validate the exact targeted migration in an isolated database; never test a reset or destructive migration against production
    - If tests exist for your area: `pnpm -w test:e2e` (or at least the relevant spec)
+   - For Team navigation, permissions, responsive behavior, or shared shell changes: `pnpm test:e2e:team-audit`
+   - For mobile changes: run the relevant mobile contract/E2E tests and preserve the approved 320 px and 375 px baselines
 
 3. Config/Secrets sanity
    - Any new env vars added? Ensure they’re set in Render for **site + api + worker** as needed.
    - If URLs changed: confirm `API_BASE_URL`, `NEXT_PUBLIC_API_BASE_URL`, `NEXT_PUBLIC_SITE_URL`, `SITE_URL`, and the exact Twilio Console callback origin in `TWILIO_WEBHOOK_PUBLIC_BASE_URL`.
    - Confirm provider health is expected (Twilio/Meta/Google Ads/etc.).
+   - Record enabled/disabled state—not secret values—for Quote V2, appointment media, mobile offline media, Mobile Spend, and Square flags affected by the release.
+   - Confirm `DB_MIGRATION_TARGET` is explicitly set to the reviewed target on the API service.
 
 4. Deployment safety
    - Prefer small, reversible deploys.
    - For high-risk changes, schedule outside peak hours.
+   - Preserve a known-good Render revision and define the code/config rollback before deployment.
+   - Use additive migrations and forward fixes; do not reset, reseed, truncate, or bulk-rewrite the live Stonegate database.
+   - Use sanitized test records and controlled phone/email/payment identities.
 
 ### Required Partner Portal release gate
 
@@ -92,6 +100,21 @@ Manual verification (minimum):
 5. Worker fundamentals
    - Worker is running and draining `outbox_events`
    - Any background agent you rely on (SEO, marketing sync) is not erroring
+
+6. Team fundamentals
+   - Sign in with a controlled Team account
+   - Open Inbox, Contacts, Quotes, Calendar, and the affected permission-gated surface
+   - Verify that denied roles remain denied and authorized roles retain access
+
+7. Mobile fundamentals
+   - Open `/mobile` with a controlled account on a supported phone width
+   - Verify Today/My Day, one job detail, customer quick actions, and the affected media/payment/completion/Spend path
+   - Confirm offline/retry indicators truthfully reflect state where the release touches them
+
+8. Quote, payment, and expense gates when affected
+   - Verify the exact Quote V2 flags and complete one controlled staff-to-customer decision journey
+   - Verify Square only with an approved sandbox/test identity; do not charge a real customer during release validation
+   - Verify crew submission and manager approval permissions separately for Spend/Expenses
 
 ## Rollback plan
 

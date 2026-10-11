@@ -100,11 +100,13 @@ export async function QuoteV2BuilderSection({
   initialContactId,
   initialPropertyId,
   initialPartnerContext,
+  returnTo,
 }: {
   principal: TeamRequestPrincipal;
   initialContactId?: string;
   initialPropertyId?: string;
   initialPartnerContext?: InitialPartnerQuoteContext;
+  returnTo?: string | null;
 }): Promise<ReactElement> {
   const company = getPublicCompanyProfile();
   const hasSendPermission = hasTeamPermissionValue(
@@ -169,6 +171,7 @@ export async function QuoteV2BuilderSection({
         initialServiceLines={verifiedPartnerContext?.serviceLines}
         initialContactId={initialContactId}
         initialPropertyId={initialPropertyId}
+        returnTo={returnTo}
         partnerContext={
           verifiedPartnerContext
             ? {

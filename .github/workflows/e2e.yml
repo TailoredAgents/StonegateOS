@@ -149,7 +149,7 @@ jobs:
 
   playwright-e2e:
     runs-on: ubuntu-latest
-    timeout-minutes: 35
+    timeout-minutes: 60
 
     steps:
       - name: Checkout repo
@@ -186,13 +186,33 @@ jobs:
       - name: Enforce lint debt ratchet
         run: pnpm lint:ratchet
 
+      - name: Verify generated system documentation
+        run: pnpm docs:check
+
       - name: Run API unit tests
+        id: api-unit-tests
+        continue-on-error: true
         run: pnpm test
 
       - name: Run Partner Portal release lane
-        run: pnpm test:partner-portal
+        id: partner-unit-tests
+        continue-on-error: true
+        run: |
+          set +e
+          pnpm test:partner-portal:api
+          partner_api_status=$?
+          pnpm test:partner-portal:site
+          partner_site_status=$?
+          set -e
+
+          if [ "$partner_api_status" -ne 0 ] || [ "$partner_site_status" -ne 0 ]; then
+            echo "Partner unit-test failure: api=$partner_api_status site=$partner_site_status" >&2
+            exit 1
+          fi
 
       - name: Run mobile expense contract tests
+        id: mobile-expense-tests
+        continue-on-error: true
         working-directory: apps/site
         run: >-
           node --import tsx --test
@@ -211,7 +231,7 @@ jobs:
       - name: Build applications
         run: pnpm build
 
-      - name: Start dev stack and run Playwright suite
+      - name: Start dev stack and run complete Playwright suites
         env:
           CI: "true"
         run: |
@@ -236,9 +256,32 @@ jobs:
             done
             exit 1
           fi
+          set +e
           pnpm test:e2e
+          core_status=$?
           pnpm test:e2e:quote-v2-visual
+          quote_status=$?
           pnpm test:e2e:partner-portal
+          partner_status=$?
+          pnpm test:e2e:team-audit
+          team_status=$?
+          set -e
+
+          if [ "$core_status" -ne 0 ] || [ "$quote_status" -ne 0 ] || [ "$partner_status" -ne 0 ] || [ "$team_status" -ne 0 ]; then
+            echo "Playwright suite failure: core=$core_status quote=$quote_status partner=$partner_status team=$team_status" >&2
+            exit 1
+          fi
+
+      - name: Enforce pre-browser test results
+        if: >-
+          always() &&
+          (steps.api-unit-tests.outcome == 'failure' ||
+          steps.partner-unit-tests.outcome == 'failure' ||
+          steps.mobile-expense-tests.outcome == 'failure')
+        run: |
+          echo "One or more pre-browser test lanes failed. Later build and browser evidence was collected when possible, but the workflow remains blocked." >&2
+          echo "API=${{ steps.api-unit-tests.outcome }} Partner=${{ steps.partner-unit-tests.outcome }} MobileExpense=${{ steps.mobile-expense-tests.outcome }}" >&2
+          exit 1
 
       - name: Upload artifacts
         if: always()

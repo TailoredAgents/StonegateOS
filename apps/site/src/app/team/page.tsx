@@ -41,6 +41,8 @@ import {
   parsePersonalSessionInventory,
   type PersonalSessionInventory,
 } from "./settings-sessions";
+import { safeQuoteWorkspaceReturnPath } from "./quotes-workspace";
+import { safePartnerReturnPath } from "./partner-entry-navigation";
 
 export const metadata = {
   title: "Stonegate Team Console",
@@ -127,7 +129,9 @@ export default async function TeamPage({
     p_admin_cursor?: string;
     p_admin_q?: string;
     p_admin_status?: string;
+    p_return?: string;
     quoteMode?: string;
+    quote_return?: string;
     view?: string;
     subview?: string;
     onlyOutbound?: string;
@@ -424,6 +428,7 @@ export default async function TeamPage({
       ? params.salesActions
       : undefined;
   const quoteModeParam = forcedQuoteMode ?? requestedQuoteMode;
+  const quoteReturnTo = safeQuoteWorkspaceReturnPath(params?.quote_return);
   const settingsSetup = params?.setup === "1";
   const settingsSaved = params?.saved === "1";
   const settingsError =
@@ -510,6 +515,7 @@ export default async function TeamPage({
         : undefined,
     outboundReturn:
       typeof params?.out_return === "string" ? params.out_return : undefined,
+    returnTo: safePartnerReturnPath(params?.p_return) ?? undefined,
   };
 
   const flash = cookieStore.get("myst-flash")?.value ?? null;
@@ -677,6 +683,7 @@ export default async function TeamPage({
       partnerTargetType: partnerTargetTypeParam,
       partnerTargetId: partnerTargetIdParam,
       memberId: memberIdParam,
+      returnTo: quoteReturnTo,
     },
     expenses: {
       view: params.expenseView,

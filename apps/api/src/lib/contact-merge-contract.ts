@@ -236,6 +236,11 @@ export const CONTACT_MERGE_DEPENDENCY_RULES = [
   { key: "crm_tasks.contact_id", label: "CRM tasks", disposition: "move" },
   { key: "leads.contact_id", label: "leads", disposition: "move" },
   {
+    key: "sales_opportunities.contact_id",
+    label: "Quote V2 sales opportunities",
+    disposition: "move",
+  },
+  {
     key: "team_inbox_new_lead_acknowledgements.contact_id",
     label: "new-lead acknowledgements",
     disposition: "deduplicate_target_wins",
@@ -288,6 +293,11 @@ export const CONTACT_MERGE_DEPENDENCY_RULES = [
   {
     key: "partner_users.org_contact_id",
     label: "partner portal users",
+    disposition: "block",
+  },
+  {
+    key: "partner_accounts.portal_contact_id",
+    label: "partner account portal contact anchor",
     disposition: "block",
   },
   {

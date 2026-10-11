@@ -99,10 +99,15 @@ describe("modern Team shell accessibility contract", () => {
   it("keeps the five daily anchors ordered and makes reduced role sets fill the phone bar", () => {
     const shell = component("TeamAppShell.tsx");
     const page = readFileSync(join(TEAM_ROOT, "page.tsx"), "utf8");
-
-    expect(page).toContain(
-      'const quickIds = ["calendar", "inbox", "contacts", "quotes", "expenses"]',
+    const registry = readFileSync(
+      join(TEAM_ROOT, "surface-registry.ts"),
+      "utf8",
     );
+
+    expect(registry).toMatch(
+      /TEAM_PRIMARY_NAVIGATION_IDS[\s\S]*"calendar",[\s\S]*"inbox",[\s\S]*"contacts",[\s\S]*"partners",[\s\S]*"quotes",[\s\S]*"expenses"/u,
+    );
+    expect(page).toContain("const quickIds = TEAM_PRIMARY_NAVIGATION_IDS");
     expect(shell).toContain("const MAX_MOBILE_DAILY_ANCHORS = 5");
     expect(shell).toContain(
       "props.quickItems.slice(0, MAX_MOBILE_DAILY_ANCHORS)",
@@ -133,6 +138,27 @@ describe("modern Team shell accessibility contract", () => {
     expect(shell).toContain("writeTeamStorage(SIDEBAR_STORAGE_KEY");
     expect(shell).toContain("writeTeamStorage(GROUPS_STORAGE_KEY");
     expect(shell).toContain('{enabled ? "Access" : "Restricted"}');
+  });
+
+  it("keeps modern shell navigation colors behind theme-aware semantic tokens", () => {
+    const shell = component("TeamAppShell.tsx");
+    const globalStyles = readFileSync(
+      join(process.cwd(), "../site/src/app/globals.css"),
+      "utf8",
+    );
+    for (const token of [
+      "--team-nav-active-surface",
+      "--team-nav-active-border",
+      "--team-nav-active-text",
+      "--team-nav-active-icon",
+      "--team-nav-active-shadow",
+      "--team-control-hover-border",
+    ]) {
+      expect(globalStyles).toContain(token);
+      expect(shell).toContain(`var(${token})`);
+    }
+    expect(shell).not.toContain("bg-primary-50");
+    expect(shell).not.toContain("focus:ring-primary-200");
   });
 
   it("supports keyboard-safe classic group menus", () => {

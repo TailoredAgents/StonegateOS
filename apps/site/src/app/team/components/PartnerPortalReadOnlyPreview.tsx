@@ -28,19 +28,24 @@ import {
 import { partnerRelationshipsHref } from "../partner-entry-navigation";
 import { teamButtonClass } from "./team-ui";
 
-function previewHref(orgContactId: string, jobId?: string | null): Route {
+function previewHref(
+  orgContactId: string,
+  jobId?: string | null,
+  returnTo?: string,
+): Route {
   return partnerRelationshipsHref({
     filters: {
       selectedId: orgContactId,
       preview: "1",
       previewJobId: jobId ?? undefined,
+      returnTo,
     },
   });
 }
 
-function managementHref(orgContactId: string): Route {
+function managementHref(orgContactId: string, returnTo?: string): Route {
   return partnerRelationshipsHref({
-    filters: { selectedId: orgContactId },
+    filters: { selectedId: orgContactId, returnTo },
   });
 }
 
@@ -150,9 +155,11 @@ function SummaryCard({
 function PreviewUnavailable({
   orgContactId,
   status,
+  returnTo,
 }: {
   orgContactId: string;
   status: number | null;
+  returnTo?: string;
 }) {
   const missing = status === 404;
   const denied = status === 403;
@@ -178,7 +185,7 @@ function PreviewUnavailable({
               : "No account, scheduling, payment, message, or membership information was changed. Try again from Partner management."}
         </p>
         <Link
-          href={managementHref(orgContactId)}
+          href={managementHref(orgContactId, returnTo)}
           className={`${teamButtonClass("secondary", "sm")} mt-5`}
         >
           <ArrowLeft className="h-4 w-4" aria-hidden="true" />
@@ -215,9 +222,11 @@ function ReadOnlyBanner() {
 function JobDetail({
   preview,
   orgContactId,
+  returnTo,
 }: {
   preview: PartnerStaffPreviewPayload;
   orgContactId: string;
+  returnTo?: string;
 }) {
   const job = preview.selectedJob;
   if (!job) {
@@ -309,7 +318,7 @@ function JobDetail({
             </p>
           </div>
           <Link
-            href={previewHref(orgContactId)}
+            href={previewHref(orgContactId, undefined, returnTo)}
             className={teamButtonClass("secondary", "sm")}
           >
             Close job
@@ -574,10 +583,12 @@ export async function PartnerPortalReadOnlyPreview({
   principal,
   orgContactId,
   selectedJobId,
+  returnTo,
 }: {
   principal: TeamRequestPrincipal;
   orgContactId: string;
   selectedJobId?: string | null;
+  returnTo?: string;
 }): Promise<React.ReactElement> {
   const query = new URLSearchParams();
   if (selectedJobId) query.set("jobId", selectedJobId);
@@ -594,6 +605,7 @@ export async function PartnerPortalReadOnlyPreview({
       <PreviewUnavailable
         orgContactId={orgContactId}
         status={response?.status ?? null}
+        returnTo={returnTo}
       />
     );
   }
@@ -601,7 +613,13 @@ export async function PartnerPortalReadOnlyPreview({
     await response.json().catch(() => null),
   );
   if (!preview) {
-    return <PreviewUnavailable orgContactId={orgContactId} status={500} />;
+    return (
+      <PreviewUnavailable
+        orgContactId={orgContactId}
+        status={500}
+        returnTo={returnTo}
+      />
+    );
   }
 
   return (
@@ -611,7 +629,7 @@ export async function PartnerPortalReadOnlyPreview({
     >
       <div className="flex flex-wrap items-center justify-between gap-3">
         <Link
-          href={managementHref(orgContactId)}
+          href={managementHref(orgContactId, returnTo)}
           className={teamButtonClass("secondary", "sm")}
         >
           <ArrowLeft className="h-4 w-4" aria-hidden="true" />
@@ -710,7 +728,7 @@ export async function PartnerPortalReadOnlyPreview({
                 return (
                   <li key={job.id}>
                     <Link
-                      href={previewHref(orgContactId, job.id)}
+                      href={previewHref(orgContactId, job.id, returnTo)}
                       aria-current={active ? "page" : undefined}
                       className={`block min-h-11 rounded-xl border p-3 transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-500 ${
                         active
@@ -745,7 +763,11 @@ export async function PartnerPortalReadOnlyPreview({
           )}
         </PartnerPanel>
 
-        <JobDetail preview={preview} orgContactId={orgContactId} />
+        <JobDetail
+          preview={preview}
+          orgContactId={orgContactId}
+          returnTo={returnTo}
+        />
       </div>
     </section>
   );

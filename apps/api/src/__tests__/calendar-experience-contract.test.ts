@@ -84,7 +84,7 @@ describe("Team Calendar experience contracts", () => {
     );
     expect(crewSelector).not.toContain("space-y-3 sm:col-span-2");
     expect(actions).toContain('className="grid min-w-0 grid-cols-1 gap-3"');
-    expect(actions).toMatch(/showSplitPercentages=\{false\}\s+stacked/u);
+    expect(actions).toMatch(/<CrewPayoutSelector[\s\S]*?\sstacked\s*\/>/u);
     expect(actions).not.toContain('className="grid gap-2 sm:grid-cols-2"');
     expect(actions).toContain("htmlFor={crewConfirmationFieldId}");
     expect(actions).toContain("htmlFor={reviewRequestFieldId}");

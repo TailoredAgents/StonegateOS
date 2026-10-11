@@ -59,11 +59,11 @@ describe("Team audit executable-test contract", () => {
     }
   });
 
-  it("keeps the nine remaining audit skips limited to declared project or viewport routing", () => {
+  it("keeps the fourteen audit skips limited to declared project or viewport routing", () => {
     const skipCalls = auditSpecSources().flatMap(({ source }) =>
       calls(source, "test.skip("),
     );
-    expect(skipCalls).toHaveLength(9);
+    expect(skipCalls).toHaveLength(14);
     for (const call of skipCalls) {
       expect(call).toMatch(/testInfo\.project\.name|viewport\.width/u);
     }

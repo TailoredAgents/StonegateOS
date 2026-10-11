@@ -160,7 +160,11 @@ describe("partner proof-package artifacts", () => {
         byteSize: bytes.length,
         sha256: createHash("sha256").update(bytes).digest("hex"),
       });
-      expect((await stat(path)).mode & 0o777).toBe(0o600);
+      // Windows does not implement POSIX permission bits; keep the privacy
+      // assertion strict on every platform where the mode is meaningful.
+      if (process.platform !== "win32") {
+        expect((await stat(path)).mode & 0o777).toBe(0o600);
+      }
       expect(consumed).toBe(2);
     } finally {
       await rm(directory, { recursive: true, force: true });

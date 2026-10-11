@@ -4,10 +4,10 @@
   "private": true,
   "scripts": {
     "dev": "next dev --turbopack -p 3001",
-    "build": "NODE_OPTIONS=--max-old-space-size=4096 next build --turbopack",
+    "build": "cross-env NODE_OPTIONS=--max-old-space-size=4096 next build --turbopack",
     "start": "next start",
     "lint": "eslint",
-    "test": "NODE_OPTIONS=--experimental-vm-modules jest --config jest.config.cjs --passWithNoTests",
+    "test": "node scripts/run-jest-partitions.cjs",
     "typecheck": "tsc --project tsconfig.typecheck.json"
   },
   "dependencies": {

@@ -15,7 +15,7 @@ const REPO_ROOT = path.resolve(API_ROOT, "../..");
 const CONTACT_A = "11111111-1111-4111-8111-111111111111";
 const CONTACT_B = "22222222-2222-4222-8222-222222222222";
 
-const jest = esmJest as unknown as Pick<typeof globalThis.jest, "fn">;
+const testJest = esmJest as unknown as Pick<typeof globalThis.jest, "fn">;
 
 function apiSource(relativePath: string): string {
   return fs.readFileSync(path.resolve(API_ROOT, relativePath), "utf8");
@@ -52,18 +52,18 @@ function accessExecutor(
 ): PropertyWriteExecutor {
   let call = 0;
   return {
-    select: jest.fn(() => {
+    select: testJest.fn(() => {
       const rows = rowsBySelect[call] ?? [];
       call += 1;
       const joined = {
-        where: jest.fn(() => ({
-          limit: jest.fn().mockResolvedValue(rows),
+        where: testJest.fn(() => ({
+          limit: testJest.fn().mockResolvedValue(rows),
         })),
       };
       return {
-        from: jest.fn(() => ({
-          innerJoin: jest.fn(() => joined),
-          leftJoin: jest.fn(() => joined),
+        from: testJest.fn(() => ({
+          innerJoin: testJest.fn(() => joined),
+          leftJoin: testJest.fn(() => joined),
         })),
       };
     }),
@@ -76,7 +76,7 @@ function bulkExecutor(
 ): PropertyWriteExecutor {
   let call = 0;
   return {
-    select: jest.fn(() => {
+    select: testJest.fn(() => {
       const links = call === 0 ? associated : compatibility;
       call += 1;
       const rows = links.map((link) => ({
@@ -84,16 +84,16 @@ function bulkExecutor(
         property: link.property,
       }));
       const joined = {
-        where: jest.fn(() => ({
-          orderBy: jest.fn(() => ({
-            limit: jest.fn().mockResolvedValue(rows),
+        where: testJest.fn(() => ({
+          orderBy: testJest.fn(() => ({
+            limit: testJest.fn().mockResolvedValue(rows),
           })),
         })),
       };
       return {
-        from: jest.fn(() => ({
-          innerJoin: jest.fn(() => joined),
-          leftJoin: jest.fn(() => joined),
+        from: testJest.fn(() => ({
+          innerJoin: testJest.fn(() => joined),
+          leftJoin: testJest.fn(() => joined),
         })),
       };
     }),
@@ -200,11 +200,9 @@ describe("association-first property readers", () => {
       ],
     );
 
-    const rows = await loadContactPropertiesForContacts(
-      executor,
-      [CONTACT_B],
-      { limit: 100 },
-    );
+    const rows = await loadContactPropertiesForContacts(executor, [CONTACT_B], {
+      limit: 100,
+    });
 
     expect(rows).toHaveLength(1);
     expect(rows[0]).toMatchObject({

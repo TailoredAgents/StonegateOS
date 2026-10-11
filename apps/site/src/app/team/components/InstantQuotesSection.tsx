@@ -970,7 +970,13 @@ function renderCloseLoopSliceLearning(
   );
 }
 
-function InstantQuotesUnavailable({ detail }: { detail: string }) {
+function InstantQuotesUnavailable({
+  detail,
+  returnTo,
+}: {
+  detail: string;
+  returnTo?: string | null;
+}) {
   return (
     <section
       className="rounded-2xl border border-rose-200 bg-rose-50 p-5 text-sm text-rose-900"
@@ -983,7 +989,10 @@ function InstantQuotesUnavailable({ detail }: { detail: string }) {
       <p className="mt-1">{detail} This is not an empty quote list.</p>
       <a
         className={`mt-3 ${teamButtonClass("secondary", "sm")}`}
-        href={quoteWorkspaceHref("instant", { query: { retry: "1" } })}
+        href={quoteWorkspaceHref("instant", {
+          query: { retry: "1" },
+          returnTo,
+        })}
       >
         Retry instant quotes
       </a>
@@ -993,8 +1002,10 @@ function InstantQuotesUnavailable({ detail }: { detail: string }) {
 
 export async function InstantQuotesSection({
   compact = false,
+  returnTo,
 }: {
   compact?: boolean;
+  returnTo?: string | null;
 } = {}): Promise<React.ReactElement> {
   const principal = await requireCurrentTeamPrincipal();
   let res: Response;
@@ -1002,13 +1013,17 @@ export async function InstantQuotesSection({
     res = await callAdminApiAs(principal, "/api/admin/instant-quotes?limit=25");
   } catch {
     return (
-      <InstantQuotesUnavailable detail="The CRM service could not be reached." />
+      <InstantQuotesUnavailable
+        detail="The CRM service could not be reached."
+        returnTo={returnTo}
+      />
     );
   }
   if (!res.ok) {
     return (
       <InstantQuotesUnavailable
         detail={`The CRM returned HTTP ${res.status}.`}
+        returnTo={returnTo}
       />
     );
   }
@@ -1017,7 +1032,10 @@ export async function InstantQuotesSection({
   );
   if (!parsed.success) {
     return (
-      <InstantQuotesUnavailable detail="The CRM returned an unreadable response." />
+      <InstantQuotesUnavailable
+        detail="The CRM returned an unreadable response."
+        returnTo={returnTo}
+      />
     );
   }
   const data: {

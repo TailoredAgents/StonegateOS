@@ -27,7 +27,7 @@ describe("Team audit runtime environment safety", () => {
 
     expect(googleTag).toContain('"G-E2ETEST"');
     expect(googleTag).toContain("AUDIT_SENTINEL_TAG_IDS.has(normalized)");
-    expect(metaPixel).toContain("/^\\d{5,32}$/u.test(sanitized)");
+    expect(metaPixel).toContain("/^\\d{5,32}$/u.test(id)");
   });
 
   it("accepts the same loopback-only providers and LocalStack for a controlled production artifact", () => {
@@ -290,6 +290,30 @@ describe("Team audit runtime environment safety", () => {
         "GOOGLE_ADS_FAKE_CONTROL_URL must share the GOOGLE_ADS_API_BASE_URL origin.",
         "GOOGLE_ADS_FAKE_CONTROL_URL must share the GOOGLE_ADS_TOKEN_URL origin.",
       ]),
+    );
+  });
+
+  it("allows an alternate loopback API port only when Twilio callbacks share it", () => {
+    const environment = parse(readFileSync(resolve(ROOT, ".env.e2e")));
+    const alternateApiBase = "http://localhost:3201";
+
+    expect(
+      auditRuntimeSafetyViolations({
+        ...environment,
+        API_BASE_URL: alternateApiBase,
+        NEXT_PUBLIC_API_BASE_URL: alternateApiBase,
+        GOOGLE_CALENDAR_WEBHOOK_URL: alternateApiBase,
+        TWILIO_WEBHOOK_PUBLIC_BASE_URL: alternateApiBase,
+      }),
+    ).toEqual([]);
+    expect(
+      auditRuntimeSafetyViolations({
+        ...environment,
+        API_BASE_URL: alternateApiBase,
+        NEXT_PUBLIC_API_BASE_URL: alternateApiBase,
+      }),
+    ).toContain(
+      "TWILIO_WEBHOOK_PUBLIC_BASE_URL must share the API_BASE_URL origin.",
     );
   });
 

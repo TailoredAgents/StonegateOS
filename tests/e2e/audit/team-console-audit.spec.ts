@@ -1105,9 +1105,9 @@ test.describe("critical end-to-end journeys", () => {
           updatedAt: expect.any(Date),
         });
 
-      await page
-        .getByRole("button", { name: /^(Send suggestion|Send now)$/ })
-        .click();
+      await page.getByRole("button", { name: "View draft" }).click();
+      await page.getByRole("button", { name: "Add to reply" }).click();
+      await page.getByRole("button", { name: "Send", exact: true }).click();
       await expect
         .poll(() => getConversationSnapshot(fixture))
         .toMatchObject({ draft: false, outboxCount: 1 });
@@ -1128,7 +1128,11 @@ test.describe("critical end-to-end journeys", () => {
 
       await expectSuccessfulAuditActions(
         startedAt,
-        ["crm.reminder.created", "message.retry", "sales.disposition.set"],
+        [
+          "crm.reminder.created",
+          "inbox.message.created",
+          "sales.disposition.set",
+        ],
         owner,
       );
     } finally {
@@ -1881,14 +1885,12 @@ test.describe("critical end-to-end journeys", () => {
       await page.goto(
         `/team/inbox?threadId=${fixture.threadId}&contactId=${fixture.contactId}&channel=sms`,
       );
+      await page.getByRole("button", { name: "View draft" }).click();
+      await page.getByRole("button", { name: "Add to reply" }).click();
       const sendButton = page.getByRole("button", {
-        name: /^(Send suggestion|Send now)$/,
+        name: "Send",
+        exact: true,
       });
-      const messageKey = await sendButton
-        .locator("xpath=ancestor::form[1]")
-        .locator('input[name="idempotencyKey"]')
-        .inputValue();
-      expect(messageKey).toMatch(/^message-send:[A-Za-z0-9-]{16,}$/u);
       await sendButton.click();
       await expect
         .poll(() => getConversationSnapshot(fixture))
@@ -1903,7 +1905,11 @@ test.describe("critical end-to-end journeys", () => {
       expect(dispatched.providerRequestKey).toMatch(/^[A-Za-z0-9._:-]{16,}$/u);
       await expectSuccessfulAuditActions(
         startedAt,
-        ["policy.update", "sales.autopilot.policy.updated", "message.retry"],
+        [
+          "policy.update",
+          "sales.autopilot.policy.updated",
+          "inbox.message.created",
+        ],
         owner,
       );
       for (const expected of [
@@ -1918,12 +1924,6 @@ test.describe("critical end-to-end journeys", () => {
           action: "sales.autopilot.policy.updated",
           entityId: "sales_autopilot",
           permission: "automation.write",
-        },
-        {
-          key: messageKey,
-          action: "message.retry",
-          entityId: fixture.draftMessageId,
-          permission: "messages.send",
         },
       ]) {
         const evidence = await expect

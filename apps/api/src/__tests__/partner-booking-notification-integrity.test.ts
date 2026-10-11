@@ -9,7 +9,9 @@ import {
 } from "@/lib/staff-notification-operations";
 
 function source(relativePath: string): string {
-  return fs.readFileSync(path.join(process.cwd(), relativePath), "utf8");
+  return fs
+    .readFileSync(path.join(process.cwd(), relativePath), "utf8")
+    .replace(/\r\n?/gu, "\n");
 }
 
 describe("partner booking handoff integrity", () => {
@@ -67,9 +69,7 @@ describe("partner booking handoff integrity", () => {
   });
 
   it("moves a partner job atomically through a replacement V2 hold", () => {
-    const service = source(
-      "src/lib/partner-portal-v2-scheduling/service.ts",
-    );
+    const service = source("src/lib/partner-portal-v2-scheduling/service.ts");
     const legacyRoute = source("app/api/portal/bookings/route.ts");
     const bookingPage = source(
       "../site/src/app/partners/(portal)/book/page.tsx",
@@ -79,13 +79,21 @@ describe("partner booking handoff integrity", () => {
     );
     expect(service).toContain("export async function reschedulePartnerBooking");
     expect(service).toContain("await acquireScheduleConflictLock(tx)");
-    expect(service).toContain("draft.rescheduleFromPartnerBookingId !== source.booking.id");
+    expect(service).toContain(
+      "draft.rescheduleFromPartnerBookingId !== source.booking.id",
+    );
     expect(service).toContain("eq(appointmentHolds.id, input.holdId)");
     expect(service).toContain('hold.status !== "active"');
     expect(service).toContain('status: "consumed"');
-    expect(service).toContain("eq(partnerBookings.version, source.booking.version)");
-    expect(service).toContain('action: "partner.portal.v2.booking.rescheduled"');
-    expect(service).toContain('reason: "partner.portal.v2.booking.rescheduled"');
+    expect(service).toContain(
+      "eq(partnerBookings.version, source.booking.version)",
+    );
+    expect(service).toContain(
+      'action: "partner.portal.v2.booking.rescheduled"',
+    );
+    expect(service).toContain(
+      'reason: "partner.portal.v2.booking.rescheduled"',
+    );
     expect(legacyRoute).toContain('error: "legacy_route_retired"');
     expect(legacyRoute).not.toContain("rescheduleFromAppointmentId");
     expect(bookingPage).toContain("PartnerBookingWizard");
@@ -96,9 +104,7 @@ describe("partner booking handoff integrity", () => {
   });
 
   it("creates the account job, schedule, audit, and outbox atomically", () => {
-    const service = source(
-      "src/lib/partner-portal-v2-scheduling/service.ts",
-    );
+    const service = source("src/lib/partner-portal-v2-scheduling/service.ts");
     const submitRoute = source(
       "app/api/portal/v2/booking-drafts/[draftId]/submit/route.ts",
     );
@@ -106,9 +112,13 @@ describe("partner booking handoff integrity", () => {
     expect(submitRoute).toContain("ifMatch: requestIfMatch(request)");
     expect(service).toContain('operationHash(\n    "booking.submit"');
     expect(service).toContain("await acquireScheduleConflictLock(tx)");
-    expect(service).toContain("eq(partnerBookings.partnerAccountId, input.actor.accountId)");
+    expect(service).toContain(
+      "eq(partnerBookings.partnerAccountId, input.actor.accountId)",
+    );
     expect(service).toContain("createOperationKeyHash: opHash");
-    expect(service).toContain("requestedByMembershipId: input.actor.membershipId");
+    expect(service).toContain(
+      "requestedByMembershipId: input.actor.membershipId",
+    );
     expect(service).toContain("scopeSnapshot:");
     expect(service).toContain("rateSnapshot:");
     expect(service).toContain('type: "appointment.calendar_sync_requested"');
@@ -117,13 +127,13 @@ describe("partner booking handoff integrity", () => {
   });
 
   it("makes V2 cancellation versioned, replay-safe, audited, and recoverable", () => {
-    const route = source(
-      "app/api/portal/v2/jobs/[jobId]/cancel/route.ts",
-    );
+    const route = source("app/api/portal/v2/jobs/[jobId]/cancel/route.ts");
     expect(route).toContain("readPortalV2IdempotencyKey");
     expect(route).toContain('request.headers.get("if-match")');
     expect(route).toContain("readBoundedJsonRequest(request");
-    expect(route).toContain("createPartnerJobAccessCondition(principal, jobId)");
+    expect(route).toContain(
+      "createPartnerJobAccessCondition(principal, jobId)",
+    );
     expect(route).toContain("cancelOperationKeyHash: idempotency.keyHash");
     expect(route).toContain("version: row.bookingVersion + 1");
     expect(route).toContain("await acquireScheduleConflictLock(tx)");

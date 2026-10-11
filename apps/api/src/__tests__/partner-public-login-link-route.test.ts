@@ -10,6 +10,8 @@ const mockReplaceToken = jest.fn();
 const mockSendEmail = jest.fn();
 const mockSendSms = jest.fn();
 const mockKillSwitch = jest.fn();
+const previousRoutineMagicLoginFlag =
+  process.env["PARTNER_PORTAL_ROUTINE_MAGIC_LOGIN_ENABLED"];
 
 const mockTables = {
   auditLogs: { id: "audit_logs.id" },
@@ -205,6 +207,7 @@ function request(): NextRequest & { json: jest.Mock } {
 
 describe("public partner login-link durable boundary", () => {
   beforeEach(() => {
+    process.env["PARTNER_PORTAL_ROUTINE_MAGIC_LOGIN_ENABLED"] = "true";
     jest.clearAllMocks();
     auditRows.splice(0, auditRows.length);
     lifecycleEvents.splice(0, lifecycleEvents.length);
@@ -240,6 +243,15 @@ describe("public partner login-link durable boundary", () => {
       providerMessageId: "sms-1",
       deliveryCertainty: "accepted",
     });
+  });
+
+  afterAll(() => {
+    if (previousRoutineMagicLoginFlag === undefined) {
+      delete process.env["PARTNER_PORTAL_ROUTINE_MAGIC_LOGIN_ENABLED"];
+    } else {
+      process.env["PARTNER_PORTAL_ROUTINE_MAGIC_LOGIN_ENABLED"] =
+        previousRoutineMagicLoginFlag;
+    }
   });
 
   it("commits token, requested audit, and dispatched evidence before provider I/O", async () => {

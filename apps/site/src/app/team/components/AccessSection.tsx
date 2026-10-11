@@ -378,6 +378,7 @@ export async function AccessSection(): Promise<React.ReactElement> {
             >
               <select
                 name="defaultAssigneeMemberId"
+                aria-label="Default lead assignee"
                 defaultValue={defaultAssigneeMemberId ?? ""}
                 className="w-full rounded-full border border-slate-200 bg-white px-3 py-2 text-xs text-slate-700 sm:min-w-[240px] sm:w-auto"
               >
@@ -576,8 +577,9 @@ export async function AccessSection(): Promise<React.ReactElement> {
                       <input
                         type="checkbox"
                         name="active"
+                        aria-label={`Active access for ${member.name}`}
                         defaultChecked={member.active}
-                        className="mt-1 h-4 w-4 rounded border-slate-300"
+                        className="mt-1 h-6 w-6 rounded border-slate-300"
                       />
                       Active
                     </label>
@@ -585,6 +587,7 @@ export async function AccessSection(): Promise<React.ReactElement> {
                   <div className="flex flex-wrap items-center gap-2">
                     <select
                       name="roleId"
+                      aria-label={`Role for ${member.name}`}
                       defaultValue={member.role?.id ?? ""}
                       disabled={Boolean(rolesError)}
                       className="w-full rounded-full border border-slate-200 px-3 py-2 text-xs text-slate-700 sm:w-auto"
@@ -795,8 +798,9 @@ export async function AccessSection(): Promise<React.ReactElement> {
                 <input
                   type="checkbox"
                   name="active"
+                  aria-label="Active access for new team member"
                   defaultChecked
-                  className="h-4 w-4 rounded border-slate-300"
+                  className="h-6 w-6 rounded border-slate-300"
                 />
                 Active
               </label>

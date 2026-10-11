@@ -14,6 +14,7 @@ const siteRequire = createRequire(`${repo}/apps/site/package.json`);
 const artifact = join(repo, "artifacts/mobile-booking-page");
 const fixture = await mkdtemp(join(tmpdir(), "stonegate-mobile-page-"));
 const fixtureSite = join(fixture, "apps/site");
+const directoryLinkType = process.platform === "win32" ? "junction" : "dir";
 const employeeId = "11111111-1111-4111-8111-111111111111";
 const jobId = "22222222-2222-4222-8222-222222222222";
 const contactId = "33333333-3333-4333-8333-333333333333";
@@ -297,12 +298,20 @@ try {
       !["node_modules", ".next", ".contentlayer"].includes(basename(path)) &&
       !basename(path).startsWith(".env"),
   });
-  await symlink(`${repo}/packages`, join(fixture, "packages"), "dir");
-  await symlink(`${repo}/node_modules`, join(fixture, "node_modules"), "dir");
+  await symlink(
+    `${repo}/packages`,
+    join(fixture, "packages"),
+    directoryLinkType,
+  );
+  await symlink(
+    `${repo}/node_modules`,
+    join(fixture, "node_modules"),
+    directoryLinkType,
+  );
   await symlink(
     `${repo}/apps/site/node_modules`,
     join(fixtureSite, "node_modules"),
-    "dir",
+    directoryLinkType,
   );
   await cp(`${repo}/package.json`, join(fixture, "package.json"));
   const guard = join(fixture, "local-network-only.cjs");
@@ -464,10 +473,41 @@ try {
     page.getByRole("dialog").locator('[name="crewMemberId"]'),
   ).toHaveValue(secondCrewId);
 
+  const savedCompletionDraft = await page.evaluate(
+    ({ employeeId, jobId }) => {
+      const key = `stonegate:mobile-job-draft:v1:${[
+        employeeId,
+        jobId,
+        "completion",
+      ]
+        .map(encodeURIComponent)
+        .join(":")}`;
+      return window.localStorage.getItem(key);
+    },
+    { employeeId, jobId },
+  );
+  assert.ok(savedCompletionDraft, "Expected the completion draft to persist");
+  const savedCompletion = JSON.parse(savedCompletionDraft) as {
+    appointmentVersion: string | null;
+    values?: { values?: { finalTotal?: string } };
+  };
+  assert.equal(savedCompletion.appointmentVersion, noteVersion);
+  assert.equal(savedCompletion.values?.values?.finalTotal, "375");
+
+  const refreshedList = page.waitForResponse((response) => {
+    const requestUrl = new URL(response.url());
+    return (
+      response.request().method() === "GET" &&
+      requestUrl.pathname === "/mobile" &&
+      !requestUrl.searchParams.has("jobId") &&
+      response.ok()
+    );
+  });
   await dialog
     .getByRole("button", { name: "Back to jobs", exact: true })
     .click();
   await expect(dialog).toHaveCount(0);
+  await refreshedList;
   await page
     .getByRole("button", { name: "Open job", exact: true })
     .first()

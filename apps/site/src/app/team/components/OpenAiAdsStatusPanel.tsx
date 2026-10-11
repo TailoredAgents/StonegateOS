@@ -91,7 +91,12 @@ export async function OpenAiAdsStatusPanel({
       </div>
       {status ? (
         <>
-          <div className="mt-4 overflow-x-auto">
+          <div
+            className="mt-4 overflow-x-auto"
+            role="region"
+            aria-label="ChatGPT Ads conversion delivery table"
+            tabIndex={0}
+          >
             <table className="w-full text-left text-sm">
               <caption className="sr-only">
                 Delivery of booking and phone inquiry conversions to OpenAI

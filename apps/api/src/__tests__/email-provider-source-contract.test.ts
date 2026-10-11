@@ -24,7 +24,7 @@ function sourceFiles(directory: string): string[] {
 describe("email provider source and E2E contracts", () => {
   it("routes every active server-side Nodemailer call through one boundary", () => {
     const active = sourceFiles(join(ROOT, "apps/api")).filter(
-      (file) => !file.includes("/src/__tests__/"),
+      (file) => !/[\\/]src[\\/]__tests__[\\/]/u.test(file),
     );
     const providerFile = join(ROOT, "apps/api/src/lib/email-provider.ts");
     const nodemailerUsers = active.filter((file) =>
@@ -54,7 +54,8 @@ describe("email provider source and E2E contracts", () => {
       "MAX_SUBJECT_BYTES = 998",
       "MAX_TEXT_BYTES = 256 * 1024",
       "MAX_ATTACHMENT_COUNT = 4",
-      "MAX_ESTIMATED_WIRE_BYTES = 512 * 1024",
+      "MAX_BASE_MESSAGE_WIRE_BYTES = 512 * 1024",
+      "MAX_ESTIMATED_WIRE_BYTES = 3 * 1024 * 1024",
       "Math.ceil(contentBytes / 3) * 4",
       "MAX_TIMEOUT_MS = 30_000",
       "connectionTimeout: configuration.timeoutMs",

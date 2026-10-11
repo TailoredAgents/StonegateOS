@@ -5,7 +5,12 @@ import { expectTeamStateToPassAutomatedWcag } from "./accessibility";
 const OWNER_STORAGE = "tests/e2e/storage/audit-owner.json";
 const DESKTOP_A11Y_PROJECT = "a11y-chromium-1440-light";
 const PHONE_A11Y_PROJECT = "a11y-chromium-375-dark";
-const A11Y_PROJECTS = new Set([DESKTOP_A11Y_PROJECT, PHONE_A11Y_PROJECT]);
+const A11Y_PROJECT_NAME =
+  /^a11y-chromium-(?:1440|1024|768|375|320)-(?:light|dark)$/u;
+const REPRESENTATIVE_STATE_PROJECTS = new Set([
+  DESKTOP_A11Y_PROJECT,
+  PHONE_A11Y_PROJECT,
+]);
 
 const TEAM_SURFACES = [
   ["Calendar", "/team/calendar"],
@@ -37,7 +42,7 @@ test.describe("authenticated Team WCAG scans @team-a11y", () => {
   test.use({ storageState: OWNER_STORAGE });
 
   test.beforeEach(async ({ page }, testInfo) => {
-    if (!A11Y_PROJECTS.has(testInfo.project.name)) {
+    if (!A11Y_PROJECT_NAME.test(testInfo.project.name)) {
       throw new Error(
         `The Team accessibility suite ran in unsupported project ${testInfo.project.name}.`,
       );
@@ -73,6 +78,10 @@ test.describe("authenticated Team WCAG scans @team-a11y", () => {
   test("representative empty, error, modal, and drawer states pass the automated gate", async ({
     page,
   }, testInfo) => {
+    test.skip(
+      !REPRESENTATIVE_STATE_PROJECTS.has(testInfo.project.name),
+      "Representative interaction states run once per desktop/phone class.",
+    );
     if (testInfo.project.name === DESKTOP_A11Y_PROJECT) {
       await test.step("empty Contacts result", async () => {
         await page.goto("/team/contacts?q=wcag-empty-state-no-match", {
@@ -93,7 +102,9 @@ test.describe("authenticated Team WCAG scans @team-a11y", () => {
         await page.goto("/team/instant-quotes/not-a-real-quote", {
           waitUntil: "domcontentloaded",
         });
-        await expect(page.getByRole("alert")).toContainText("Quote not found");
+        await expect(
+          page.getByRole("alert").filter({ hasText: "Quote not found" }),
+        ).toContainText("Quote not found");
         await expectTeamStateToPassAutomatedWcag({
           page,
           testInfo,

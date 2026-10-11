@@ -29,19 +29,21 @@ describe("Meta provider source and E2E contracts", () => {
     );
     const violations = roots
       .flatMap(sourceFiles)
-      .filter((file) => !file.includes("/__tests__/"))
+      .filter((file) => !/[\\/]__tests__[\\/]/u.test(file))
       .filter((file) => readFileSync(file, "utf8").includes(forbiddenProvider));
     expect(violations).toEqual([]);
 
     const callSiteFiles = roots
       .flatMap(sourceFiles)
-      .filter((file) => !file.includes("/__tests__/"))
+      .filter((file) => !/[\\/]__tests__[\\/]/u.test(file))
       .filter((file) =>
         readFileSync(file, "utf8").includes("resolveMetaGraphApiEndpoint"),
       );
     expect(
       callSiteFiles
-        .map((file) => file.replace(`${REPOSITORY_ROOT}/`, ""))
+        .map((file) =>
+          file.slice(REPOSITORY_ROOT.length + 1).replaceAll("\\", "/"),
+        )
         .sort(),
     ).toEqual([
       "apps/api/src/lib/facebook-webhooks.ts",

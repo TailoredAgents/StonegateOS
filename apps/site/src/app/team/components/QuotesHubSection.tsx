@@ -26,6 +26,7 @@ export async function QuotesHubSection({
   partnerAccountId,
   partnerTargetType,
   partnerTargetId,
+  returnTo,
 }: {
   quoteMode?: string | null;
   contactId?: string;
@@ -35,8 +36,17 @@ export async function QuotesHubSection({
   partnerTargetType?: string;
   partnerTargetId?: string;
   memberId?: string;
+  returnTo?: string | null;
 }): Promise<ReactElement> {
   const activeMode = normalizeQuoteWorkspaceMode(quoteMode);
+  const workspaceQuery = {
+    contactId,
+    propertyId,
+    instantQuoteId,
+    partnerAccountId,
+    partnerTargetType,
+    partnerTargetId,
+  };
   let workspace: ReactElement;
   if (activeMode === "create") {
     const { QuoteBuilderSection } = await import("./QuoteBuilderSection");
@@ -47,6 +57,7 @@ export async function QuotesHubSection({
       partnerAccountId,
       partnerTargetType,
       partnerTargetId,
+      returnTo,
     });
   } else if (activeMode === "instant") {
     const { InstantQuotesSection } = await import("./InstantQuotesSection");
@@ -54,16 +65,16 @@ export async function QuotesHubSection({
       const { InstantQuoteDetail } = await import("./InstantQuoteDetail");
       workspace = (
         <div className="space-y-6">
-          <InstantQuoteDetail quoteId={instantQuoteId} />
-          {await InstantQuotesSection({ compact: true })}
+          <InstantQuoteDetail quoteId={instantQuoteId} returnTo={returnTo} />
+          {await InstantQuotesSection({ compact: true, returnTo })}
         </div>
       );
     } else {
-      workspace = await InstantQuotesSection({ compact: true });
+      workspace = await InstantQuotesSection({ compact: true, returnTo });
     }
   } else {
     const { QuotesSection } = await import("./QuotesSection");
-    workspace = await QuotesSection();
+    workspace = await QuotesSection({ returnTo });
   }
 
   return (
@@ -93,7 +104,10 @@ export async function QuotesHubSection({
                   activeMode === mode ? "primary" : "secondary",
                   "sm",
                 )}
-                href={quoteWorkspaceHref(mode)}
+                href={quoteWorkspaceHref(mode, {
+                  query: workspaceQuery,
+                  returnTo,
+                })}
                 aria-current={activeMode === mode ? "page" : undefined}
               >
                 {WORKSPACE_LABELS[mode]}
@@ -101,6 +115,14 @@ export async function QuotesHubSection({
             ))}
           </nav>
         </div>
+        {returnTo ? (
+          <a
+            className={`${teamButtonClass("secondary", "sm")} mt-4`}
+            href={returnTo}
+          >
+            Back to previous workspace
+          </a>
+        ) : null}
       </header>
 
       <div id={`quote-${activeMode}`} className="scroll-mt-24">

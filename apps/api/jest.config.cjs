@@ -32,6 +32,7 @@ const config = {
     ],
   },
   moduleDirectories: ["node_modules", "<rootDir>/node_modules"],
+  setupFilesAfterEnv: ["<rootDir>/src/__tests__/jest-esm-compat.ts"],
 };
 
 module.exports = config;

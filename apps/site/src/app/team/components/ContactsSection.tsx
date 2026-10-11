@@ -763,13 +763,13 @@ export async function ContactsSection({
           <div className="mb-3">
             <a
               href={buildHref({ search, offset: safeOffset, view })}
-              className="inline-flex min-h-11 items-center gap-2 text-sm font-semibold text-slate-600 hover:text-primary-700"
+              className="inline-flex min-h-11 items-center gap-2 text-sm font-semibold text-[color:var(--team-text-muted)] hover:text-[color:var(--team-link)]"
             >
               <span aria-hidden>←</span>
               Back to contacts
             </a>
           </div>
-          <div className="rounded-2xl border border-slate-200 bg-white/90 p-4 shadow-md shadow-slate-200/50">
+          <div className="rounded-2xl border border-[color:var(--team-border)] bg-[color:var(--team-card)] p-4 shadow-[0_18px_36px_var(--team-card-shadow)]">
             <ContactsDetailsPaneClient
               key={`${selectedContactForWorkspace.id}:${bookingHandoff?.instantQuoteId ?? "standard"}`}
               contact={selectedContactForWorkspace}
@@ -801,7 +801,7 @@ export async function ContactsSection({
             <p className={TEAM_EMPTY_STATE}>No contacts yet.</p>
           ) : (
             <>
-              <div className="flex flex-col gap-2 text-xs text-slate-500 sm:flex-row sm:items-center sm:justify-between">
+              <div className="flex flex-col gap-2 text-xs text-[color:var(--team-text-muted)] sm:flex-row sm:items-center sm:justify-between">
                 <span>{formatRange(pagination, contacts.length)}</span>
                 <div className="flex gap-2">
                   <PaginationControl
@@ -843,17 +843,17 @@ export async function ContactsSection({
                       })}
                       className={`block rounded-2xl border px-4 py-4 shadow-sm transition ${
                         isSelected
-                          ? "border-primary-300 bg-primary-50/70"
-                          : "border-slate-200 bg-white/90 hover:border-primary-200 hover:bg-white"
+                          ? "border-[color:var(--team-nav-active-border)] bg-[color:var(--team-nav-active-surface)]"
+                          : "border-[color:var(--team-border)] bg-[color:var(--team-card)] hover:border-[color:var(--team-focus-ring)] hover:bg-[color:var(--team-surface)]"
                       }`}
                     >
                       <div className="flex items-start justify-between gap-3">
                         <div className="min-w-0">
-                          <div className="text-base font-semibold text-slate-900">
+                          <div className="text-base font-semibold text-[color:var(--team-text)]">
                             {contact.name}
                           </div>
                           {sourceLabel ? (
-                            <div className="mt-1 text-xs text-slate-500">
+                            <div className="mt-1 text-xs text-[color:var(--team-text-soft)]">
                               {sourceLabel}
                             </div>
                           ) : null}
@@ -864,13 +864,13 @@ export async function ContactsSection({
                           {labelForPipelineStage(contact.pipeline.stage)}
                         </span>
                       </div>
-                      <div className="mt-3 grid gap-2 text-sm text-slate-700">
+                      <div className="mt-3 grid gap-2 text-sm text-[color:var(--team-text-muted)]">
                         <div>{contact.phone ?? "No phone on file"}</div>
                         <div className="truncate">
                           {contact.email ?? "No email on file"}
                         </div>
                       </div>
-                      <div className="mt-3 flex flex-wrap items-center justify-between gap-2 text-xs text-slate-500">
+                      <div className="mt-3 flex flex-wrap items-center justify-between gap-2 text-xs text-[color:var(--team-text-soft)]">
                         <span>Assigned: {assignedLabel}</span>
                         <span>
                           {formatLastActivity(contact.lastActivityAt)}
@@ -881,10 +881,10 @@ export async function ContactsSection({
                 })}
               </div>
 
-              <div className="hidden overflow-hidden rounded-2xl border border-slate-200 bg-white/90 shadow-md shadow-slate-200/50 lg:block">
+              <div className="hidden overflow-hidden rounded-2xl border border-[color:var(--team-border)] bg-[color:var(--team-card)] shadow-[0_18px_36px_var(--team-card-shadow)] lg:block">
                 <div className="overflow-x-auto">
                   <table className="min-w-full text-sm">
-                    <thead className="bg-slate-50 text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">
+                    <thead className="bg-[color:var(--team-surface-muted)] text-[11px] font-semibold uppercase tracking-[0.18em] text-[color:var(--team-text-soft)]">
                       <tr>
                         <th className="px-4 py-3 text-left">Name</th>
                         <th className="px-4 py-3 text-left">Phone</th>
@@ -894,7 +894,7 @@ export async function ContactsSection({
                         <th className="px-4 py-3 text-right">Last activity</th>
                       </tr>
                     </thead>
-                    <tbody className="divide-y divide-slate-100">
+                    <tbody className="divide-y divide-[color:var(--team-border)]">
                       {contacts.map((contact) => {
                         const isSelected = selectedContactId === contact.id;
                         const assignedLabel = contact.salespersonMemberId
@@ -910,8 +910,8 @@ export async function ContactsSection({
                             key={contact.id}
                             className={
                               isSelected
-                                ? "bg-primary-50/40"
-                                : "hover:bg-slate-50/70"
+                                ? "bg-[color:var(--team-nav-active-surface)]"
+                                : "hover:bg-[color:var(--team-surface-muted)]"
                             }
                           >
                             <td className="px-4 py-3">
@@ -923,24 +923,28 @@ export async function ContactsSection({
                                   offset: safeOffset,
                                   view,
                                 })}
-                                className="font-semibold text-slate-900 hover:text-primary-700"
+                                className="font-semibold text-[color:var(--team-text)] hover:text-[color:var(--team-link)]"
                               >
                                 {contact.name}
                               </a>
                               {sourceLabel ? (
-                                <div className="mt-1 text-xs text-slate-500">
+                                <div className="mt-1 text-xs text-[color:var(--team-text-soft)]">
                                   {sourceLabel}
                                 </div>
                               ) : null}
                             </td>
-                            <td className="px-4 py-3 text-slate-700">
+                            <td className="px-4 py-3 text-[color:var(--team-text-muted)]">
                               {contact.phone ?? (
-                                <span className="text-slate-400">—</span>
+                                <span className="text-[color:var(--team-text-soft)]">
+                                  —
+                                </span>
                               )}
                             </td>
-                            <td className="px-4 py-3 text-slate-700">
+                            <td className="px-4 py-3 text-[color:var(--team-text-muted)]">
                               {contact.email ?? (
-                                <span className="text-slate-400">—</span>
+                                <span className="text-[color:var(--team-text-soft)]">
+                                  —
+                                </span>
                               )}
                             </td>
                             <td className="px-4 py-3">
@@ -950,10 +954,10 @@ export async function ContactsSection({
                                 {labelForPipelineStage(contact.pipeline.stage)}
                               </span>
                             </td>
-                            <td className="px-4 py-3 text-slate-700">
+                            <td className="px-4 py-3 text-[color:var(--team-text-muted)]">
                               {assignedLabel}
                             </td>
-                            <td className="px-4 py-3 text-right text-xs text-slate-500">
+                            <td className="px-4 py-3 text-right text-xs text-[color:var(--team-text-soft)]">
                               {formatLastActivity(contact.lastActivityAt)}
                             </td>
                           </tr>
@@ -967,7 +971,7 @@ export async function ContactsSection({
           )}
         </div>
 
-        <div className="hidden rounded-2xl border border-slate-200 bg-white/90 p-4 shadow-md shadow-slate-200/50 lg:block">
+        <div className="hidden rounded-2xl border border-[color:var(--team-border)] bg-[color:var(--team-card)] p-4 shadow-[0_18px_36px_var(--team-card-shadow)] lg:block">
           {selectedContactForWorkspace ? (
             <ContactsDetailsPaneClient
               key={`${selectedContactForWorkspace.id}:${bookingHandoff?.instantQuoteId ?? "standard"}`}
@@ -989,8 +993,8 @@ export async function ContactsSection({
               instantQuoteHandoff={bookingHandoff}
             />
           ) : (
-            <div className="text-sm text-slate-600">
-              <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+            <div className="text-sm text-[color:var(--team-text-muted)]">
+              <div className="text-xs font-semibold uppercase tracking-wide text-[color:var(--team-text-soft)]">
                 Details
               </div>
               <p className="mt-2">

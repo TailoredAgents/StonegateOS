@@ -22,6 +22,7 @@ This repo includes a Render blueprint in `render.yaml` that provisions the site,
    - API (`stonegate-api`)
      - `ADMIN_API_KEY`
      - `API_BASE_URL` (public API URL)
+     - `DB_MIGRATION_TARGET` set explicitly to `0058_appointment_media`, `0059_square_payments`, or `latest`; use `latest` for an ordinary fully current deployment
      - Provider credentials as needed (Twilio, SMTP, OpenAI, Meta, Google Ads, etc.)
    - Worker (`stonegate-outbox-worker`)
      - Provider credentials to match what the worker should run (Twilio/SMTP/OpenAI/Meta/Google Ads)
@@ -39,7 +40,7 @@ This repo includes a Render blueprint in `render.yaml` that provisions the site,
    - `NEXT_PUBLIC_COMPANY_*` values control the marketing site's name/phone/structured data without runtime API calls.
    - If you use a custom/BYO marketing site, these are optional; the CRM + API can still run from this repo.
 
-5. Deploy the blueprint. The API runs `pnpm -w db:migrate` on deploy (see `render.yaml`).
+5. Deploy the blueprint. The API pre-deploy command validates `DB_MIGRATION_TARGET` and runs the matching targeted migration command from `render.yaml`. A missing or unknown target deliberately blocks deployment. Never point a preview or prospect environment at the live Stonegate database.
 6. Wait for `/api/healthz` on both web services to return `200 ok`.
 7. Submit a live lead on the deployed site and confirm records in `contacts`, `leads`, and `outbox_events`.
 8. Connect your custom domain to `stonegate-site` via Render DNS.

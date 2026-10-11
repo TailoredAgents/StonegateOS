@@ -7,7 +7,9 @@ import {
 import type { TeamMutationTransaction } from "@/lib/team-mutation";
 
 function source(relativePath: string): string {
-  return fs.readFileSync(path.join(process.cwd(), relativePath), "utf8");
+  return fs
+    .readFileSync(path.join(process.cwd(), relativePath), "utf8")
+    .replace(/\r\n?/gu, "\n");
 }
 
 function evaluationTransaction(input: {
@@ -34,7 +36,8 @@ function evaluationTransaction(input: {
             return {
               where: () => ({
                 for: () => ({
-                  limit: () => Promise.resolve(input.booking ? [input.booking] : []),
+                  limit: () =>
+                    Promise.resolve(input.booking ? [input.booking] : []),
                 }),
               }),
             };
@@ -201,16 +204,16 @@ describe("partner proof completion gate", () => {
     const calendar = source(
       "../site/src/app/team/components/CalendarAppointmentActions.tsx",
     );
-    const myDay = source(
-      "../site/src/app/team/components/MyDaySection.tsx",
-    );
+    const myDay = source("../site/src/app/team/components/MyDaySection.tsx");
     const mobile = source("../site/src/app/mobile/page.tsx");
 
     expect(statusRoute).toContain("evaluatePartnerProofCompletion(");
     expect(statusRoute).toContain("recordPartnerProofCompletionOverride(tx");
     expect(statusRoute).toContain('"partner_proof_required"');
     expect(statusRoute).toContain('"appointment_media.manage"');
-    expect(statusRoute).toContain('risk: input.requiresProofOverride\n      ? "destructive"');
+    expect(statusRoute).toContain(
+      'risk: input.requiresProofOverride\n      ? "destructive"',
+    );
     expect(statusRoute).toContain("proofOverrideApplied,");
     expect(onboarding).toContain("insert(partnerEvidenceRequirements)");
     expect(onboarding).toContain('category: "before"');

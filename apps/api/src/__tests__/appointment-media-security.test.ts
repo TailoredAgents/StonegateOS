@@ -21,11 +21,7 @@ describe("remote appointment media URL policy", () => {
   };
 
   beforeEach(() => {
-    Object.defineProperty(process.env, "NODE_ENV", {
-      configurable: true,
-      value: "production",
-      writable: true,
-    });
+    process.env["NODE_ENV"] = "production";
     process.env["E2E_RUN_ID"] = "appointment-media-security";
     process.env["TWILIO_ACCOUNT_SID"] = `AC${"0".repeat(32)}`;
     process.env["TWILIO_AUTH_TOKEN"] = "synthetic-token";
@@ -35,11 +31,8 @@ describe("remote appointment media URL policy", () => {
   afterEach(() => {
     jest.useRealTimers();
     globalThis.fetch = originalFetch;
-    Object.defineProperty(process.env, "NODE_ENV", {
-      configurable: true,
-      value: originalNodeEnv,
-      writable: true,
-    });
+    if (originalNodeEnv === undefined) delete process.env["NODE_ENV"];
+    else process.env["NODE_ENV"] = originalNodeEnv;
     for (const [key, value] of Object.entries(originalTwilioEnvironment)) {
       if (value === undefined) delete process.env[key];
       else process.env[key] = value;
@@ -196,11 +189,7 @@ describe("remote appointment media URL policy", () => {
   });
 
   it("revalidates provider host policy after every redirect", async () => {
-    Object.defineProperty(process.env, "NODE_ENV", {
-      configurable: true,
-      value: "test",
-      writable: true,
-    });
+    process.env["NODE_ENV"] = "test";
     globalThis.fetch = jest.fn(() =>
       Promise.resolve(
         new Response(null, {
@@ -222,11 +211,7 @@ describe("remote appointment media URL policy", () => {
   });
 
   it("rejects an oversized response before buffering it", async () => {
-    Object.defineProperty(process.env, "NODE_ENV", {
-      configurable: true,
-      value: "test",
-      writable: true,
-    });
+    process.env["NODE_ENV"] = "test";
     globalThis.fetch = jest.fn(() =>
       Promise.resolve(
         new Response(new Uint8Array([1]), {
@@ -248,11 +233,7 @@ describe("remote appointment media URL policy", () => {
   });
 
   it("aborts a remote media request at the fixed timeout", async () => {
-    Object.defineProperty(process.env, "NODE_ENV", {
-      configurable: true,
-      value: "test",
-      writable: true,
-    });
+    process.env["NODE_ENV"] = "test";
     jest.useFakeTimers();
     globalThis.fetch = jest.fn(
       async (_url, init) =>

@@ -26,9 +26,11 @@ describe("authenticated Site privacy boundary", () => {
     expect(rootLayout).not.toContain("connect.facebook.net");
   });
 
-  it("loads marketing tags only on public acquisition surfaces", () => {
-    expect(read("(site)/layout.tsx")).toContain("<PublicMarketingTags />");
-    expect(read("schedule/layout.tsx")).toContain("<PublicMarketingTags />");
+  it("loads marketing tags only on public brochure surfaces", () => {
+    expect(read("(site)/layout.tsx")).toContain(
+      "<PublicMarketingTags includeMetaPixel />",
+    );
+    expect(read("schedule/layout.tsx")).not.toContain("PublicMarketingTags");
     expect(read("quote/layout.tsx")).not.toContain("<PublicMarketingTags />");
     expect(read("quote/layout.tsx")).toContain('referrer: "no-referrer"');
   });

@@ -1,7 +1,30 @@
 import type { NextRequest } from "next/server";
-import { POST as recordManualPayment } from "../../app/api/appointments/[id]/manual-payments/route";
-import { POST as launchSquareAttempt } from "../../app/api/appointments/[id]/payment-attempts/route";
-import * as teamMutation from "@/lib/team-mutation";
+import { jest } from "@jest/globals";
+
+const mockBeginTeamMutation = jest.fn();
+jest.unstable_mockModule("@/lib/team-mutation", () => ({
+  assertTeamMutationExpectedVersion: jest.fn(),
+  beginTeamMutation: mockBeginTeamMutation,
+  createTeamMutationDeniedAuditWriter: jest.fn(),
+  isAllowedTeamMutationOrigin: jest.fn(),
+  isTeamAuthenticationRecent: jest.fn(),
+  recordTeamMutationFailure: jest.fn(),
+  strengthenTeamMutationPolicy: jest.fn(),
+  TeamMutationFailure: class TeamMutationFailure extends Error {},
+  teamMutationErrorResponse: jest.fn(),
+  teamMutationExceptionResponse: jest.fn(),
+  teamMutationExceptionResult: jest.fn(),
+  teamMutationResultResponse: jest.fn(),
+  teamMutationSuccessResponse: jest.fn(),
+  teamMutationSuccessResult: jest.fn(),
+}));
+
+const { POST: recordManualPayment } = await import(
+  "../../app/api/appointments/[id]/manual-payments/route"
+);
+const { POST: launchSquareAttempt } = await import(
+  "../../app/api/appointments/[id]/payment-attempts/route"
+);
 
 function poisonedRequest(): NextRequest {
   return new Proxy({} as NextRequest, {
@@ -21,7 +44,7 @@ function poisonedContext(): { params: Promise<{ id: string }> } {
 
 describe("appointment payment authorization runtime boundary", () => {
   afterEach(() => {
-    jest.restoreAllMocks();
+    jest.clearAllMocks();
   });
 
   it.each([
@@ -39,13 +62,14 @@ describe("appointment payment authorization runtime boundary", () => {
         },
         { status: 401 },
       );
-      const boundary = jest
-        .spyOn(teamMutation, "beginTeamMutation")
-        .mockResolvedValue({ ok: false, response: denial } as never);
+      mockBeginTeamMutation.mockResolvedValue({
+        ok: false,
+        response: denial,
+      } as never);
 
       const response = await handler(poisonedRequest(), poisonedContext());
 
-      expect(boundary).toHaveBeenCalledTimes(1);
+      expect(mockBeginTeamMutation).toHaveBeenCalledTimes(1);
       expect(response).toBe(denial);
       expect(response.status).toBe(401);
     },

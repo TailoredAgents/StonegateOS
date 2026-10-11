@@ -15,11 +15,8 @@ describe("media operational feature flags", () => {
   };
 
   afterEach(() => {
-    Object.defineProperty(process.env, "NODE_ENV", {
-      configurable: true,
-      value: originalNodeEnv,
-      writable: true,
-    });
+    if (originalNodeEnv === undefined) delete process.env["NODE_ENV"];
+    else process.env["NODE_ENV"] = originalNodeEnv;
     if (originalValues.writes === undefined) {
       delete process.env["APPOINTMENT_MEDIA_WRITES_ENABLED"];
     } else {
@@ -44,11 +41,7 @@ describe("media operational feature flags", () => {
   });
 
   it("defaults risky operations off in production", () => {
-    Object.defineProperty(process.env, "NODE_ENV", {
-      configurable: true,
-      value: "production",
-      writable: true,
-    });
+    process.env["NODE_ENV"] = "production";
     delete process.env["APPOINTMENT_MEDIA_WRITES_ENABLED"];
     delete process.env["PUBLIC_QUOTE_MEDIA_UPLOADS_ENABLED"];
     delete process.env["MEDIA_AUTO_IMPORT_ENABLED"];
@@ -61,11 +54,7 @@ describe("media operational feature flags", () => {
   });
 
   it("honors explicit production enables and development disables", () => {
-    Object.defineProperty(process.env, "NODE_ENV", {
-      configurable: true,
-      value: "production",
-      writable: true,
-    });
+    process.env["NODE_ENV"] = "production";
     process.env["APPOINTMENT_MEDIA_WRITES_ENABLED"] = "true";
     expect(areAppointmentMediaWritesEnabled()).toBe(true);
     expect(arePublicQuoteMediaUploadsEnabled()).toBe(false);
@@ -73,11 +62,7 @@ describe("media operational feature flags", () => {
     process.env["PUBLIC_QUOTE_MEDIA_UPLOADS_ENABLED"] = "true";
     expect(arePublicQuoteMediaUploadsEnabled()).toBe(true);
 
-    Object.defineProperty(process.env, "NODE_ENV", {
-      configurable: true,
-      value: "development",
-      writable: true,
-    });
+    process.env["NODE_ENV"] = "development";
     process.env["MEDIA_AUTO_IMPORT_ENABLED"] = "0";
     expect(isMediaAutoImportEnabled()).toBe(false);
   });

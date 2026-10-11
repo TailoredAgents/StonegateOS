@@ -33,7 +33,7 @@ function readTypeScriptSources(
         if (!IGNORED_DIRECTORIES.has(entry.name)) visit(absolutePath);
       } else if (/\.tsx?$/u.test(entry.name)) {
         sources.push({
-          path: relative(relativeTo, absolutePath),
+          path: relative(relativeTo, absolutePath).replaceAll("\\", "/"),
           source: readFileSync(absolutePath, "utf8"),
         });
       }

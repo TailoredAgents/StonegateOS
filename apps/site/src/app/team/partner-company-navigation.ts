@@ -1,4 +1,5 @@
 import { teamSurfaceHref } from "./surface-registry";
+import { safePartnerReturnPath } from "./partner-entry-navigation";
 
 export const PARTNER_COMPANY_SECTIONS = [
   "details",
@@ -21,6 +22,7 @@ export function partnerCompanyHref(
   accountId: string,
   section: PartnerCompanySection = "details",
   view?: string,
+  returnTo?: unknown,
 ) {
   const params = new URLSearchParams({
     p_admin:
@@ -35,5 +37,7 @@ export function partnerCompanyHref(
     p_company: accountId,
     p_company_section: section,
   });
+  const safeReturnTo = safePartnerReturnPath(returnTo);
+  if (safeReturnTo) params.set("p_return", safeReturnTo);
   return teamSurfaceHref("partners", { query: params });
 }

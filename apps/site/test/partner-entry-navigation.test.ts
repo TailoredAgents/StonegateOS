@@ -5,8 +5,11 @@ import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import {
   partnerAccessCapabilities,
+  partnerAdministrationHref,
   partnerCompanyAccessHref,
   partnerRelationshipsHref,
+  partnerSchedulingHref,
+  safePartnerReturnPath,
 } from "../src/app/team/partner-entry-navigation";
 import { PartnerAccessEntry } from "../src/app/team/components/PartnerAccessEntry";
 
@@ -81,6 +84,54 @@ void test("partner access handoff requires deliberate company selection without 
   assert.equal(url.hash, "#partner-relationship-setup-heading");
   assert.equal(url.searchParams.has("p_selected"), false);
   assert.equal(url.searchParams.has("orgContactId"), false);
+});
+
+void test("partner administration links encode view, company context, filters, and anchors canonically", () => {
+  const url = parse(
+    partnerAdministrationHref({
+      view: "operations",
+      status: "14",
+      q: "North & South",
+      cursor: "page/2",
+      selectedUserId: "person-1",
+      companyId: "company-1",
+      companySection: "jobs",
+      hash: "job detail",
+    }),
+  );
+  assert.equal(url.pathname, "/team/partners");
+  assert.equal(url.searchParams.get("p_admin"), "operations");
+  assert.equal(url.searchParams.get("p_admin_status"), "14");
+  assert.equal(url.searchParams.get("p_admin_q"), "North & South");
+  assert.equal(url.searchParams.get("p_admin_cursor"), "page/2");
+  assert.equal(url.searchParams.get("p_selected"), "person-1");
+  assert.equal(url.searchParams.get("p_company"), "company-1");
+  assert.equal(url.searchParams.get("p_company_section"), "jobs");
+  assert.equal(url.hash, "#job%20detail");
+  assert.equal(url.searchParams.has("tab"), false);
+});
+
+void test("Partner return state accepts internal origins and rejects redirects or self-loops", () => {
+  const origin = "/team/contacts?contactId=contact-1&subview=overview";
+  const administration = parse(
+    partnerAdministrationHref({ view: "accounts", returnTo: origin }),
+  );
+  const scheduling = parse(partnerSchedulingHref(origin));
+  assert.equal(administration.searchParams.get("p_return"), origin);
+  assert.equal(scheduling.searchParams.get("p_return"), origin);
+  assert.equal(safePartnerReturnPath(origin), origin);
+  for (const unsafe of [
+    "https://attacker.example/team/contacts",
+    "//attacker.example/team/contacts",
+    "/team/partners",
+    "/team/partners/scheduling",
+    "/team/sales/outbound/partners",
+    "/team?tab=partners",
+    "/team/logout",
+    "/team/contacts#private",
+  ]) {
+    assert.equal(safePartnerReturnPath(unsafe), null, unsafe);
+  }
 });
 
 void test("partner entry uses canonical company and invitation permissions only", () => {
@@ -164,7 +215,7 @@ void test("normal contact and quote surfaces no longer expose legacy invitation 
   );
   assert.match(details, /canReadPartners: false/);
   assert.match(details, /canInvitePartners: false/);
-  assert.match(relationships, /action="\/team\/partners"/);
+  assert.match(relationships, /action=\{teamSurfaceHref\("partners"\)\}/);
   assert.match(relationships, /name="p_admin" value="relationships"/);
   assert.doesNotMatch(
     relationships,

@@ -32,7 +32,7 @@ import {
 const schedulingServiceSource = readFileSync(
   resolve(process.cwd(), "src/lib/partner-portal-v2-scheduling/service.ts"),
   "utf8",
-);
+).replace(/\r\n?/gu, "\n");
 
 function policy() {
   const hours = [{ startMinute: 8 * 60, endMinute: 17 * 60 }];

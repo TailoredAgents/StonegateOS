@@ -48,6 +48,10 @@ jest.mock("@/db", () => ({
     receivedAt: "conversation_messages.received_at",
     createdAt: "conversation_messages.created_at",
   },
+  conversationThreads: {
+    id: "conversation_threads.id",
+    staffScope: "conversation_threads.staff_scope",
+  },
   getDb: mockGetDb,
 }));
 
@@ -139,14 +143,18 @@ function successfulDb(): {
       .fn()
       .mockImplementationOnce(() => ({
         from: () => ({
-          where: () => ({
-            orderBy: () => ({ limit: () => Promise.resolve(preflight) }),
+          innerJoin: () => ({
+            where: () => ({
+              orderBy: () => ({ limit: () => Promise.resolve(preflight) }),
+            }),
           }),
         }),
       }))
       .mockImplementationOnce(() => ({
         from: () => ({
-          where: () => ({ orderBy: () => Promise.resolve(rows) }),
+          innerJoin: () => ({
+            where: () => ({ orderBy: () => Promise.resolve(rows) }),
+          }),
         }),
       })),
   };

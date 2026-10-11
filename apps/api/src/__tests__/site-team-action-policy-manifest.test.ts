@@ -124,6 +124,7 @@ const DESTRUCTIVE_ACTIONS = new Set([
   "partnerIdentityDisableAction",
   "partnerSecuritySessionRevokeAction",
   "partnerQuarantineResolveAction",
+  "managePartnerRelationshipInvitation",
   "resetSalesHqAction",
   "updateTeamMemberAction",
   "partnerPortalSetUserActiveAction",
@@ -151,6 +152,7 @@ const EXTERNAL_ACTIONS = new Set([
   "saveGoogleAdsAnalystSettingsAction",
   "scheduleQuoteFollowupAction",
   "sendDraftMessageAction",
+  "sendPreparedInboxMessageAction",
   "sendEtaDraftAction",
   "sendQuoteAction",
   "sendThreadMessageAction",
@@ -159,6 +161,9 @@ const EXTERNAL_ACTIONS = new Set([
   "updateAutomationModeAction",
   "updateLeadAutomationAction",
   "updateSalesAutopilotPolicyAction",
+  "decidePartnerRescheduleReview",
+  "savePartnerRelationship",
+  "testPartnerOwnerAlert",
 ]);
 
 const FINANCIAL_ACTIONS = new Set([
@@ -175,6 +180,8 @@ const FINANCIAL_ACTIONS = new Set([
   "paymentReconciliationAction",
   "updateAppointmentBookingDetailsAction",
   "updateAppointmentSoldByAction",
+  "savePartnerAllocationReconciliation",
+  "savePartnerBillingCommand",
 ]);
 
 function expectedRisk(name: string): ActionRisk {

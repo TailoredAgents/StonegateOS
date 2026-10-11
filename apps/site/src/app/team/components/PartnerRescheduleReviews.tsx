@@ -132,23 +132,6 @@ export function PartnerRescheduleReviews({
     );
     setCursor(result.nextCursor);
   }
-  useEffect(() => {
-    setItems([]);
-    setCursor(null);
-    setDetail(null);
-    setReplacementDate("");
-    setReplacementTime("09:00");
-    selected.current = "";
-    pendingDecision.current = null;
-    if (requestId) void open(requestId);
-    else void load();
-    return () => {
-      generation.current += 1;
-    };
-  }, [accountId, requestId]);
-  useEffect(() => {
-    if (detail) onReady?.();
-  }, [detail]);
   async function open(id: string) {
     const requestGeneration = ++generation.current;
     selected.current = id;
@@ -170,6 +153,29 @@ export function PartnerRescheduleReviews({
     if (!result.ok) setMessage(result.message);
     else setDetail(result.detail);
   }
+  const loadRef = useRef(load);
+  const openRef = useRef(open);
+  const onReadyRef = useRef(onReady);
+  loadRef.current = load;
+  openRef.current = open;
+  onReadyRef.current = onReady;
+  useEffect(() => {
+    setItems([]);
+    setCursor(null);
+    setDetail(null);
+    setReplacementDate("");
+    setReplacementTime("09:00");
+    selected.current = "";
+    pendingDecision.current = null;
+    if (requestId) void openRef.current(requestId);
+    else void loadRef.current();
+    return () => {
+      generation.current += 1;
+    };
+  }, [accountId, requestId]);
+  useEffect(() => {
+    if (detail) onReadyRef.current?.();
+  }, [detail]);
   async function decide(
     form: HTMLFormElement,
     decision: "accepted" | "declined",

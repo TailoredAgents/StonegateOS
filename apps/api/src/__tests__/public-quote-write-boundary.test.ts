@@ -1,6 +1,24 @@
 import { NextRequest } from "next/server";
-import { POST as decideQuote } from "../../app/api/public/quotes/[token]/route";
-import { POST as requestQuoteChange } from "../../app/api/public/quotes/[token]/changes/route";
+import { jest } from "@jest/globals";
+
+jest.unstable_mockModule("@/lib/quote-v2-public-route", () => ({
+  maybeHandleQuoteV2PublicChange: jest.fn(() =>
+    Promise.resolve({ handled: false }),
+  ),
+  maybeHandleQuoteV2PublicDecision: jest.fn(() =>
+    Promise.resolve({ handled: false }),
+  ),
+  maybeHandleQuoteV2PublicGet: jest.fn(() =>
+    Promise.resolve({ handled: false }),
+  ),
+}));
+
+const { POST: decideQuote } = await import(
+  "../../app/api/public/quotes/[token]/route"
+);
+const { POST: requestQuoteChange } = await import(
+  "../../app/api/public/quotes/[token]/changes/route"
+);
 
 const QUOTE_ID = "11111111-1111-4111-8111-111111111111";
 const TOKEN = "public-capability-token";

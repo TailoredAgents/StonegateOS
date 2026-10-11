@@ -18,6 +18,11 @@ const teamCalendar = read(
 const myDay = read("apps/site/src/app/team/components/MyDaySection.tsx");
 const mobileActions = read("apps/site/src/app/mobile/actions.ts");
 const mobilePage = read("apps/site/src/app/mobile/page.tsx");
+const mobileSurface = [
+  mobilePage,
+  read("apps/site/src/app/mobile/MobileBookingTools.tsx"),
+  read("apps/site/src/app/mobile/MobileCompletionOptions.tsx"),
+].join("\n");
 const agentAvailability = read(
   "apps/site/src/app/team/lib/agent-action-availability.ts",
 );
@@ -225,20 +230,24 @@ describe("appointment status external-effect contracts", () => {
   });
 
   it("shows unchecked permission-gated controls and truthful copy on every staff surface", () => {
-    for (const surface of [teamCalendar, myDay, mobilePage]) {
+    for (const surface of [teamCalendar, myDay, mobileSurface]) {
       expect(surface).toContain('name="sendCustomerNotification"');
       expect(surface).toContain('name="sendReviewRequest"');
       expect(surface).toContain("canSendCustomerMessages");
+      expect(surface).toMatch(/notified|review request/iu);
+    }
+    for (const surface of [teamCalendar, myDay]) {
       expect(surface).toMatch(
         /Safe default\s+is off|off unless you\s+check it/iu,
       );
-      expect(surface).toMatch(/notified|review request/iu);
     }
+    expect(mobileSurface).toContain("Optional; delivery is");
+    expect(mobileSurface).toContain("confirmed separately");
     expect(teamCalendar).toContain("delivery is not yet confirmed");
     expect(myDay).toMatch(/does not confirm\s+delivery/iu);
-    expect(mobilePage).toContain("delivery is not yet confirmed");
-    expect(mobilePage).toContain("The customer was not notified.");
-    expect(mobilePage).toContain("Google Calendar cleanup is queued.");
+    expect(mobileSurface).toContain("delivery is not yet confirmed");
+    expect(mobileSurface).toContain("The customer was not notified.");
+    expect(mobileSurface).toContain("Google Calendar cleanup is queued.");
   });
 
   it("keeps Agent cancellation blocked behind the explicit Calendar workflow", () => {

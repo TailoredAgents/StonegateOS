@@ -1,5 +1,7 @@
 # API Catalog (Curated)
 
+> Curated guide. Use `API_ROUTE_INDEX_API.md` and `API_ROUTE_INDEX_SITE.md` for the generated route inventory and verify authentication against current route helpers before changing a boundary.
+
 This is the human + AI-friendly guide to the most important endpoints, what they do, and what auth they expect.
 
 For a complete inventory of routes and handler files, see:
@@ -14,9 +16,10 @@ For a complete inventory of routes and handler files, see:
 StonegateOS uses multiple “classes” of endpoints:
 
 1. **Public endpoints (no auth)** — for the marketing/booking funnel and public assets.
-2. **Admin endpoints (API key + permissions)** — used by the Team Console and internal automation.
-3. **Partner endpoints (partner sessions)** — used by the partner portal UI under `/partners`.
-4. **Provider webhooks** — Twilio/Meta/Email webhooks that ingest events.
+2. **Team endpoints (verified principal + permissions)** — used by authenticated Team and Mobile workflows, sometimes through Site proxy/server routes.
+3. **Internal/admin endpoints (service credential and purpose-specific policy)** — used by trusted services and operational automation.
+4. **Partner endpoints (partner sessions)** — used by the partner portal UI under `/partners`.
+5. **Provider webhooks** — Twilio/Meta/Email webhooks that ingest events.
 
 ### Admin API key gate
 

@@ -1007,15 +1007,18 @@ export async function seedPartnerPortalE2E(
           partnerAccountId: accountIds.primary,
           partnerBookingId: jobIds[invoiceJobStates[index] ?? "confirmed"],
           invoiceNumber: `E2E-${slug.toUpperCase()}-${index + 1}`,
-          status,
+          // Invoice lines must exist before an invoice is issued. Seed the
+          // mutable draft first, add its deterministic line, then transition
+          // the invoice to the intended lifecycle state below.
+          status: "draft",
           currency: "USD",
           subtotalCents: totalCents,
           taxCents: 0,
           discountCents: 0,
           depositCents: status === "partially_paid" ? 10000 : 0,
           totalCents,
-          paidCents,
-          balanceCents: totalCents - paidCents,
+          paidCents: 0,
+          balanceCents: totalCents,
           poNumber: `E2E-PO-BILL-${index + 1}`,
           costCenter: index % 2 === 0 ? "E2E-FACILITIES" : "E2E-TURNS",
           billingContact: {
@@ -1024,8 +1027,8 @@ export async function seedPartnerPortalE2E(
           },
           terms: "Local E2E fixture — not payable.",
           dueDate: dateOnly(dueAt),
-          issuedAt: new Date(now.getTime() - 2 * 24 * 60 * 60_000),
-          paidAt: status === "paid" ? now : null,
+          issuedAt: null,
+          paidAt: null,
           provider: null,
           hostedPaymentUrl: null,
           version: 1,
@@ -1049,6 +1052,17 @@ export async function seedPartnerPortalE2E(
         },
         createdAt: now,
       });
+      await tx
+        .update(db.partnerInvoices)
+        .set({
+          status,
+          paidCents,
+          balanceCents: totalCents - paidCents,
+          issuedAt: new Date(now.getTime() - 2 * 24 * 60 * 60_000),
+          paidAt: status === "paid" ? now : null,
+          updatedAt: now,
+        })
+        .where(eq(db.partnerInvoices.id, invoice.id));
     }
 
     await tx.insert(db.partnerAccessApplications).values({

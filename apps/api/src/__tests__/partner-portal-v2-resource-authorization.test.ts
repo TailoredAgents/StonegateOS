@@ -49,7 +49,10 @@ function scopedPrincipal(
 }
 
 function source(relativePath: string): string {
-  return readFileSync(resolve(process.cwd(), relativePath), "utf8");
+  return readFileSync(resolve(process.cwd(), relativePath), "utf8").replace(
+    /\r\n?/gu,
+    "\n",
+  );
 }
 
 describe("partner V2 job resource authorization", () => {
@@ -425,7 +428,9 @@ describe("partner V2 job route authorization contracts", () => {
   it("rechecks draft scope inside each media operation", () => {
     const contents = source("src/lib/partner-portal-v2-media.ts");
     expect(contents).toContain("canAccessPartnerDraftResource");
-    expect(contents.match(/lockParentForMediaMutation\(tx,/gu)?.length).toBeGreaterThanOrEqual(4);
+    expect(
+      contents.match(/lockParentForMediaMutation\(tx,/gu)?.length,
+    ).toBeGreaterThanOrEqual(4);
     expect(contents).toContain("await assertParentAvailable(tx, input)");
     expect(contents).toContain('.for("share")');
   });
@@ -531,9 +536,7 @@ describe("partner V2 job route authorization contracts", () => {
       "pagination.cursor.payload.accessScopeKey !== accessScopeKey",
     );
     expect(list).toContain("pagination.cursor.payload.jobId !== jobId");
-    expect(list).toContain(
-      "eq(partnerNotifications.partnerBookingId, jobId)",
-    );
+    expect(list).toContain("eq(partnerNotifications.partnerBookingId, jobId)");
     expect(list).toContain("SAFE_NOTIFICATION_ACTION_PATHS");
     expect(list).not.toContain('value?.startsWith("/partners/")');
   });

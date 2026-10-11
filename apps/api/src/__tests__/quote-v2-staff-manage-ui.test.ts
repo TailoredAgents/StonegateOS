@@ -117,7 +117,9 @@ describe("Quote V2 staff management UI", () => {
     const sales = source(
       "apps/site/src/app/team/components/SalesScorecardSection.tsx",
     );
-    expect(hub).toContain("InstantQuotesSection({ compact: true })");
+    expect(hub).toContain(
+      "InstantQuotesSection({ compact: true, returnTo })",
+    );
     expect(instant).toContain("Instant quote handoffs");
     expect(sales).toContain('hasTeamPermission(principal, "quotes.read")');
     expect(sales).toContain("await InstantQuotesSection()");

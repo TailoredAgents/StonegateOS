@@ -26,10 +26,15 @@ import {
 import { PartnerServiceReviews } from "./PartnerServiceReviews";
 import { PartnerRescheduleReviews } from "./PartnerRescheduleReviews";
 import { PartnerRequestDecisionPanel } from "./PartnerRequestDecisionPanel";
+
+function invalidateGeneration(ref: { current: number }): void {
+  ref.current += 1;
+}
 import { refreshPartnerRequestCounts } from "./PartnerRequestSummary";
 import { partnerCompanyHref } from "../partner-company-navigation";
 import { TEAM_INPUT_COMPACT, teamButtonClass } from "./team-ui";
 import { requestedPartnerWindow } from "../lib/partner-request-presentation";
+import { partnerAdministrationHref } from "../partner-entry-navigation";
 const KINDS: Record<PartnerRequestKind, string> = {
   service: "Service requests",
   reschedule: "Schedule changes",
@@ -71,6 +76,7 @@ export function PartnerRequestInbox({
   initialQuery,
   initialRequestKey,
   alertGroupId,
+  returnTo,
 }: {
   accountId?: string;
   accountName?: string;
@@ -79,6 +85,7 @@ export function PartnerRequestInbox({
   initialQuery?: string;
   initialRequestKey?: string;
   alertGroupId?: string;
+  returnTo?: string;
 }) {
   const [status, setStatus] = useState(stage(initialStatus)),
     [requestKind, setKind] = useState(kind(initialKind)),
@@ -226,7 +233,7 @@ export function PartnerRequestInbox({
   useEffect(() => {
     void loadDetail(requestKey);
     return () => {
-      detailGeneration.current++;
+      invalidateGeneration(detailGeneration);
     };
   }, [requestKey, loadDetail]);
   useEffect(() => {
@@ -238,7 +245,7 @@ export function PartnerRequestInbox({
     return () => {
       clearInterval(timer);
       document.removeEventListener("visibilitychange", refresh);
-      generation.current++;
+      invalidateGeneration(generation);
     };
   }, [load]);
   function syncUrl(next: Partial<typeof latest.current>) {
@@ -435,7 +442,10 @@ export function PartnerRequestInbox({
               ? ` · ${data.group.memberCount} request${data.group.memberCount === 1 ? "" : "s"}`
               : ""}
             .{" "}
-            <Link href="/team/partners?p_admin=requests" className="underline">
+            <Link
+              href={partnerAdministrationHref({ view: "requests", returnTo })}
+              className="underline"
+            >
               View all requests
             </Link>
           </p>
@@ -686,7 +696,12 @@ export function PartnerRequestInbox({
                       <dt className="sr-only">Company and requester</dt>
                       <dd className="mt-1 break-words">
                         <Link
-                          href={partnerCompanyHref(selected.request.accountId)}
+                          href={partnerCompanyHref(
+                            selected.request.accountId,
+                            "details",
+                            undefined,
+                            returnTo,
+                          )}
                           className="font-semibold text-[color:var(--team-text)] underline decoration-slate-300 underline-offset-4 hover:decoration-current"
                         >
                           {selected.request.accountName}

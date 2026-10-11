@@ -7,14 +7,20 @@ const mockFetchTwilioProviderMedia = jest.fn();
 const mockLimit = jest.fn();
 
 jest.mock("drizzle-orm", () => ({
+  and: jest.fn((...values: unknown[]) => values),
   eq: jest.fn((...values: unknown[]) => values),
 }));
 
 jest.mock("@/db", () => ({
   conversationMessages: {
     id: "conversation_messages.id",
+    threadId: "conversation_messages.thread_id",
     mediaUrls: "conversation_messages.media_urls",
     provider: "conversation_messages.provider",
+  },
+  conversationThreads: {
+    id: "conversation_threads.id",
+    staffScope: "conversation_threads.staff_scope",
   },
   getDb: mockGetDb,
 }));
@@ -88,7 +94,9 @@ describe("Inbox media route authorization boundary", () => {
     mockGetDb.mockReturnValue({
       select: jest.fn(() => ({
         from: jest.fn(() => ({
-          where: jest.fn(() => ({ limit: mockLimit })),
+          innerJoin: jest.fn(() => ({
+            where: jest.fn(() => ({ limit: mockLimit })),
+          })),
         })),
       })),
     });

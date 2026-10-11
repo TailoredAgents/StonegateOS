@@ -1,12 +1,4 @@
-import {
-  canReclaimSquareProviderEvent,
-  canSkipFinalSquareProviderRecord,
-  reconcilePendingSquareAttempts,
-  SQUARE_PROVIDER_EVENT_LEASE_MS,
-  squareProviderReferenceConflicts,
-} from "@/lib/square-payments";
-import * as paymentSchema from "@/lib/payment-schema";
-import * as squareClient from "@/lib/square-client";
+import { jest } from "@jest/globals";
 import {
   blocksPaymentMutationForAttempt,
   canCollectAppointmentPayment,
@@ -14,6 +6,34 @@ import {
   canRetrySquareAttempt,
   requiresSquareAttemptReconciliation,
 } from "@/lib/payment-ledger";
+
+const mockPaymentLedgerSchemaAvailable = jest.fn();
+const mockListSquarePayments = jest.fn();
+const mockListSquareRefunds = jest.fn();
+
+jest.unstable_mockModule("@/lib/payment-schema", () => ({
+  isPaymentLedgerSchemaAvailable: mockPaymentLedgerSchemaAvailable,
+}));
+jest.unstable_mockModule("@/lib/square-client", () => ({
+  SQUARE_API_VERSION: "test",
+  getSquareOrder: jest.fn(),
+  getSquarePayment: jest.fn(),
+  getSquareRefund: jest.fn(),
+  listSquarePayments: mockListSquarePayments,
+  listSquareRefunds: mockListSquareRefunds,
+  parseSquareMoneyAmount: jest.fn(),
+  refundSquarePayment: jest.fn(),
+  retrieveAndVerifySquarePayment: jest.fn(),
+  SquareApiError: class SquareApiError extends Error {},
+}));
+
+const {
+  canReclaimSquareProviderEvent,
+  canSkipFinalSquareProviderRecord,
+  reconcilePendingSquareAttempts,
+  SQUARE_PROVIDER_EVENT_LEASE_MS,
+  squareProviderReferenceConflicts,
+} = await import("@/lib/square-payments");
 
 describe("Square completed-attempt reconciliation", () => {
   it("flags a second provider order or payment instead of accepting the first linked row", () => {
@@ -81,15 +101,11 @@ describe("Square provider sweep skip rules", () => {
 
 describe("Square worker before payment migration", () => {
   afterEach(() => {
-    jest.restoreAllMocks();
+    jest.clearAllMocks();
   });
 
   it("does not query Square or the payment ledger before 0059 exists", async () => {
-    jest
-      .spyOn(paymentSchema, "isPaymentLedgerSchemaAvailable")
-      .mockResolvedValue(false);
-    const listPayments = jest.spyOn(squareClient, "listSquarePayments");
-    const listRefunds = jest.spyOn(squareClient, "listSquareRefunds");
+    mockPaymentLedgerSchemaAvailable.mockResolvedValue(false);
 
     await expect(reconcilePendingSquareAttempts()).resolves.toEqual({
       inspected: 0,
@@ -105,8 +121,8 @@ describe("Square worker before payment migration", () => {
       refundsSkipped: 0,
       refundsNeedsReview: 0,
     });
-    expect(listPayments).not.toHaveBeenCalled();
-    expect(listRefunds).not.toHaveBeenCalled();
+    expect(mockListSquarePayments).not.toHaveBeenCalled();
+    expect(mockListSquareRefunds).not.toHaveBeenCalled();
   });
 });
 

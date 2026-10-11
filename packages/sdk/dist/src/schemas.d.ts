@@ -7,13 +7,13 @@ export declare const contactSchema: z.ZodObject<{
 }, "strip", z.ZodTypeAny, {
     firstName: string;
     lastName: string;
-    email?: string | undefined;
     phone?: string | undefined;
+    email?: string | undefined;
 }, {
     firstName: string;
     lastName: string;
-    email?: string | undefined;
     phone?: string | undefined;
+    email?: string | undefined;
 }>;
 export declare const propertySchema: z.ZodObject<{
     addressLine1: z.ZodString;
@@ -89,13 +89,13 @@ export declare const leadIntakeRequestSchema: z.ZodObject<{
     }, "strip", z.ZodTypeAny, {
         firstName: string;
         lastName: string;
-        email?: string | undefined;
         phone?: string | undefined;
+        email?: string | undefined;
     }, {
         firstName: string;
         lastName: string;
-        email?: string | undefined;
         phone?: string | undefined;
+        email?: string | undefined;
     }>;
     property: z.ZodObject<{
         addressLine1: z.ZodString;
@@ -166,8 +166,8 @@ export declare const leadIntakeRequestSchema: z.ZodObject<{
     contact: {
         firstName: string;
         lastName: string;
-        email?: string | undefined;
         phone?: string | undefined;
+        email?: string | undefined;
     };
     property: {
         addressLine1: string;
@@ -192,8 +192,8 @@ export declare const leadIntakeRequestSchema: z.ZodObject<{
     contact: {
         firstName: string;
         lastName: string;
-        email?: string | undefined;
         phone?: string | undefined;
+        email?: string | undefined;
     };
     property: {
         addressLine1: string;
@@ -252,6 +252,8 @@ export declare const quoteRequestSchema: z.ZodObject<{
     }>>>;
 }, "strip", z.ZodTypeAny, {
     service: string;
+    contactId?: string | undefined;
+    propertyId?: string | undefined;
     utm?: {
         source?: string | undefined;
         medium?: string | undefined;
@@ -259,12 +261,12 @@ export declare const quoteRequestSchema: z.ZodObject<{
         term?: string | undefined;
         content?: string | undefined;
     } | undefined;
-    contactId?: string | undefined;
-    propertyId?: string | undefined;
     description?: string | undefined;
     surfaceArea?: number | undefined;
 }, {
     service: string;
+    contactId?: string | undefined;
+    propertyId?: string | undefined;
     utm?: {
         source?: string | undefined;
         medium?: string | undefined;
@@ -272,8 +274,6 @@ export declare const quoteRequestSchema: z.ZodObject<{
         term?: string | undefined;
         content?: string | undefined;
     } | undefined;
-    contactId?: string | undefined;
-    propertyId?: string | undefined;
     description?: string | undefined;
     surfaceArea?: number | undefined;
 }>;
@@ -313,11 +313,11 @@ export declare const payDepositResponseSchema: z.ZodObject<{
     paymentLink: z.ZodString;
     expiresAt: z.ZodString;
 }, "strip", z.ZodTypeAny, {
-    paymentLink: string;
     expiresAt: string;
+    paymentLink: string;
 }, {
-    paymentLink: string;
     expiresAt: string;
+    paymentLink: string;
 }>;
 export type LeadIntakeRequest = z.infer<typeof leadIntakeRequestSchema>;
 export type LeadIntakeResponse = z.infer<typeof leadIntakeResponseSchema>;

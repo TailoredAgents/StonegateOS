@@ -457,7 +457,7 @@ for (const engine of [chromium, webkit]) {
             .getByRole("link", { name: "Add partner", exact: true })
             .click();
           const create = main.getByRole("button", {
-            name: "Create company & invite Administrator",
+            name: "Create company and continue",
             exact: true,
           });
           await expect(create).toBeVisible();

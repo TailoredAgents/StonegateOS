@@ -577,6 +577,7 @@ export async function PolicyCenterSection({
               <label className={LABEL_CLASS}>Timezone</label>
               <input
                 name="timezone"
+                aria-label="Business timezone"
                 defaultValue={businessTimezone}
                 required
                 maxLength={100}
@@ -620,6 +621,7 @@ export async function PolicyCenterSection({
                     <input
                       type="time"
                       name={`${key}_start`}
+                      aria-label={`${label} opening time`}
                       defaultValue={start}
                       required
                       className={INPUT_CLASS}
@@ -627,6 +629,7 @@ export async function PolicyCenterSection({
                     <input
                       type="time"
                       name={`${key}_end`}
+                      aria-label={`${label} closing time`}
                       defaultValue={end}
                       required
                       className={INPUT_CLASS}
@@ -715,6 +718,7 @@ export async function PolicyCenterSection({
                   <input
                     type="time"
                     name={`${channel.key}_start`}
+                    aria-label={`${channel.label} quiet hours start`}
                     defaultValue={start}
                     required
                     className={INPUT_CLASS}
@@ -722,6 +726,7 @@ export async function PolicyCenterSection({
                   <input
                     type="time"
                     name={`${channel.key}_end`}
+                    aria-label={`${channel.label} quiet hours end`}
                     defaultValue={end}
                     required
                     className={INPUT_CLASS}
@@ -776,6 +781,7 @@ export async function PolicyCenterSection({
               <label className={LABEL_CLASS}>Coverage</label>
               <select
                 name="mode"
+                aria-label="Service area coverage"
                 defaultValue={serviceMode}
                 className={INPUT_CLASS}
               >
@@ -789,6 +795,7 @@ export async function PolicyCenterSection({
                 <label className={LABEL_CLASS}>Home base</label>
                 <input
                   name="homeBase"
+                  aria-label="Service area home base"
                   maxLength={200}
                   defaultValue={
                     typeof serviceValue["homeBase"] === "string"
@@ -802,6 +809,7 @@ export async function PolicyCenterSection({
                 <label className={LABEL_CLASS}>Radius (miles)</label>
                 <input
                   name="radiusMiles"
+                  aria-label="Service area radius in miles"
                   type="number"
                   step="1"
                   min="0"
@@ -820,6 +828,7 @@ export async function PolicyCenterSection({
               <label className={LABEL_CLASS}>Core service cities</label>
               <textarea
                 name="cityAllowlist"
+                aria-label="Core service cities"
                 rows={3}
                 defaultValue={cityAllowlist.join(", ")}
                 className={TEXTAREA_CLASS}
@@ -839,6 +848,7 @@ export async function PolicyCenterSection({
               />
               <textarea
                 name="zipAllowlist"
+                aria-label="Legacy ZIP list"
                 rows={4}
                 defaultValue={zipAllowlist.join(", ")}
                 className={TEXTAREA_CLASS}
@@ -868,6 +878,7 @@ export async function PolicyCenterSection({
               <label className={LABEL_CLASS}>Notes</label>
               <input
                 name="notes"
+                aria-label="Service area notes"
                 defaultValue={
                   typeof serviceValue["notes"] === "string"
                     ? serviceValue["notes"]
@@ -917,6 +928,7 @@ export async function PolicyCenterSection({
                 <label className={LABEL_CLASS}>Business name</label>
                 <input
                   name="businessName"
+                  aria-label="Business name"
                   defaultValue={companyBusinessName}
                   maxLength={200}
                   className={INPUT_CLASS}
@@ -927,6 +939,7 @@ export async function PolicyCenterSection({
                 <label className={LABEL_CLASS}>Primary phone</label>
                 <input
                   name="primaryPhone"
+                  aria-label="Primary business phone"
                   defaultValue={companyPrimaryPhone}
                   maxLength={50}
                   className={INPUT_CLASS}
@@ -940,6 +953,7 @@ export async function PolicyCenterSection({
                 </label>
                 <input
                   name="discountPercent"
+                  aria-label="Instant quote discount percentage"
                   type="number"
                   inputMode="decimal"
                   min="0"
@@ -957,6 +971,7 @@ export async function PolicyCenterSection({
               <label className={LABEL_CLASS}>Service area summary</label>
               <textarea
                 name="serviceAreaSummary"
+                aria-label="Service area summary"
                 rows={3}
                 defaultValue={companyServiceAreaSummary}
                 className={TEXTAREA_CLASS}
@@ -966,6 +981,7 @@ export async function PolicyCenterSection({
               <label className={LABEL_CLASS}>Trailer and pricing summary</label>
               <textarea
                 name="trailerAndPricingSummary"
+                aria-label="Trailer and pricing summary"
                 rows={3}
                 defaultValue={companyTrailerAndPricingSummary}
                 className={TEXTAREA_CLASS}
@@ -976,6 +992,7 @@ export async function PolicyCenterSection({
                 <label className={LABEL_CLASS}>What we do</label>
                 <textarea
                   name="whatWeDo"
+                  aria-label="What we do"
                   rows={4}
                   defaultValue={companyWhatWeDo}
                   className={TEXTAREA_CLASS}
@@ -985,6 +1002,7 @@ export async function PolicyCenterSection({
                 <label className={LABEL_CLASS}>What we do not do</label>
                 <textarea
                   name="whatWeDontDo"
+                  aria-label="What we do not do"
                   rows={4}
                   defaultValue={companyWhatWeDontDo}
                   className={TEXTAREA_CLASS}
@@ -995,6 +1013,7 @@ export async function PolicyCenterSection({
               <label className={LABEL_CLASS}>Booking style</label>
               <textarea
                 name="bookingStyle"
+                aria-label="Booking style"
                 rows={3}
                 defaultValue={companyBookingStyle}
                 className={TEXTAREA_CLASS}
@@ -1004,6 +1023,7 @@ export async function PolicyCenterSection({
               <label className={LABEL_CLASS}>Agent notes</label>
               <textarea
                 name="agentNotes"
+                aria-label="Agent notes"
                 rows={3}
                 defaultValue={companyAgentNotes}
                 className={TEXTAREA_CLASS}
@@ -1015,6 +1035,7 @@ export async function PolicyCenterSection({
               </label>
               <textarea
                 name="outboundCallRecordingNotice"
+                aria-label="Outbound call recording notice"
                 rows={2}
                 defaultValue={companyOutboundCallRecordingNotice}
                 className={TEXTAREA_CLASS}
@@ -1078,6 +1099,7 @@ export async function PolicyCenterSection({
               <label className={LABEL_CLASS}>Name</label>
               <input
                 name="agentDisplayName"
+                aria-label="Sales agent display name"
                 defaultValue={salesAutopilotName}
                 className={INPUT_CLASS}
                 required
@@ -1127,6 +1149,7 @@ export async function PolicyCenterSection({
               <label className={LABEL_CLASS}>System prompt</label>
               <textarea
                 name="systemPrompt"
+                aria-label="Conversation persona system prompt"
                 rows={12}
                 maxLength={4000}
                 defaultValue={personaSystemPrompt}
@@ -1249,6 +1272,7 @@ export async function PolicyCenterSection({
                 <label className={LABEL_CLASS}>Booking window (days)</label>
                 <input
                   name="bookingWindowDays"
+                  aria-label="Booking window in days"
                   type="number"
                   step="1"
                   min="1"
@@ -1266,6 +1290,7 @@ export async function PolicyCenterSection({
                 <label className={LABEL_CLASS}>Travel buffer (minutes)</label>
                 <input
                   name="bufferMinutes"
+                  aria-label="Travel buffer in minutes"
                   type="number"
                   step="5"
                   min="0"
@@ -1283,6 +1308,7 @@ export async function PolicyCenterSection({
                 <label className={LABEL_CLASS}>Max jobs per day</label>
                 <input
                   name="maxJobsPerDay"
+                  aria-label="Maximum jobs per day"
                   type="number"
                   step="1"
                   min="0"
@@ -1300,6 +1326,7 @@ export async function PolicyCenterSection({
                 <label className={LABEL_CLASS}>Max jobs per crew</label>
                 <input
                   name="maxJobsPerCrew"
+                  aria-label="Maximum jobs per crew"
                   type="number"
                   step="1"
                   min="0"
@@ -1369,6 +1396,7 @@ export async function PolicyCenterSection({
                   </label>
                   <input
                     name={`window_hours_${index + 1}`}
+                    aria-label={`Confirmation window ${index + 1} in hours`}
                     type="number"
                     step="1"
                     min="1"
@@ -1435,6 +1463,7 @@ export async function PolicyCenterSection({
                   </label>
                   <input
                     name={`step_hours_${index + 1}`}
+                    aria-label={`Follow-up step ${index + 1} in hours`}
                     type="number"
                     step="1"
                     min="1"
@@ -1491,6 +1520,7 @@ export async function PolicyCenterSection({
               </label>
               <input
                 name="allowedServices"
+                aria-label="Allowed services"
                 required
                 maxLength={4000}
                 defaultValue={
@@ -1506,6 +1536,7 @@ export async function PolicyCenterSection({
                 <label className={LABEL_CLASS}>Max volume (cubic yards)</label>
                 <input
                   name="maxVolumeCubicYards"
+                  aria-label="Maximum volume in cubic yards"
                   type="number"
                   step="1"
                   min="0"
@@ -1523,6 +1554,7 @@ export async function PolicyCenterSection({
                 <label className={LABEL_CLASS}>Max item count</label>
                 <input
                   name="maxItemCount"
+                  aria-label="Maximum item count"
                   type="number"
                   step="1"
                   min="0"
@@ -1541,6 +1573,7 @@ export async function PolicyCenterSection({
               <label className={LABEL_CLASS}>Notes</label>
               <input
                 name="notes"
+                aria-label="Standard job notes"
                 defaultValue={
                   typeof standardValue["notes"] === "string"
                     ? standardValue["notes"]
@@ -1588,6 +1621,7 @@ export async function PolicyCenterSection({
               </label>
               <input
                 name="declined"
+                aria-label="Declined items"
                 defaultValue={itemDeclined.join(", ")}
                 className={INPUT_CLASS}
               />
@@ -1607,6 +1641,7 @@ export async function PolicyCenterSection({
                   >
                     <input
                       name={`fee_item_${index + 1}`}
+                      aria-label={`Extra fee item ${index + 1}`}
                       placeholder="Item"
                       maxLength={200}
                       defaultValue={item}
@@ -1614,6 +1649,7 @@ export async function PolicyCenterSection({
                     />
                     <input
                       name={`fee_amount_${index + 1}`}
+                      aria-label={`Extra fee amount ${index + 1}`}
                       type="number"
                       step="1"
                       min="0"
@@ -1825,6 +1861,7 @@ export async function PolicyCenterSection({
               <label className={LABEL_CLASS}>Google review link</label>
               <input
                 name="reviewUrl"
+                aria-label="Google review link"
                 defaultValue={reviewRequestUrl}
                 inputMode="url"
                 required

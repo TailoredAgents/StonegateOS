@@ -52,11 +52,8 @@ describe("expense rollout flags", () => {
   });
 
   afterEach(() => {
-    Object.defineProperty(process.env, "NODE_ENV", {
-      configurable: true,
-      value: originalNodeEnv,
-      writable: true,
-    });
+    if (originalNodeEnv === undefined) delete process.env["NODE_ENV"];
+    else process.env["NODE_ENV"] = originalNodeEnv;
     for (const key of keys) {
       const value = original[key];
       if (value === undefined) delete process.env[key];
@@ -101,11 +98,7 @@ describe("expense rollout flags", () => {
   });
 
   it("keeps fixed-cost setup default-off in production and honors an explicit enable", () => {
-    Object.defineProperty(process.env, "NODE_ENV", {
-      configurable: true,
-      value: "production",
-      writable: true,
-    });
+    process.env["NODE_ENV"] = "production";
     delete process.env["EXPENSE_FIXED_COSTS_ENABLED"];
     delete process.env["EXPENSE_DUMP_TICKETS_ENABLED"];
     expect(isExpenseFixedCostsEnabled()).toBe(false);

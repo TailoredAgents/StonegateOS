@@ -1,25 +1,36 @@
 import Link from "next/link";
 import type { Route } from "next";
 import { TEAM_FOCUS_RING, teamButtonClass } from "./team-ui";
+import { partnerAdministrationHref } from "../partner-entry-navigation";
 
 export type PartnerAdministrationDestination = {
   id: string;
   label: string;
-  href: string;
+  href: Route;
   active: boolean;
 };
 export function PartnerAdministrationNavigation({
   destinations,
   canCreate = false,
+  returnTo,
 }: {
   destinations: PartnerAdministrationDestination[];
   canCreate?: boolean;
+  returnTo?: string;
 }) {
   const active = destinations.find((item) => item.active)?.id ?? "requests";
   const requests = active === "requests";
   const administrative = !["requests", "accounts"].includes(active);
   return (
     <header className="min-w-0 space-y-4">
+      {returnTo ? (
+        <Link
+          href={returnTo as Route}
+          className={teamButtonClass("secondary", "sm")}
+        >
+          Back to previous workspace
+        </Link>
+      ) : null}
       {!requests ? (
         <div className="flex flex-wrap items-start justify-between gap-3">
           <h1 className="text-2xl font-semibold tracking-tight">
@@ -30,7 +41,12 @@ export function PartnerAdministrationNavigation({
           {canCreate && active === "accounts" ? (
             <Link
               className={teamButtonClass("secondary")}
-              href="/team/partners?p_admin=accounts&p_setup=create#partner-relationship-setup-heading"
+              href={partnerAdministrationHref({
+                view: "accounts",
+                setup: "create",
+                hash: "partner-relationship-setup-heading",
+                returnTo,
+              })}
             >
               Add partner
             </Link>
@@ -45,19 +61,22 @@ export function PartnerAdministrationNavigation({
           {
             id: "requests",
             label: "Requests",
-            href: "/team/partners?p_admin=requests",
+            href: partnerAdministrationHref({ view: "requests", returnTo }),
             active: active === "requests",
           },
           {
             id: "accounts",
             label: "Companies",
-            href: "/team/partners?p_admin=accounts",
+            href: partnerAdministrationHref({ view: "accounts", returnTo }),
             active: active === "accounts",
           },
           {
             id: "administration",
             label: "Administration",
-            href: "/team/partners?p_admin=administration",
+            href: partnerAdministrationHref({
+              view: "administration",
+              returnTo,
+            }),
             active: administrative,
           },
         ]
@@ -69,7 +88,7 @@ export function PartnerAdministrationNavigation({
           .map((item) => (
             <Link
               key={item.id}
-              href={item.href as Route}
+              href={item.href}
               aria-current={item.active ? "page" : undefined}
               className={`inline-flex min-h-11 items-center rounded-lg px-4 py-2 text-sm ${TEAM_FOCUS_RING} ${item.active ? "bg-[color:var(--team-surface-muted)] font-semibold" : "text-[color:var(--team-text-muted)]"}`}
             >
@@ -99,7 +118,7 @@ export function PartnerAdministrationNavigation({
               .map((item) => (
                 <Link
                   key={item.id}
-                  href={item.href as Route}
+                  href={item.href}
                   aria-current={item.active ? "page" : undefined}
                   className={`inline-flex min-h-11 items-center rounded-lg px-3 py-2 text-sm ${TEAM_FOCUS_RING} ${item.active ? "bg-[color:var(--team-surface-muted)] font-semibold" : "text-[color:var(--team-text-muted)]"}`}
                 >

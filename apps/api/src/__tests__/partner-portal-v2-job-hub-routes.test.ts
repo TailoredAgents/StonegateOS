@@ -2,7 +2,9 @@ import fs from "node:fs";
 import path from "node:path";
 
 function source(relativePath: string): string {
-  return fs.readFileSync(path.join(process.cwd(), relativePath), "utf8");
+  return fs
+    .readFileSync(path.join(process.cwd(), relativePath), "utf8")
+    .replace(/\r\n?/gu, "\n");
 }
 
 describe("Partner Portal V2 job hub route boundaries", () => {
@@ -56,10 +58,16 @@ describe("Partner Portal V2 job hub route boundaries", () => {
     expect(messages).toContain("IssueMessageBodySchema");
     expect(messages).toContain("PARTNER_JOB_ISSUE_CATEGORIES");
     expect(messages).toContain("PARTNER_JOB_ISSUE_PRIORITIES");
-    expect(messages).toContain("ensurePartnerJobThread(tx, principal.accountId!, job.id)");
+    expect(messages).toContain(
+      "ensurePartnerJobThread(tx, principal.accountId!, job.id)",
+    );
     const sharedThread = source("src/lib/partner-job-thread.ts");
-    expect(sharedThread).toContain("eq(conversationThreads.partnerAccountId, accountId)");
-    expect(sharedThread).toContain("eq(conversationThreads.partnerBookingId, jobId)");
+    expect(sharedThread).toContain(
+      "eq(conversationThreads.partnerAccountId, accountId)",
+    );
+    expect(sharedThread).toContain(
+      "eq(conversationThreads.partnerBookingId, jobId)",
+    );
     expect(messages).toContain('eventType: "issue_reported"');
     expect(messages).toContain(
       'action: issue\n          ? "partner.job_issue.reported"',

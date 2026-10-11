@@ -51,11 +51,13 @@ function QuoteBuilderUnavailable({
   detail,
   denied = false,
   retryHref,
+  returnTo,
 }: {
   title: string;
   detail: string;
   denied?: boolean;
   retryHref?: string;
+  returnTo?: string | null;
 }): ReactElement {
   return (
     <section
@@ -73,7 +75,7 @@ function QuoteBuilderUnavailable({
       <p className="mt-1">{detail}</p>
       <a
         className={`mt-3 ${teamButtonClass("secondary", "sm")}`}
-        href={retryHref ?? quoteWorkspaceHref("manage")}
+        href={retryHref ?? quoteWorkspaceHref("manage", { returnTo })}
       >
         {retryHref ? "Retry quote creation" : "Open quote management"}
       </a>
@@ -88,6 +90,7 @@ export async function QuoteBuilderSection({
   partnerAccountId,
   partnerTargetType,
   partnerTargetId,
+  returnTo,
 }: {
   initialContactId?: string;
   initialPropertyId?: string;
@@ -96,6 +99,7 @@ export async function QuoteBuilderSection({
   partnerTargetType?: string;
   partnerTargetId?: string;
   workflow?: "canvass" | null;
+  returnTo?: string | null;
 }): Promise<ReactElement> {
   const principal = await requireCurrentTeamPrincipal();
   if (!hasTeamPermissionValue(principal.permissions, "quotes.write")) {
@@ -104,6 +108,7 @@ export async function QuoteBuilderSection({
         denied
         title="Quote creation is read-only"
         detail="You can review quotes, but your current access does not allow creating or editing them."
+        returnTo={returnTo}
       />
     );
   }
@@ -121,6 +126,7 @@ export async function QuoteBuilderSection({
       <QuoteBuilderUnavailable
         title="Partner quote context is incomplete"
         detail="Open the quote from Partner Administration again. No unbound Partner quote was created."
+        returnTo={returnTo}
       />
     );
   }
@@ -133,6 +139,7 @@ export async function QuoteBuilderSection({
       principal,
       initialContactId,
       initialPropertyId,
+      returnTo,
       initialPartnerContext:
         partnerAccountId && partnerTargetType && partnerTargetId
           ? {
@@ -151,6 +158,7 @@ export async function QuoteBuilderSection({
       instantQuoteId,
       retry: "1",
     },
+    returnTo,
   });
   let response: Response;
   try {

@@ -1,36 +1,26 @@
 # StonegateOS Monorepo
 
-StonegateOS is a monorepo for a local service business: a customer-facing website + booking flow, plus an internal CRM ("Team Console") for sales/ops/owners.
+StonegateOS is the production operating platform used by Stonegate Junk Removal: a customer-facing website and booking flow, a desktop Team Console, a protected phone-first field application, Partner Portal, API, and durable workers.
+
+Current architecture and product status are documented in `docs/CURRENT_SYSTEM_OVERVIEW.md` and `docs/CAPABILITY_MATRIX.md`. Older plans may be historical or target-state documents.
 
 ## Apps
 
-- `apps/site`: public marketing site + `/book` + Team Console UI at `/team`.
+- `apps/site`: public marketing/booking, customer Quote V2, Team Console at `/team`, field app at `/mobile`, and Partner Portal.
 - `apps/api`: backend + admin API (Next.js) with Drizzle/Postgres.
-- `apps/app`: optional owner dashboard app (WIP/experimental).
+- `apps/app`: experimental legacy Owner Hub; not a supported product or demo surface.
 
 ## Major Features (Current)
 
-- Team Console (`/team`): Unified Inbox (SMS/Messenger/email), Contacts, Pipeline (drag-and-drop), Calendar (day/week/month), Sales HQ + call coaching, Outbound queue, Partners, Owner HQ, Marketing dashboards (Google Ads + Website Analytics), SEO agent, Control/settings.
+- Team Console (`/team`): Unified Inbox, Contacts/Properties, Quotes, Calendar, Pipeline, Sales HQ, Outbound, Partners, Expenses, Owner HQ, Marketing, Policy, Automation, Access, Audit, and settings.
+- Mobile (`/mobile`): field-oriented Inbox, Today/My Day, Contacts, Calendar, job scope/media/payments/completion, Quotes, Spend, Owner, Access, and settings according to role and feature flags.
+- Partner Portal: account, location, request, job/proof, commercial, approval, and billing workflows with a matching Team staff workspace.
 - Outbox worker: drains `outbox_events` and runs scheduled jobs (reminders, SEO autopublish, marketing sync, call analysis/coaching).
-- Integrations: Twilio (SMS + calls), Meta (Lead Ads + Messenger), Google Ads (sync + analyst), optional Google Calendar sync.
+- Integrations: Twilio, email, Meta, Google Ads, optional Google Calendar, media storage/scanning, OpenAI-assisted workflows, and gated Square payments.
 
-## Team Console Tabs (IDs)
+## Team Console Routes
 
-The Team Console is one page (`/team`) with tab IDs in the query string (`/team?tab=...`).
-
-- **Primary**: `calendar`, `inbox`, `contacts`, `quotes`, `expenses`
-- **Sales**: `pipeline`, `sales-hq`, `outbound`, `partners`
-- **Owner HQ**: `owner`
-- **Marketing**: `google-ads`, `web-analytics`, `seo`
-- **Admin**: `commissions`, `policy`, `automation`, `access`, `sales-log`, `audit`, `merge`
-- **Utilities**: `chat`, `settings`
-
-Legacy aliases:
-
-- `tab=marketing` redirects to `tab=google-ads`
-- `tab=quote-builder` and `tab=canvass` redirect to `tab=quotes` (with mode selection)
-- `tab=estimates` is a legacy alias and is remapped to `inbox` (owner) or `calendar` (non-owner)
-- `tab=myday` is a legacy alias and is remapped to `calendar`
+The Team Console uses canonical routes such as `/team/calendar`, `/team/inbox`, `/team/contacts`, `/team/quotes/manage`, and `/team/expenses`. The route and permission source of truth is `apps/site/src/app/team/surface-registry.ts`. Historical `?tab=` URLs remain compatibility aliases and should not be used in new documentation or links.
 
 ## Prerequisites
 
@@ -75,10 +65,7 @@ Legacy aliases:
   pnpm -w dev
   ```
   The API listens on `http://localhost:3001` (via `apps/api`). The site runs on `http://localhost:3000`.
-- Run the Owner Hub separately if needed:
-  ```bash
-  pnpm --filter app dev
-  ```
+- Do not use `apps/app` for operational or prospect workflows; `/team` is the supported desktop product.
 
 ## Calendar Sync
 
@@ -117,23 +104,21 @@ Legacy aliases:
   ```bash
   pnpm test:e2e
   ```
-- Current coverage includes lead intake, quote lifecycle, and smoke checks:
-  - `tests/e2e/specs/lead-intake.spec.ts`
-  - `tests/e2e/specs/quote-lifecycle.spec.ts`
-  - `tests/e2e/specs/smoke.spec.ts`
+- Coverage spans public acquisition, CRM/Inbox, Quote V2, mobile workflows, Partner Portal, role/viewport/theme Team audits, accessibility, and smoke journeys. See `playwright.config.ts`, `playwright.team-audit.config.ts`, and `tests/e2e` for the executable inventory.
 - `pnpm dev:e2e` writes service logs to `artifacts/e2e/logs/{site,api,worker}.log`. Playwright attaches the tail of each file on failure.
 
 ## Useful Commands
 
 ```bash
-pnpm -w build       # production build for all apps
-pnpm -w lint        # lint all workspaces
-pnpm -w test        # run workspace tests (if configured)
+pnpm -w build       # production build for configured workspaces
+pnpm -w lint        # lint API and Site
+pnpm -w test        # run the API Jest suite
+pnpm docs:check     # fail when generated system indexes drift
+pnpm test:e2e:team-audit # full Team role/viewport/theme audit
 pnpm outbox:worker  # run the outbox dispatcher (see docs/outbox-worker.md)
 pnpm -w smoke       # quick production-smoke checks (see docs/RELEASE_CHECKLIST.md)
 pnpm --filter api dev
 pnpm --filter site dev
-pnpm --filter app dev
 ```
 
 ## Content

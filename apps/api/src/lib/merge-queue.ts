@@ -24,6 +24,7 @@ import {
   mergeSuggestions,
   properties,
   quotes,
+  salesOpportunities,
   salesAgentMemories,
   salesAgentNextActions,
   teamInboxNewLeadAcknowledgements,
@@ -109,6 +110,7 @@ export type MergeContactsResult = {
     properties: number;
     propertyAssociations: number;
     leads: number;
+    opportunities: number;
     quotes: number;
     appointments: number;
     threads: number;
@@ -133,6 +135,7 @@ export type MergeContactsResult = {
 export type MergePreviewCountKey =
   | "properties"
   | "leads"
+  | "opportunities"
   | "threads"
   | "messages"
   | "participants"
@@ -671,6 +674,9 @@ async function readMergeDependencyStateUsing(
       SELECT 'leads.contact_id', l."id"::text, l."contact_id"::text, to_jsonb(l)
       FROM "leads" l WHERE l."contact_id" IN (${sourceContactId}::uuid, ${targetContactId}::uuid)
       UNION ALL
+      SELECT 'sales_opportunities.contact_id', o."id"::text, o."contact_id"::text, to_jsonb(o)
+      FROM "sales_opportunities" o WHERE o."contact_id" IN (${sourceContactId}::uuid, ${targetContactId}::uuid)
+      UNION ALL
       SELECT 'team_inbox_new_lead_acknowledgements.contact_id', a."id"::text, a."contact_id"::text, to_jsonb(a)
       FROM "team_inbox_new_lead_acknowledgements" a WHERE a."contact_id" IN (${sourceContactId}::uuid, ${targetContactId}::uuid)
       UNION ALL
@@ -703,6 +709,9 @@ async function readMergeDependencyStateUsing(
       UNION ALL
       SELECT 'partner_users.org_contact_id', p."id"::text, p."org_contact_id"::text, to_jsonb(p)
       FROM "partner_users" p WHERE p."org_contact_id" IN (${sourceContactId}::uuid, ${targetContactId}::uuid)
+      UNION ALL
+      SELECT 'partner_accounts.portal_contact_id', p."id"::text, p."portal_contact_id"::text, to_jsonb(p)
+      FROM "partner_accounts" p WHERE p."portal_contact_id" IN (${sourceContactId}::uuid, ${targetContactId}::uuid)
       UNION ALL
       SELECT 'partner_invite_operations.org_contact_id', p."id"::text, p."org_contact_id"::text, to_jsonb(p)
       FROM "partner_invite_operations" p WHERE p."org_contact_id" IN (${sourceContactId}::uuid, ${targetContactId}::uuid)
@@ -966,6 +975,9 @@ async function getMergePreviewUsing(
       leads: sql<number>`(
         select count(*)::int from leads l where l.contact_id = ${contacts.id}
       )`.mapWith(Number),
+      opportunities: sql<number>`(
+        select count(*)::int from sales_opportunities o where o.contact_id = ${contacts.id}
+      )`.mapWith(Number),
       threads: sql<number>`(
         select count(*)::int from conversation_threads t where t.contact_id = ${contacts.id}
       )`.mapWith(Number),
@@ -1099,6 +1111,7 @@ async function getMergePreviewUsing(
     counts: {
       properties: row.properties,
       leads: row.leads,
+      opportunities: row.opportunities,
       threads: row.threads,
       messages: row.messages,
       participants: row.participants,
@@ -1550,6 +1563,16 @@ export async function mergeContactsInTransaction(
     .set({ contactId: targetContactId, updatedAt: mergedAt })
     .where(eq(leads.contactId, sourceContactId))
     .returning({ id: leads.id });
+
+  const opportunitiesUpdated = await tx
+    .update(salesOpportunities)
+    .set({
+      contactId: targetContactId,
+      revision: sql`${salesOpportunities.revision} + 1`,
+      updatedAt: mergedAt,
+    })
+    .where(eq(salesOpportunities.contactId, sourceContactId))
+    .returning({ id: salesOpportunities.id });
 
   const quotesUpdated = await tx
     .update(quotes)
@@ -2178,6 +2201,7 @@ export async function mergeContactsInTransaction(
       properties: propertiesUpdated.length,
       propertyAssociations: sourcePropertyLinks.length,
       leads: leadsUpdated.length,
+      opportunities: opportunitiesUpdated.length,
       quotes: quotesUpdated.length,
       appointments: appointmentsUpdated.length,
       threads: threadsUpdated.length,

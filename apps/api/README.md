@@ -1,13 +1,14 @@
 # Stonegate API App
 
-This is the Next.js API application that powers StonegateOS. It exposes REST-style endpoints under `/api` and hosts business logic for leads, appointments, quotes, notifications, payments, and calendar sync.
+This is the Next.js API application that powers StonegateOS. It exposes REST-style endpoints under `/api` and owns PostgreSQL-backed business logic for public booking, Team, Mobile, Partner Portal, quotes, notifications, media, expenses, payments, and provider integrations.
 
 ## Key Responsibilities
 
 - Lead intake and appointment scheduling (`/api/web/lead-intake`, `/api/appointments`, `/api/web/appointments/...`).
-- Quote lifecycle (`/api/quotes`, `/api/quotes/:id/send`, public `/api/public/quotes/:token`).
+- Quote lifecycle, including gated Quote V2 staff/customer/send/booking workflows.
 - Notifications + outbox processing (`apps/api/src/lib/notifications.ts`, `apps/api/src/lib/outbox-processor.ts`).
-- Stripe and Plaid ingestion (`/api/payments`, `/api/admin/stripe/backfill`, Plaid admin routes).
+- Appointment media/proof, Expense V2/receipt processing, Partner Portal V2, and audited Team mutations.
+- Square payment workflows where operationally enabled; legacy Stripe/Plaid paths remain in the repository where still referenced.
 - Calendar sync and webhook processing (`/api/calendar/status`, `/api/calendar/webhook`).
 
 ## Local Development

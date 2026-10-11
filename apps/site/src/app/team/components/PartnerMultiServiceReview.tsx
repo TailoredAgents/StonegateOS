@@ -1,5 +1,5 @@
 "use client";
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type { PartnerMultiServiceRequest } from "@myst-os/sdk";
 import {
   formatPartnerServiceRate,
@@ -11,6 +11,7 @@ import {
 } from "../actions/partner-multi-service";
 import { previewPartnerServiceArrival } from "../actions/partner-service-reviews";
 import { teamButtonClass } from "./team-ui";
+import { partnerCompanyHref } from "../partner-company-navigation";
 
 const inputClass =
   "min-h-11 w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm";
@@ -99,7 +100,7 @@ export function PartnerMultiServiceReview({
       mounted.current = false;
     };
   }, []);
-  async function loadResources() {
+  const loadResources = useCallback(async () => {
     setResourceError("");
     const result = await loadPartnerVisitResources(accountId, bookingId).catch(
       () => ({
@@ -110,10 +111,10 @@ export function PartnerMultiServiceReview({
     if (!mounted.current) return;
     if (result.ok) setResources(result.resources);
     else setResourceError(result.message);
-  }
+  }, [accountId, bookingId]);
   useEffect(() => {
     if (schedulingOpen) void loadResources();
-  }, [schedulingOpen]);
+  }, [loadResources, schedulingOpen]);
   useEffect(() => {
     setArrival(null);
     setArrivalError("");
@@ -333,7 +334,7 @@ export function PartnerMultiServiceReview({
                           Rate not set yet.{" "}
                           <a
                             className="underline"
-                            href={`/team/partners?p_company=${accountId}&p_admin=companies&p_company_section=settings`}
+                            href={partnerCompanyHref(accountId, "settings")}
                           >
                             Set company rates
                           </a>{" "}

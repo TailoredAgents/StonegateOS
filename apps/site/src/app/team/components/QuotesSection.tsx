@@ -121,7 +121,13 @@ function isQuoteDto(value: unknown): value is QuoteDto {
   );
 }
 
-function QuotesUnavailable({ detail }: { detail: string }): ReactElement {
+function QuotesUnavailable({
+  detail,
+  returnTo,
+}: {
+  detail: string;
+  returnTo?: string | null;
+}): ReactElement {
   return (
     <section
       className="rounded-2xl border border-rose-200 bg-rose-50 p-5 text-sm text-rose-900"
@@ -136,6 +142,7 @@ function QuotesUnavailable({ detail }: { detail: string }): ReactElement {
         className={`mt-3 ${teamButtonClass("secondary", "sm")}`}
         href={quoteWorkspaceHref("manage", {
           query: { retry: "1" },
+          returnTo,
         })}
       >
         Retry quote management
@@ -144,7 +151,11 @@ function QuotesUnavailable({ detail }: { detail: string }): ReactElement {
   );
 }
 
-export async function QuotesSection(): Promise<ReactElement> {
+export async function QuotesSection({
+  returnTo,
+}: {
+  returnTo?: string | null;
+} = {}): Promise<ReactElement> {
   const principal = await requireCurrentTeamPrincipal();
   if (isQuoteV2StaffFeatureEnabled()) {
     let response: Response;
@@ -155,7 +166,10 @@ export async function QuotesSection(): Promise<ReactElement> {
       );
     } catch {
       return (
-        <QuotesUnavailable detail="The versioned quote service could not be reached." />
+        <QuotesUnavailable
+          detail="The versioned quote service could not be reached."
+          returnTo={returnTo}
+        />
       );
     }
     const page = normalizeQuoteV2ManagePage(
@@ -164,6 +178,7 @@ export async function QuotesSection(): Promise<ReactElement> {
     if (!response.ok || !page) {
       return (
         <QuotesUnavailable
+          returnTo={returnTo}
           detail={
             response.ok
               ? "The versioned quote service returned an unreadable response."
@@ -193,11 +208,19 @@ export async function QuotesSection(): Promise<ReactElement> {
   try {
     res = await callAdminApiAs(principal, "/api/quotes");
   } catch {
-    return <QuotesUnavailable detail="The CRM service could not be reached." />;
+    return (
+      <QuotesUnavailable
+        detail="The CRM service could not be reached."
+        returnTo={returnTo}
+      />
+    );
   }
   if (!res.ok) {
     return (
-      <QuotesUnavailable detail={`The CRM returned HTTP ${res.status}.`} />
+      <QuotesUnavailable
+        detail={`The CRM returned HTTP ${res.status}.`}
+        returnTo={returnTo}
+      />
     );
   }
 
@@ -210,7 +233,10 @@ export async function QuotesSection(): Promise<ReactElement> {
     !payload.quotes.every(isQuoteDto)
   ) {
     return (
-      <QuotesUnavailable detail="The CRM returned an unreadable quote response." />
+      <QuotesUnavailable
+        detail="The CRM returned an unreadable quote response."
+        returnTo={returnTo}
+      />
     );
   }
 

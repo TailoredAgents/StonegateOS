@@ -126,13 +126,6 @@ export function PartnerRelationshipSetup({
     );
     setNextCursor(result.nextCursor);
   }
-  React.useEffect(() => {
-    if (initialAccountId) void chooseCompany(initialAccountId);
-    else void findCompanies();
-    return () => {
-      contextGeneration.current += 1;
-    };
-  }, [initialAccountId]);
   async function chooseCompany(id: string) {
     if (
       ratesDirty &&
@@ -164,6 +157,17 @@ export function PartnerRelationshipSetup({
     }
     setContext(result.context);
   }
+  const findCompaniesRef = React.useRef(findCompanies);
+  const chooseCompanyRef = React.useRef(chooseCompany);
+  findCompaniesRef.current = findCompanies;
+  chooseCompanyRef.current = chooseCompany;
+  React.useEffect(() => {
+    if (initialAccountId) void chooseCompanyRef.current(initialAccountId);
+    else void findCompaniesRef.current();
+    return () => {
+      contextGeneration.current += 1;
+    };
+  }, [initialAccountId]);
   async function save(
     kind: "create" | "invite" | "workflow" | "enable",
     body: unknown,

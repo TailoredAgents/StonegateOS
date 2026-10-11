@@ -765,7 +765,9 @@ describe("Site call receipt boundary", () => {
       }
     }
     expect(missing).toEqual([]);
-    expect(formCount).toBeGreaterThanOrEqual(17);
+    // The exact number can shrink when duplicate desktop forms are consolidated;
+    // every remaining form above must still carry both safety fields.
+    expect(formCount).toBeGreaterThanOrEqual(15);
   });
 });
 

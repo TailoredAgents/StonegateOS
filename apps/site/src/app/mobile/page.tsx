@@ -20,7 +20,10 @@ import {
   type MobilePartnerAffiliation,
 } from "./lib/booking-presentation";
 import { SubmitButton } from "@/components/SubmitButton";
-import { formatPropertyAddress, formatPropertyStreet } from "@/lib/property-address";
+import {
+  formatPropertyAddress,
+  formatPropertyStreet,
+} from "@/lib/property-address";
 import Link from "next/link";
 import type { Route } from "next";
 import { redirect } from "next/navigation";
@@ -2030,7 +2033,7 @@ export default async function MobileHomePage({
     redirect(quoteWorkspaceHref("manage"));
   }
   if (activeScreen === "partners") {
-    redirect("/team/partners");
+    redirect(teamSurfaceHref("partners"));
   }
   const allowedNav = navItems.filter((item) =>
     session.allowedScreens.includes(item.id),

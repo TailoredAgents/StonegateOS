@@ -73,7 +73,6 @@ const EXACT_E2E_SENTINELS: Readonly<Record<string, string>> = {
   TWILIO_ACCOUNT_SID: "AC00000000000000000000000000000000",
   TWILIO_AUTH_TOKEN: "twilio-test-token",
   TWILIO_FROM: "+15555550123",
-  TWILIO_WEBHOOK_PUBLIC_BASE_URL: "http://localhost:3001",
   SMTP_USER: "mailhog",
   SMTP_PASS: "mailhog",
   EMAIL_FAKE_FORWARD_SMTP_HOST: "mailhog",

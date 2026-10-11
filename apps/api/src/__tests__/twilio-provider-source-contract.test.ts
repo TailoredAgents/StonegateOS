@@ -28,13 +28,15 @@ describe("Twilio provider source and E2E contracts", () => {
     );
     const productionSources = roots
       .flatMap(sourceFiles)
-      .filter((file) => !file.includes("/__tests__/"));
+      .filter((file) => !/[\\/]__tests__[\\/]/u.test(file));
     const callers = productionSources.filter((file) =>
       readFileSync(file, "utf8").includes("https://api.twilio.com"),
     );
 
     expect(
-      callers.map((file) => file.replace(`${REPOSITORY_ROOT}/`, "")),
+      callers.map((file) =>
+        file.slice(REPOSITORY_ROOT.length + 1).replaceAll("\\", "/"),
+      ),
     ).toEqual([]);
 
     for (const relativePath of [

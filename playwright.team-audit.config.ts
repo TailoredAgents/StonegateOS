@@ -46,26 +46,17 @@ const auditProjects = viewportCases.flatMap((entry) =>
   })),
 );
 
-const accessibilityProjects = [
-  {
-    name: "a11y-chromium-1440-light",
+const accessibilityProjects = viewportCases.flatMap((entry) =>
+  (["light", "dark"] as const).map((theme) => ({
+    name: `a11y-chromium-${entry.id}-${theme}`,
     grep: /@team-a11y/u,
-    metadata: { auditTheme: "light" },
+    metadata: { auditTheme: theme },
     use: {
-      ...devices["Desktop Chrome"],
-      viewport: { width: 1440, height: 1000 },
+      ...entry.base,
+      viewport: entry.viewport,
     },
-  },
-  {
-    name: "a11y-chromium-375-dark",
-    grep: /@team-a11y/u,
-    metadata: { auditTheme: "dark" },
-    use: {
-      ...devices["Pixel 7"],
-      viewport: { width: 375, height: 812 },
-    },
-  },
-] as const;
+  })),
+);
 
 const partnerStatefulProjects = [
   {

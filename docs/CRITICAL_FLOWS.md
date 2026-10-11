@@ -3,6 +3,7 @@
 These are the workflows we treat as production-critical. Any change that touches them requires extra verification.
 
 ## Public site
+
 1. Call/SMS buttons
    - Call opens phone dialer with correct business number.
    - SMS opens correct channel (no personal dialers).
@@ -16,6 +17,7 @@ These are the workflows we treat as production-critical. Any change that touches
    - Any public lead forms write contacts/leads cleanly (no schema errors).
 
 ## Team console (`/team`)
+
 1. Contacts
    - Create/edit contact without requiring address.
    - Assign to works and persists without refresh weirdness.
@@ -38,6 +40,7 @@ These are the workflows we treat as production-critical. Any change that touches
    - “Answered” stops cadence (auto), and salesperson can set manual reminders.
 
 ## Ops / Owner
+
 1. Job completion
    - Mark complete updates appointment status and revenue metrics.
 
@@ -50,10 +53,11 @@ These are the workflows we treat as production-critical. Any change that touches
    - Weekly payout run can be generated and exported.
 
 3. Partner portal (if enabled)
-   - Partner login works (SMS/email).
+   - Routine Partner login uses email/password. Email links are reserved for activation, invitations, password reset, mailbox verification, and approved email-change confirmation; phone numbers do not authenticate Partner users.
    - Partner booking creates appointments in CRM calendar.
 
 ## Integrations + background jobs
+
 1. Outbox worker
    - Drains outbox, sends notifications, runs scheduled agents.
 

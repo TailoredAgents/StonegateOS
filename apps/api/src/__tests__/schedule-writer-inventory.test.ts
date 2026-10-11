@@ -217,7 +217,7 @@ describe("schedule writer inventory", () => {
       ...productionTypescriptFiles(resolve(workspaceRoot, "apps/api/src/lib")),
     ]
       .filter((path) => writerPattern.test(readFileSync(path, "utf8")))
-      .map((path) => relative(workspaceRoot, path))
+      .map((path) => relative(workspaceRoot, path).replaceAll("\\", "/"))
       .sort();
 
     expect(discovered).toEqual(Object.keys(WRITER_INVENTORY).sort());
@@ -231,7 +231,7 @@ describe("schedule writer inventory", () => {
       ...productionTypescriptFiles(resolve(workspaceRoot, "apps/api/src/lib")),
     ]
       .filter((path) => rawScheduleMutation.test(readFileSync(path, "utf8")))
-      .map((path) => relative(workspaceRoot, path))
+      .map((path) => relative(workspaceRoot, path).replaceAll("\\", "/"))
       .sort();
 
     expect(discovered).toEqual([]);

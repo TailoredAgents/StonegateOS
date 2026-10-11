@@ -14,11 +14,8 @@ describe("quote V2 feature flags", () => {
   );
 
   afterEach(() => {
-    Object.defineProperty(process.env, "NODE_ENV", {
-      value: originalNodeEnv,
-      writable: true,
-      configurable: true,
-    });
+    if (originalNodeEnv === undefined) delete process.env["NODE_ENV"];
+    else process.env["NODE_ENV"] = originalNodeEnv;
     for (const [name, value] of Object.entries(originalValues)) {
       if (value === undefined) delete process.env[name];
       else process.env[name] = value;
@@ -26,11 +23,7 @@ describe("quote V2 feature flags", () => {
   });
 
   it("defaults every rollout surface off in production", () => {
-    Object.defineProperty(process.env, "NODE_ENV", {
-      value: "production",
-      writable: true,
-      configurable: true,
-    });
+    process.env["NODE_ENV"] = "production";
     for (const name of Object.values(QUOTE_V2_FEATURE_FLAGS)) {
       delete process.env[name];
     }
@@ -46,11 +39,7 @@ describe("quote V2 feature flags", () => {
   });
 
   it("allows each side-effect boundary to be enabled independently", () => {
-    Object.defineProperty(process.env, "NODE_ENV", {
-      value: "production",
-      writable: true,
-      configurable: true,
-    });
+    process.env["NODE_ENV"] = "production";
     process.env[QUOTE_V2_FEATURE_FLAGS.public] = "true";
     process.env[QUOTE_V2_FEATURE_FLAGS.booking] = "false";
     expect(isQuoteV2FeatureEnabled("public")).toBe(true);

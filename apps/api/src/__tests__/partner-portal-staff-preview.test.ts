@@ -3,7 +3,10 @@ import { resolve } from "node:path";
 import { parsePartnerStaffPreviewResponse } from "../../../site/src/app/team/partner-preview";
 
 function source(path: string): string {
-  return readFileSync(resolve(process.cwd(), path), "utf8");
+  return readFileSync(resolve(process.cwd(), path), "utf8").replace(
+    /\r\n?/gu,
+    "\n",
+  );
 }
 
 const ACCOUNT_ID = "11111111-1111-4111-8111-111111111111";

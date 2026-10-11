@@ -18,7 +18,13 @@ describe("Sales HQ recovery mutation contract", () => {
     "app/api/admin/inbox/messages/[messageId]/retry/route.ts",
   );
   const actions = siteSource("src/app/team/actions.ts");
-  const inbox = siteSource("src/app/team/components/InboxSection.tsx");
+  const inboxView = siteSource("src/app/team/components/InboxView.tsx");
+  const inboxComposer = siteSource(
+    "src/app/team/components/InboxComposerClient.tsx",
+  );
+  const inboxOptionalTools = siteSource(
+    "src/app/team/components/InboxOptionalToolsClient.tsx",
+  );
   const salesHq = siteSource("src/app/team/components/SalesHqClient.tsx");
   const contactDetails = siteSource(
     "src/app/team/components/ContactsDetailsPaneClient.tsx",
@@ -146,11 +152,19 @@ describe("Sales HQ recovery mutation contract", () => {
       expect(source).toContain("requireReceipt: true");
     }
 
+    expect(inboxView).toContain('name="idempotencyKey"');
+    expect(inboxView).toContain("value={`message-retry:${randomUUID()}`}");
+    expect(inboxComposer).toContain(
+      'data.set("idempotencyKey", `team-inbox:${crypto.randomUUID()}`)',
+    );
+    expect(inboxComposer).toContain(
+      "let prepared: InboxPreparedMessage | undefined = before.pending?.prepared",
+    );
     expect(
-      inbox.match(/name="idempotencyKey"/gu)?.length ?? 0,
-    ).toBeGreaterThanOrEqual(5);
-    expect(inbox).toContain("value={`message-send:${randomUUID()}`}");
-    expect(inbox).toContain("value={`message-retry:${randomUUID()}`}");
+      inboxComposer.indexOf("pending: { prepared, submitted }"),
+    ).toBeLessThan(
+      inboxComposer.indexOf("sendPreparedInboxMessageAction(prepared)"),
+    );
     expect(dispositionProxy).toContain(
       'request.headers.get("idempotency-key")',
     );
@@ -239,7 +253,8 @@ describe("Sales HQ recovery mutation contract", () => {
     expect(reminders).toContain("Completion was not confirmed");
     expect(reminders).toContain("Your changes were not confirmed");
     expect(reminders.match(/role="alert"/gu)).toHaveLength(2);
-    expect(inbox).toContain("key={activeContactId}");
+    expect(inboxView).toContain("key={`${employeeId}:${contactId}`}");
+    expect(inboxOptionalTools).toContain("}, [contactId, kind, attempt]);");
     expect(salesHq).toContain("key={contactSummary.id}");
     expect(contactDetails).toContain("key={contact.id}");
   });
@@ -254,7 +269,12 @@ describe("Sales HQ recovery mutation contract", () => {
     expect(journeyFixtures).toContain(
       "event.payload->>'taskId' = task.id::text",
     );
-    expect(inbox).toContain('aria-labelledby="inbox-ai-workspace-title"');
-    expect(journey).toContain("name: /^(Send suggestion|Send now)$/");
+    expect(inboxOptionalTools).toContain(
+      'draft ? "View draft" : "Draft a reply"',
+    );
+    expect(inboxOptionalTools).toContain("Add to reply");
+    expect(journey).toContain('name: "View draft"');
+    expect(journey).toContain('name: "Add to reply"');
+    expect(journey).toContain('name: "Send", exact: true');
   });
 });

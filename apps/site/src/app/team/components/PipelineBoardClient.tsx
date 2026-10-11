@@ -234,6 +234,17 @@ export default function PipelineBoardClient({
     startNavigation(() => router.push(href));
   }
 
+  function contactPipelineHref(contactId: string) {
+    return buildPipelineHref({
+      q: filters.q,
+      stage: filters.stage,
+      offset: pagination.offset,
+      view,
+      excludeOutbound: filters.excludeOutbound,
+      contactId,
+    });
+  }
+
   function applyPreset(preset: PipelineFilterPreset) {
     setDraftQuery(preset.q);
     setPresetError(null);
@@ -999,6 +1010,7 @@ export default function PipelineBoardClient({
                                 query: {
                                   contactId: contact.id,
                                 },
+                                returnTo: contactPipelineHref(contact.id),
                               })}
                               onClick={(event) => event.stopPropagation()}
                             >
@@ -1138,6 +1150,7 @@ export default function PipelineBoardClient({
                       query: {
                         contactId: contact.id,
                       },
+                      returnTo: contactPipelineHref(contact.id),
                     })}
                   >
                     <FileText className="h-4 w-4" aria-hidden="true" />

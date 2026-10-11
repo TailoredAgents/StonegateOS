@@ -135,48 +135,6 @@ export function PartnerServiceReviews({
     setCursor(result.nextCursor);
     setAppliedQuery(search);
   }
-  useEffect(() => {
-    mounted.current = true;
-    setItems([]);
-    setCursor(null);
-    const receipt = savedScheduleRef.current;
-    if (
-      !receipt ||
-      receipt.accountId !== accountId ||
-      receipt.requestId !== requestId
-    ) {
-      rememberSavedSchedule(null);
-      setDetail(null);
-    }
-    setReturnDetail(null);
-    setRetryDetail(null);
-    if (requestId && accountId) void open({ id: requestId, accountId });
-    else void load();
-    return () => {
-      mounted.current = false;
-      generation.current += 1;
-    };
-  }, [accountId, includeScheduled, requestId]);
-  useEffect(() => {
-    if (detail) {
-      if (focusScheduleOnLoad.current) {
-        scheduleRef.current?.focus();
-        focusScheduleOnLoad.current = false;
-      } else if (!embedded) detailRef.current?.focus();
-      if (
-        (!requestId ||
-          (detail.id === requestId && detail.accountId === accountId)) &&
-        (!savedScheduleRef.current ||
-          savedScheduleRef.current.phase === "refreshed")
-      )
-        onReady?.();
-    }
-  }, [detail]);
-  useEffect(() => {
-    if (savedSchedule && savedSchedule.phase !== "refreshed") {
-      scheduleRef.current?.focus();
-    }
-  }, [savedSchedule]);
   async function open(
     item: Pick<PartnerServiceReview, "id" | "accountId">,
     previous: PartnerServiceReviewDetail | null = null,
@@ -246,6 +204,57 @@ export function PartnerServiceReviews({
     setDetail(nextDetail);
     setReturnDetail(previous);
   }
+  const loadRef = useRef(load);
+  const openRef = useRef(open);
+  const presentationRef = useRef({ embedded, onReady });
+  loadRef.current = load;
+  openRef.current = open;
+  presentationRef.current = { embedded, onReady };
+  useEffect(() => {
+    mounted.current = true;
+    setItems([]);
+    setCursor(null);
+    const receipt = savedScheduleRef.current;
+    if (
+      !receipt ||
+      receipt.accountId !== accountId ||
+      receipt.requestId !== requestId
+    ) {
+      rememberSavedSchedule(null);
+      setDetail(null);
+    }
+    setReturnDetail(null);
+    setRetryDetail(null);
+    if (requestId && accountId)
+      void openRef.current({ id: requestId, accountId });
+    else void loadRef.current();
+    return () => {
+      mounted.current = false;
+      generation.current += 1;
+    };
+  }, [accountId, includeScheduled, requestId]);
+  useEffect(() => {
+    if (detail) {
+      if (focusScheduleOnLoad.current) {
+        scheduleRef.current?.focus();
+        focusScheduleOnLoad.current = false;
+      } else if (!presentationRef.current.embedded) detailRef.current?.focus();
+      const context = currentContext.current;
+      if (
+        (!context.requestId ||
+          (detail.id === context.requestId &&
+            detail.accountId === context.accountId)) &&
+        (!savedScheduleRef.current ||
+          savedScheduleRef.current.phase === "refreshed")
+      )
+        presentationRef.current.onReady?.();
+    }
+  }, [detail]);
+  useEffect(() => {
+    if (savedSchedule && savedSchedule.phase !== "refreshed") {
+      scheduleRef.current?.focus();
+    }
+  }, [savedSchedule]);
   const detailReceipt =
     detail &&
     savedSchedule?.accountId === detail.accountId &&
@@ -626,6 +635,9 @@ export function PartnerServiceReviews({
                                 rel="noreferrer"
                                 className="block rounded-lg focus-visible:outline-2"
                               >
+                                {/* The URL is an access-scoped storage preview. Keep it
+                                    out of the Next image optimizer and its shared cache. */}
+                                {/* eslint-disable-next-line @next/next/no-img-element */}
                                 <img
                                   src={photo.url}
                                   alt={

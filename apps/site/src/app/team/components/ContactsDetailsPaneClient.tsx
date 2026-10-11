@@ -516,6 +516,13 @@ export function ContactsDetailsPaneClient({
     return true;
   };
   const activeSubviewAllowed = canOpenSubview(subview);
+  const nestedWorkspaceReturnTo = contactWorkspace
+    ? contactWorkspaceHref({
+        contactId: contact.id,
+        subview,
+        ...workspaceLocation,
+      })
+    : teamSurfaceHref("contacts", { query: { contactId: contact.id } });
 
   return (
     <div className="space-y-4 [&_button]:min-h-11 [&_input:not([type=hidden])]:min-h-11 [&_select]:min-h-11">
@@ -684,6 +691,7 @@ export function ContactsDetailsPaneClient({
             className={`${teamButtonClass("secondary", "sm")} min-h-11`}
             href={quoteWorkspaceHref("create", {
               query: { contactId: contact.id },
+              returnTo: nestedWorkspaceReturnTo,
             })}
           >
             Create quote
@@ -755,6 +763,7 @@ export function ContactsDetailsPaneClient({
         <PartnerAccessEntry
           canReadAccounts={capabilities.canReadPartners}
           canInvite={capabilities.canInvitePartners}
+          returnTo={nestedWorkspaceReturnTo}
         />
       ) : null}
 
