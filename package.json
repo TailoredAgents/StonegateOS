@@ -9,6 +9,7 @@
   "scripts": {
     "dev": "turbo run dev --parallel --filter=site --filter=api",
     "dev:e2e": "pnpm e2e:prepare && mkdir -p artifacts/e2e/logs && concurrently --kill-others --names \"site,api,worker\" --prefix-colors \"cyan,magenta,green\" \"bash -c 'set -o pipefail; pnpm --filter site dev 2>&1 | tee artifacts/e2e/logs/site.log'\" \"bash -c 'set -o pipefail; pnpm --filter api dev 2>&1 | tee artifacts/e2e/logs/api.log'\" \"bash -c 'set -o pipefail; OUTBOX_POLL_INTERVAL_MS=500 pnpm outbox:worker 2>&1 | tee artifacts/e2e/logs/worker.log'\"",
+    "start:e2e:ci": "mkdir -p artifacts/e2e/logs && concurrently --kill-others --names \"site,api,worker\" --prefix-colors \"cyan,magenta,green\" \"bash -c 'set -o pipefail; pnpm --filter site exec next start -p 3000 2>&1 | tee artifacts/e2e/logs/site.log'\" \"bash -c 'set -o pipefail; pnpm --filter api exec next start -p 3001 2>&1 | tee artifacts/e2e/logs/api.log'\" \"bash -c 'set -o pipefail; OUTBOX_POLL_INTERVAL_MS=500 pnpm outbox:worker 2>&1 | tee artifacts/e2e/logs/worker.log'\"",
     "e2e:prepare": "pnpm e2e:env && tsx scripts/e2e-compose.ts down --volumes --remove-orphans && tsx scripts/e2e-compose.ts up -d && tsx scripts/wait-for-e2e-services.ts && pnpm db:migrate && pnpm seed:e2e",
     "dev:site": "pnpm --filter site dev",
     "dev:api": "pnpm --filter api dev",

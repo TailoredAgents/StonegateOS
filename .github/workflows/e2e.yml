@@ -231,38 +231,70 @@ jobs:
       - name: Build applications
         run: pnpm build
 
-      - name: Start dev stack and run complete Playwright suites
+      - name: Start production-like stack and run complete Playwright suites
         env:
           CI: "true"
         run: |
-          pnpm dev:e2e &
-          echo $! > dev-server.pid
-          services_ready=false
-          for attempt in {1..90}; do
-            if curl -fsS http://localhost:3000/api/healthz >/dev/null && curl -fsS http://localhost:3001/api/healthz >/dev/null; then
-              services_ready=true
-              break
-            fi
-            sleep 2
-          done
-          if [ "$services_ready" != "true" ]; then
-            echo "Services failed to pass health checks" >&2
-            for log_file in artifacts/e2e/logs/*.log; do
-              if [ -f "$log_file" ]; then
-                echo "::group::$log_file"
-                tail -n 200 "$log_file"
-                echo "::endgroup::"
+          wait_for_application_health() {
+            services_ready=false
+            for attempt in {1..90}; do
+              if curl -fsS http://localhost:3000/api/healthz >/dev/null && curl -fsS http://localhost:3001/api/healthz >/dev/null; then
+                services_ready=true
+                break
               fi
+              sleep 2
             done
-            exit 1
-          fi
+            if [ "$services_ready" != "true" ]; then
+              echo "Services failed to pass health checks" >&2
+              for log_file in artifacts/e2e/logs/*.log; do
+                if [ -f "$log_file" ]; then
+                  echo "::group::$log_file"
+                  tail -n 200 "$log_file"
+                  echo "::endgroup::"
+                fi
+              done
+              return 1
+            fi
+          }
+
+          reset_e2e_database() {
+            pnpm e2e:prepare
+            wait_for_application_health
+          }
+
+          pnpm e2e:prepare
+          pnpm start:e2e:ci &
+          echo $! > dev-server.pid
+          wait_for_application_health
           set +e
           pnpm test:e2e
           core_status=$?
+
+          set -e
+          reset_e2e_database
+          set +e
           pnpm test:e2e:quote-v2-visual
           quote_status=$?
+          if [ "$quote_status" -ne 0 ]; then
+            echo "Capturing a complete visual-baseline candidate for review." >&2
+            pnpm exec playwright test --config=playwright.quote-v2-visual.config.ts --update-snapshots=all
+            candidate_status=$?
+            mkdir -p artifacts/e2e/visual-baseline-candidate
+            find tests/e2e/specs -maxdepth 1 -type d -name 'quote-v2-*.spec.ts-snapshots' -exec cp -R {} artifacts/e2e/visual-baseline-candidate/ \;
+            if [ "$candidate_status" -ne 0 ]; then
+              echo "Visual-baseline candidate capture also failed with status $candidate_status." >&2
+            fi
+          fi
+
+          set -e
+          reset_e2e_database
+          set +e
           pnpm test:e2e:partner-portal
           partner_status=$?
+
+          set -e
+          reset_e2e_database
+          set +e
           pnpm test:e2e:team-audit
           team_status=$?
           set -e

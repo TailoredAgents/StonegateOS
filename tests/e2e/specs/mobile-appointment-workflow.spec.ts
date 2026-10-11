@@ -1039,7 +1039,7 @@ test.describe("Mobile appointment quoted work and payments", () => {
               storedChecksum: string | null;
               bytesChecksum: string | null;
             }>((resolve, reject) => {
-              const request = indexedDB.open("stonegate-mobile", 3);
+              const request = indexedDB.open("stonegate-mobile", 4);
               request.onerror = () => reject(request.error);
               request.onsuccess = () => {
                 const database = request.result;
@@ -1087,7 +1087,7 @@ test.describe("Mobile appointment quoted work and payments", () => {
         ),
       )
       .toEqual({
-        databaseVersion: 3,
+        databaseVersion: 4,
         hasBytes: true,
         hasBlob: false,
         byteCount: browserDecodablePng.byteLength,
@@ -1102,7 +1102,7 @@ test.describe("Mobile appointment quoted work and payments", () => {
         page.evaluate(
           (queuedClientId) =>
             new Promise<boolean>((resolve, reject) => {
-              const request = indexedDB.open("stonegate-mobile", 3);
+              const request = indexedDB.open("stonegate-mobile", 4);
               request.onerror = () => reject(request.error);
               request.onsuccess = () => {
                 const database = request.result;
@@ -1248,7 +1248,7 @@ test.describe("Mobile appointment quoted work and payments", () => {
         imageBytes,
       }) => {
         const database = await new Promise<IDBDatabase>((resolve, reject) => {
-          const request = indexedDB.open("stonegate-mobile", 3);
+          const request = indexedDB.open("stonegate-mobile", 4);
           request.onupgradeneeded = () => {
             const upgradedDatabase = request.result;
             if (
@@ -1363,7 +1363,7 @@ test.describe("Mobile appointment quoted work and payments", () => {
       page.evaluate(
         () =>
           new Promise<string[]>((resolve, reject) => {
-            const request = indexedDB.open("stonegate-mobile", 3);
+            const request = indexedDB.open("stonegate-mobile", 4);
             request.onerror = () => reject(request.error);
             request.onsuccess = () => {
               const database = request.result;
@@ -1590,7 +1590,7 @@ test.describe("Mobile appointment quoted work and payments", () => {
         imageBytes,
       }) => {
         const database = await new Promise<IDBDatabase>((resolve, reject) => {
-          const request = indexedDB.open("stonegate-mobile", 3);
+          const request = indexedDB.open("stonegate-mobile", 4);
           request.onerror = () =>
             reject(request.error ?? new Error("Unable to open the media DB."));
           request.onsuccess = () => resolve(request.result);
@@ -1816,7 +1816,7 @@ test.describe("Mobile appointment quoted work and payments", () => {
       page.evaluate(
         (queuedClientId) =>
           new Promise<boolean>((resolve, reject) => {
-            const request = indexedDB.open("stonegate-mobile", 3);
+            const request = indexedDB.open("stonegate-mobile", 4);
             request.onerror = () => reject(request.error);
             request.onsuccess = () => {
               const database = request.result;
@@ -1877,7 +1877,7 @@ test.describe("Mobile appointment quoted work and payments", () => {
         page.evaluate(
           ({ employeeStore, appointmentId: expectedAppointmentId }) =>
             new Promise<number>((resolve, reject) => {
-              const request = indexedDB.open("stonegate-mobile", 3);
+              const request = indexedDB.open("stonegate-mobile", 4);
               request.onerror = () => reject(request.error);
               request.onsuccess = () => {
                 const database = request.result;
@@ -2006,7 +2006,7 @@ test.describe("Mobile appointment quoted work and payments", () => {
         page.evaluate(
           (expectedAppointmentId) =>
             new Promise<number>((resolve, reject) => {
-              const request = indexedDB.open("stonegate-mobile", 3);
+              const request = indexedDB.open("stonegate-mobile", 4);
               request.onerror = () => reject(request.error);
               request.onsuccess = () => {
                 const database = request.result;
@@ -2915,7 +2915,7 @@ test.describe("Mobile appointment quoted work and payments", () => {
     await page.evaluate(
       async ({ appointmentId, clientId, employeeId }) => {
         const database = await new Promise<IDBDatabase>((resolve, reject) => {
-          const request = indexedDB.open("stonegate-mobile", 3);
+          const request = indexedDB.open("stonegate-mobile", 4);
           request.onsuccess = () => resolve(request.result);
           request.onerror = () => reject(request.error);
         });
@@ -3015,7 +3015,7 @@ test.describe("Mobile appointment quoted work and payments", () => {
     const expiredSnapshotExists = await page.evaluate(
       async ({ appointmentId, employeeId }) => {
         const database = await new Promise<IDBDatabase>((resolve, reject) => {
-          const request = indexedDB.open("stonegate-mobile", 3);
+          const request = indexedDB.open("stonegate-mobile", 4);
           request.onsuccess = () => resolve(request.result);
           request.onerror = () => reject(request.error);
         });
@@ -3039,7 +3039,7 @@ test.describe("Mobile appointment quoted work and payments", () => {
 
     await page.evaluate(async (queuedClientId) => {
       const database = await new Promise<IDBDatabase>((resolve, reject) => {
-        const request = indexedDB.open("stonegate-mobile", 3);
+        const request = indexedDB.open("stonegate-mobile", 4);
         request.onsuccess = () => resolve(request.result);
         request.onerror = () => reject(request.error);
       });
