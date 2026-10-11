@@ -1,7 +1,7 @@
 services:
   - type: web
     name: stonegate-site
-    autoDeployTrigger: checksPass
+    autoDeployTrigger: commit
     runtime: node
     plan: standard
     region: virginia
@@ -99,7 +99,7 @@ services:
         - turbo.json
   - type: web
     name: stonegate-api
-    autoDeployTrigger: checksPass
+    autoDeployTrigger: commit
     runtime: node
     plan: standard
     region: virginia
@@ -421,7 +421,7 @@ services:
         - turbo.json
   - type: worker
     name: stonegate-outbox-worker
-    autoDeployTrigger: checksPass
+    autoDeployTrigger: commit
     runtime: node
     plan: standard
     region: virginia
@@ -645,6 +645,7 @@ services:
         sync: false
   - type: worker
     name: stonegate-discord-agent
+    autoDeployTrigger: commit
     runtime: node
     plan: starter
     region: virginia
