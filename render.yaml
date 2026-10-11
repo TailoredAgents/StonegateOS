@@ -94,6 +94,7 @@ services:
       paths:
         - apps/site/**
         - packages/**
+        - render.yaml
         - package.json
         - pnpm-lock.yaml
         - turbo.json
@@ -415,6 +416,7 @@ services:
       paths:
         - apps/api/**
         - packages/**
+        - render.yaml
         - drizzle.config.ts
         - package.json
         - pnpm-lock.yaml
