@@ -49,7 +49,7 @@ jobs:
       - name: Portal API and website regression tests
         run: |
           pnpm test:partner-portal
-          pnpm --filter api exec jest --config jest.config.cjs --runInBand --runTestsByPath src/__tests__/appointment-address-details.test.ts src/__tests__/calendar-card-identity-feed.test.ts src/__tests__/calendar-payment-schema-fallback.test.ts src/__tests__/team-auth-login-routes.test.ts src/__tests__/site-team-auth-callback.test.ts src/__tests__/team-auth-site-redirect.test.ts src/__tests__/site-team-login-experience.test.ts
+          pnpm --filter api exec node scripts/run-jest-partitions.cjs --runInBand --runTestsByPath src/__tests__/appointment-address-details.test.ts src/__tests__/calendar-card-identity-feed.test.ts src/__tests__/calendar-payment-schema-fallback.test.ts src/__tests__/team-auth-login-routes.test.ts src/__tests__/site-team-auth-callback.test.ts src/__tests__/team-auth-site-redirect.test.ts src/__tests__/site-team-login-experience.test.ts
       - name: Browser recovery and worker rendering checks
         run: |
           pnpm exec tsx --test scripts/test-partner-home-recovery.mts scripts/test-partner-booking-recovery.mts scripts/test-partner-template-proof-recovery.mts scripts/test-partner-communications-browser.mts
@@ -64,7 +64,7 @@ jobs:
           pnpm test:partner-portal:worker-runtime
       - name: Staff capacity warning regressions
         run: |
-          pnpm --filter api exec jest --config jest.config.cjs --runInBand --runTestsByPath src/__tests__/calendar-conflict-safety.test.ts src/__tests__/appointment-convert-atomicity-contract.test.ts src/__tests__/appointment-status-final-total.test.ts
+          pnpm --filter api exec node scripts/run-jest-partitions.cjs --runInBand --runTestsByPath src/__tests__/calendar-conflict-safety.test.ts src/__tests__/appointment-convert-atomicity-contract.test.ts src/__tests__/appointment-status-final-total.test.ts
           pnpm exec tsx --test scripts/test-staff-schedule-resources.mts scripts/test-schedule-capacity-actions.mts scripts/test-mobile-booking-actions.mjs
       - name: Portal PostgreSQL integration tests
         run: pnpm test:partner-portal:postgres
