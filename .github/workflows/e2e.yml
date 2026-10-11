@@ -5,6 +5,9 @@ on:
     branches: ["main"]
   pull_request:
     branches: ["main"]
+  schedule:
+    - cron: "17 8 * * *"
+  workflow_dispatch:
 
 jobs:
   quote-v2-postgres:
@@ -231,9 +234,10 @@ jobs:
       - name: Build applications
         run: pnpm build
 
-      - name: Start production-like stack and run complete Playwright suites
+      - name: Start production-like stack and run Playwright verification
         env:
           CI: "true"
+          FULL_BROWSER_AUDIT: ${{ github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' }}
         run: |
           wait_for_application_health() {
             services_ready=false
@@ -269,34 +273,39 @@ jobs:
           set +e
           pnpm test:e2e
           core_status=$?
+          quote_status=0
+          partner_status=0
+          team_status=0
 
-          set -e
-          reset_e2e_database
-          set +e
-          pnpm test:e2e:quote-v2-visual
-          quote_status=$?
-          if [ "$quote_status" -ne 0 ]; then
-            echo "Capturing a complete visual-baseline candidate for review." >&2
-            pnpm exec playwright test --config=playwright.quote-v2-visual.config.ts --update-snapshots=all
-            candidate_status=$?
-            mkdir -p artifacts/e2e/visual-baseline-candidate
-            find tests/e2e/specs -maxdepth 1 -type d -name 'quote-v2-*.spec.ts-snapshots' -exec cp -R {} artifacts/e2e/visual-baseline-candidate/ \;
-            if [ "$candidate_status" -ne 0 ]; then
-              echo "Visual-baseline candidate capture also failed with status $candidate_status." >&2
+          if [ "$FULL_BROWSER_AUDIT" = "true" ]; then
+            set -e
+            reset_e2e_database
+            set +e
+            pnpm test:e2e:quote-v2-visual
+            quote_status=$?
+            if [ "$quote_status" -ne 0 ]; then
+              echo "Capturing a complete visual-baseline candidate for review." >&2
+              pnpm exec playwright test --config=playwright.quote-v2-visual.config.ts --update-snapshots=all
+              candidate_status=$?
+              mkdir -p artifacts/e2e/visual-baseline-candidate
+              find tests/e2e/specs -maxdepth 1 -type d -name 'quote-v2-*.spec.ts-snapshots' -exec cp -R {} artifacts/e2e/visual-baseline-candidate/ \;
+              if [ "$candidate_status" -ne 0 ]; then
+                echo "Visual-baseline candidate capture also failed with status $candidate_status." >&2
+              fi
             fi
+
+            set -e
+            reset_e2e_database
+            set +e
+            pnpm test:e2e:partner-portal
+            partner_status=$?
+
+            set -e
+            reset_e2e_database
+            set +e
+            pnpm test:e2e:team-audit
+            team_status=$?
           fi
-
-          set -e
-          reset_e2e_database
-          set +e
-          pnpm test:e2e:partner-portal
-          partner_status=$?
-
-          set -e
-          reset_e2e_database
-          set +e
-          pnpm test:e2e:team-audit
-          team_status=$?
           set -e
 
           if [ "$core_status" -ne 0 ] || [ "$quote_status" -ne 0 ] || [ "$partner_status" -ne 0 ] || [ "$team_status" -ne 0 ]; then
