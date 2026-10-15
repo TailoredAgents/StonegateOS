@@ -33,7 +33,7 @@
     "test:mobile-booking-cards": "tsx --test apps/site/test/mobile-job-drafts.test.ts apps/site/test/mobile-compact-completion.test.ts scripts/test-mobile-booking-cards.mts scripts/test-mobile-compact-completion.mts scripts/test-mobile-booking-recovery.mts scripts/test-mobile-booking-actions.mjs scripts/test-mobile-booking-address.mts",
     "test:mobile-booking-page": "tsx --test scripts/test-mobile-booking-page.mts",
     "test:outbound": "corepack pnpm --filter api exec node scripts/run-jest-partitions.cjs --runInBand --testPathPattern=outbound-",
-    "test:outbound:browser": "tsx --test scripts/test-outbound-workspace.mts scripts/test-outbound-detail-components.mts scripts/test-outbound-import-components.mts",
+    "test:outbound:browser": "tsx --test scripts/test-outbound-workspace.mts scripts/test-outbound-detail-components.mts scripts/test-outbound-import-components.mts scripts/test-outbound-inline-communication.mts",
     "test:partners-workspace": "tsx --test scripts/test-team-partner-navigation.mts apps/site/test/partner-entry-navigation.test.ts",
     "test:partner-portal:api": "cross-env NODE_OPTIONS=--experimental-vm-modules corepack pnpm --filter api exec jest --config jest.partner-portal.config.cjs --runInBand",
     "test:partner-portal:postgres": "cross-env NODE_OPTIONS=--experimental-vm-modules corepack pnpm --filter api exec jest --config jest.partner-portal-postgres.config.cjs --runInBand",

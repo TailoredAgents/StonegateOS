@@ -256,7 +256,15 @@ export function OutboundContactActions({
                   const nextTaskId = event.target.value;
                   const nextHref = taskHrefs?.[nextTaskId];
                   if (nextHref) {
-                    window.location.assign(nextHref);
+                    const nextUrl = new URL(nextHref, window.location.origin);
+                    const currentChannel = new URLSearchParams(
+                      window.location.search,
+                    ).get("channel");
+                    if (currentChannel === "email" || currentChannel === "sms")
+                      nextUrl.searchParams.set("channel", currentChannel);
+                    window.location.assign(
+                      `${nextUrl.pathname}${nextUrl.search}${nextUrl.hash}`,
+                    );
                     return;
                   }
                   setTaskSelections((current) => ({

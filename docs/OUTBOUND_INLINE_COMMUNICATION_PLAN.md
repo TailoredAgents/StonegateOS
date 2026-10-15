@@ -63,6 +63,13 @@ conversations.
   URLs so refreshes and channel switches retain the operator's place.
 - Preserved the existing outcome-and-continue workflow and automatic outreach
   counts. No API, database, provider, import, campaign, or mobile code changed.
+- Replaced the original channel links and call form with an in-place client
+  workspace: Text and Email switch without navigation, both composers stay
+  mounted to preserve drafts, and Call uses the existing verified call API
+  without refreshing the selected company.
+- Refined the visual hierarchy with channel icons, a clear active state,
+  compact conversation headers, a smaller empty-history area, and an in-card
+  call result notice.
 
 ## Verification
 
@@ -72,5 +79,8 @@ conversations.
 - Inbox loader/composer/workspace suite: 44 passed.
 - Partner navigation and responsive browser suite: 17 passed across Chromium
   and WebKit.
+- Inline communication interaction suite: 6 passed across Chromium and WebKit
+  at 320px and 1440px widths, including draft retention, URL state, no page
+  navigation, call feedback, overflow, and Do Not Contact controls.
 - Live signed-in browser review was unavailable in this workspace, so final
   production visual confirmation remains a post-deploy check.

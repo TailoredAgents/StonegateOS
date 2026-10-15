@@ -521,27 +521,37 @@ export async function OutboundSection({
     communicationChannels.includes(requestedCommunicationChannel)
       ? requestedCommunicationChannel
       : (communicationChannels[0] ?? null);
-  const matchingThreadId =
-    inbox.contactId === communicationContact?.id &&
-    inbox.channel === communicationChannel
-      ? inbox.threadId
-      : undefined;
-  const communicationConversation =
-    selected && communicationContact && communicationChannel && canReadMessages
-      ? await loadInboxConversation(
-          {
-            contactId: communicationContact.id,
-            channel: communicationChannel,
-            threadId: matchingThreadId,
-            messageLimit: "50",
-            scope: "outbound",
-            outboundCampaign: filters.campaign,
-            outboundSegment: filters.segment,
-            outboundMemberId: resolvedMemberId,
-          },
-          (path) => callAdminApiAs(principal, path),
+  const communicationConversations = Object.fromEntries(
+    selected && communicationContact && canReadMessages
+      ? await Promise.all(
+          communicationChannels.map(async (channel) => [
+            channel,
+            await loadInboxConversation(
+              {
+                contactId: communicationContact.id,
+                channel,
+                threadId:
+                  inbox.contactId === communicationContact.id &&
+                  inbox.channel === channel
+                    ? inbox.threadId
+                    : undefined,
+                messageLimit: "50",
+                scope: "outbound",
+                outboundCampaign: filters.campaign,
+                outboundSegment: filters.segment,
+                outboundMemberId: resolvedMemberId,
+              },
+              (path) => callAdminApiAs(principal, path),
+            ),
+          ]),
         )
-      : null;
+      : [],
+  ) as Partial<
+    Record<
+      OutboundCommunicationChannel,
+      Awaited<ReturnType<typeof loadInboxConversation>>
+    >
+  >;
   const communicationHref = (args: {
     contactId: string;
     channel: OutboundCommunicationChannel;
@@ -627,36 +637,38 @@ export async function OutboundSection({
           : {}),
       }
     : {};
-  const historyReturnHref =
-    communicationContact && communicationChannel
-      ? String(
-          communicationHref({
-            contactId: communicationContact.id,
-            channel: communicationChannel,
-            taskId: communicationTask?.id,
-          }),
-        )
-      : String(clearSelectionHref);
-  const fullInboxHref =
-    communicationContact && communicationChannel
-      ? String(
-          communicationHref({
-            contactId: communicationContact.id,
-            channel: communicationChannel,
-            taskId: communicationTask?.id,
-            view: "inbox",
-            threadId: communicationConversation?.detail
-              ? communicationConversation.selectedThreadId
-              : null,
-          }),
-        )
-      : String(
-          buildOutboundHref({
-            memberId: resolvedMemberId,
-            view: "inbox",
-            filters,
-          }),
-        );
+  const historyReturnHrefs = Object.fromEntries(
+    communicationContact
+      ? communicationChannels.map((channel) => [
+          channel,
+          String(
+            communicationHref({
+              contactId: communicationContact.id,
+              channel,
+              taskId: communicationTask?.id,
+            }),
+          ),
+        ])
+      : [],
+  ) as Partial<Record<OutboundCommunicationChannel, string>>;
+  const fullInboxHrefs = Object.fromEntries(
+    communicationContact
+      ? communicationChannels.map((channel) => [
+          channel,
+          String(
+            communicationHref({
+              contactId: communicationContact.id,
+              channel,
+              taskId: communicationTask?.id,
+              view: "inbox",
+              threadId: communicationConversations[channel]?.detail
+                ? communicationConversations[channel]?.selectedThreadId
+                : null,
+            }),
+          ),
+        ])
+      : [],
+  ) as Partial<Record<OutboundCommunicationChannel, string>>;
 
   return (
     <section className="min-w-0 space-y-5 text-[color:var(--team-text)]">
@@ -893,12 +905,12 @@ export async function OutboundSection({
                       contactId: communicationContact.id,
                       taskId: communicationTask?.id,
                       channel: communicationChannel,
-                      conversation: communicationConversation,
+                      conversations: communicationConversations,
                       contactHrefs,
                       taskHrefs,
                       channelHrefs,
-                      historyReturnHref,
-                      fullInboxHref,
+                      historyReturnHrefs,
+                      fullInboxHrefs,
                       canCall: permissions.canCall,
                       canReadMessages,
                       canSendMessages,

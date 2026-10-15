@@ -19,6 +19,7 @@ describe("Sales HQ recovery mutation contract", () => {
   );
   const actions = siteSource("src/app/team/actions.ts");
   const inboxView = siteSource("src/app/team/components/InboxView.tsx");
+  const inboxMessage = siteSource("src/app/team/components/InboxMessage.tsx");
   const inboxComposer = siteSource(
     "src/app/team/components/InboxComposerClient.tsx",
   );
@@ -152,8 +153,8 @@ describe("Sales HQ recovery mutation contract", () => {
       expect(source).toContain("requireReceipt: true");
     }
 
-    expect(inboxView).toContain('name="idempotencyKey"');
-    expect(inboxView).toContain("value={`message-retry:${randomUUID()}`}");
+    expect(inboxMessage).toContain('name="idempotencyKey"');
+    expect(inboxMessage).toContain("value={`message-retry:${randomUUID()}`}");
     expect(inboxComposer).toContain(
       'data.set("idempotencyKey", `team-inbox:${crypto.randomUUID()}`)',
     );

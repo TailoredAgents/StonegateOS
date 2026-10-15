@@ -73,6 +73,9 @@ describe("outbound prospect inbox contract", () => {
     const communication = source(
       "apps/site/src/app/team/components/OutboundCommunicationPanel.tsx",
     );
+    const communicationClient = source(
+      "apps/site/src/app/team/components/OutboundCommunicationClient.tsx",
+    );
     const navigation = source("apps/site/src/app/team/outbound-navigation.ts");
 
     expect(section).toContain("await loadInboxConversation(");
@@ -80,11 +83,15 @@ describe("outbound prospect inbox contract", () => {
     expect(section).toContain("outboundMemberId: resolvedMemberId");
     expect(section).toContain("communication={");
     expect(detail).toContain("<OutboundCommunicationPanel");
+    expect(communication).toContain("<OutboundCommunicationClient");
     expect(communication).toContain("<InboxComposerClient");
     expect(communication).toContain("<InboxMessage");
-    expect(communication).toContain("action={startContactCallAction}");
-    expect(communication).toContain("Do Not Contact — outreach is blocked");
-    expect(communication).toContain("Open full Prospect Inbox");
+    expect(communicationClient).toContain('fetch("/api/team/calls/start"');
+    expect(communicationClient).toContain("window.history.replaceState");
+    expect(communicationClient).toContain(
+      "Do Not Contact — outreach is blocked",
+    );
+    expect(communicationClient).toContain("Full Prospect Inbox");
     expect(navigation).toContain("buildOutboundCommunicationHref");
     expect(navigation).toContain('? "outbound-communication"');
   });
