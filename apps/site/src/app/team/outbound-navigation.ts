@@ -23,6 +23,8 @@ export type OutboundLocation = {
   filters: OutboundFilters;
 };
 
+export type OutboundCommunicationChannel = "sms" | "email";
+
 const OUTBOUND_FILTER_QUERY_KEYS = {
   q: "out_q",
   campaign: "out_campaign",
@@ -78,6 +80,38 @@ export function buildOutboundHref(args: {
   }
 
   return teamSurfaceHref("outbound", { query });
+}
+
+export function buildOutboundCommunicationHref(args: {
+  memberId?: string;
+  view?: OutboundView;
+  filters: OutboundFilters;
+  patch?: Partial<OutboundFilters>;
+  contactId: string;
+  channel: OutboundCommunicationChannel;
+  threadId?: string | null;
+}): Route {
+  const base = new URL(
+    String(
+      buildOutboundHref({
+        memberId: args.memberId,
+        view: args.view,
+        filters: args.filters,
+        patch: args.patch,
+      }),
+    ),
+    "https://team.invalid",
+  );
+  const contactId = normalizedValue(args.contactId);
+  const threadId = normalizedValue(args.threadId);
+  if (contactId) base.searchParams.set("contactId", contactId);
+  base.searchParams.set("channel", args.channel);
+  if (threadId) base.searchParams.set("threadId", threadId);
+  base.hash =
+    normalizeOutboundView(args.view) === "queue"
+      ? "outbound-communication"
+      : "";
+  return `${base.pathname}${base.search}${base.hash}` as Route;
 }
 
 export function buildOutboundPartnersHref(args: {

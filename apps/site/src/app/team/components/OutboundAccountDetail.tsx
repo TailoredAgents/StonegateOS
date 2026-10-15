@@ -9,6 +9,10 @@ import {
   type TeamMember,
 } from "../outbound-queue";
 import { OutboundContactActions } from "./OutboundContactActions";
+import {
+  OutboundCommunicationPanel,
+  type OutboundCommunicationWorkspace,
+} from "./OutboundCommunicationPanel";
 import { OutboundOutreachProgress } from "./OutboundOutreachProgress";
 import { TEAM_FOCUS_RING, teamButtonClass } from "./team-ui";
 
@@ -22,6 +26,7 @@ export function OutboundAccountDetail({
   closeHref,
   afterOutcomeHref,
   initialTaskId,
+  communication,
 }: {
   item: OutboundQueueItem;
   members: TeamMember[];
@@ -29,6 +34,7 @@ export function OutboundAccountDetail({
   closeHref: string;
   afterOutcomeHref: string;
   initialTaskId?: string;
+  communication?: OutboundCommunicationWorkspace;
 }) {
   const owner =
     members.find((member) => member.id === item.assignedToMemberId)?.name ??
@@ -82,15 +88,29 @@ export function OutboundAccountDetail({
         <OutboundOutreachProgress outreach={item.outreach} />
       </div>
 
+      {communication ? (
+        <div className="mt-5 border-t border-[color:var(--team-border)] pt-4">
+          <OutboundCommunicationPanel item={item} workspace={communication} />
+        </div>
+      ) : null}
+
       <div className="mt-5 border-t border-[color:var(--team-border)] pt-4">
         <OutboundContactActions
-          key={item.id}
+          key={
+            communication
+              ? `${item.id}:${communication.contactId}:${communication.taskId ?? ""}:${communication.channel ?? ""}`
+              : item.id
+          }
           item={item}
           permissions={permissions}
           callKeys={callKeys}
           outcomeKeys={outcomeKeys}
           initialTaskId={initialTaskId}
           afterOutcomeHref={afterOutcomeHref}
+          fixedContactId={communication?.contactId}
+          selectedChannel={communication?.channel}
+          taskHrefs={communication?.taskHrefs}
+          hideCommunicationActions={Boolean(communication)}
         />
       </div>
 

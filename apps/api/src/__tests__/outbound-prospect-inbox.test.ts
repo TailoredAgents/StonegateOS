@@ -63,6 +63,32 @@ describe("outbound prospect inbox contract", () => {
     expect(loader).toContain('params.set("memberId"');
   });
 
+  it("reuses Inbox delivery and call paths inside the selected queue account", () => {
+    const section = source(
+      "apps/site/src/app/team/components/OutboundSection.tsx",
+    );
+    const detail = source(
+      "apps/site/src/app/team/components/OutboundAccountDetail.tsx",
+    );
+    const communication = source(
+      "apps/site/src/app/team/components/OutboundCommunicationPanel.tsx",
+    );
+    const navigation = source("apps/site/src/app/team/outbound-navigation.ts");
+
+    expect(section).toContain("await loadInboxConversation(");
+    expect(section).toContain('scope: "outbound"');
+    expect(section).toContain("outboundMemberId: resolvedMemberId");
+    expect(section).toContain("communication={");
+    expect(detail).toContain("<OutboundCommunicationPanel");
+    expect(communication).toContain("<InboxComposerClient");
+    expect(communication).toContain("<InboxMessage");
+    expect(communication).toContain("action={startContactCallAction}");
+    expect(communication).toContain("Do Not Contact — outreach is blocked");
+    expect(communication).toContain("Open full Prospect Inbox");
+    expect(navigation).toContain("buildOutboundCommunicationHref");
+    expect(navigation).toContain('? "outbound-communication"');
+  });
+
   it("derives outreach checks from recorded calls and delivered messages", () => {
     const query = source("apps/api/src/lib/outbound-queue-query.ts");
     const progress = source(

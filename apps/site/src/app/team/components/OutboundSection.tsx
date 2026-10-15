@@ -10,11 +10,13 @@ import {
   type InboxInput,
 } from "../inbox-loader";
 import {
+  buildOutboundCommunicationHref,
   buildOutboundHref,
   buildOutboundFilterHref,
   buildOutboundPartnersHref,
   buildOutboundPartnerSetupHref,
   type OutboundFilters,
+  type OutboundCommunicationChannel,
 } from "../outbound-navigation";
 import {
   formatOutboundEasternTime,
@@ -167,8 +169,11 @@ export async function OutboundSection({
       hasTeamPermission(principal, "messages.read"),
     canManage: hasTeamPermission(principal, "outbound.write"),
   };
+  const canReadMessages = hasTeamPermission(principal, "messages.read");
+  const canSendMessages =
+    canReadMessages && hasTeamPermission(principal, "messages.send");
   const canImport = hasTeamPermission(principal, "outbound.import");
-  const canInbox = hasTeamPermission(principal, "messages.read");
+  const canInbox = canReadMessages;
   const partnerSurface = TEAM_SURFACES.find(
     (surface) => surface.id === "partners",
   )!;
@@ -475,6 +480,183 @@ export async function OutboundSection({
   const afterOutcomeHref = nextWorkableProspect
     ? prospectHref(nextWorkableProspect)
     : clearSelectionHref;
+  const requestedTask = filters.taskId
+    ? selected?.tasks.find((task) => task.id === filters.taskId)
+    : undefined;
+  const communicationContact = selected
+    ? (selected.contacts.find((contact) => contact.id === inbox.contactId) ??
+      selected.contacts.find(
+        (contact) => contact.id === requestedTask?.contactId,
+      ) ??
+      selected.contacts.find(
+        (contact) => contact.id === selected.primaryContactId,
+      ) ??
+      selected.contacts[0])
+    : undefined;
+  const communicationTask =
+    selected && communicationContact
+      ? (selected.tasks.find(
+          (task) =>
+            task.id === filters.taskId &&
+            task.contactId === communicationContact.id,
+        ) ??
+        selected.tasks.find(
+          (task) =>
+            task.id === selected.primaryTaskId &&
+            task.contactId === communicationContact.id,
+        ) ??
+        selected.tasks.find(
+          (task) => task.contactId === communicationContact.id,
+        ))
+      : undefined;
+  const communicationChannels: OutboundCommunicationChannel[] = [];
+  if (communicationContact?.email?.trim()) communicationChannels.push("email");
+  if (communicationContact?.phone?.trim()) communicationChannels.push("sms");
+  const requestedCommunicationChannel =
+    inbox.channel === "email" || inbox.channel === "sms"
+      ? inbox.channel
+      : undefined;
+  const communicationChannel =
+    requestedCommunicationChannel &&
+    communicationChannels.includes(requestedCommunicationChannel)
+      ? requestedCommunicationChannel
+      : (communicationChannels[0] ?? null);
+  const matchingThreadId =
+    inbox.contactId === communicationContact?.id &&
+    inbox.channel === communicationChannel
+      ? inbox.threadId
+      : undefined;
+  const communicationConversation =
+    selected && communicationContact && communicationChannel && canReadMessages
+      ? await loadInboxConversation(
+          {
+            contactId: communicationContact.id,
+            channel: communicationChannel,
+            threadId: matchingThreadId,
+            messageLimit: "50",
+            scope: "outbound",
+            outboundCampaign: filters.campaign,
+            outboundSegment: filters.segment,
+            outboundMemberId: resolvedMemberId,
+          },
+          (path) => callAdminApiAs(principal, path),
+        )
+      : null;
+  const communicationHref = (args: {
+    contactId: string;
+    channel: OutboundCommunicationChannel;
+    taskId?: string;
+    view?: "queue" | "inbox";
+    threadId?: string | null;
+  }) =>
+    buildOutboundCommunicationHref({
+      memberId: resolvedMemberId,
+      view: args.view,
+      filters,
+      patch: {
+        accountId: selected?.id,
+        taskId: args.taskId ?? "",
+      },
+      contactId: args.contactId,
+      channel: args.channel,
+      threadId: args.threadId,
+    });
+  const defaultChannelFor = (
+    contact: OutboundQueueItem["contacts"][number],
+  ): OutboundCommunicationChannel => {
+    if (communicationChannel === "email" && contact.email?.trim())
+      return "email";
+    if (communicationChannel === "sms" && contact.phone?.trim()) return "sms";
+    return contact.email?.trim() ? "email" : "sms";
+  };
+  const contactHrefs = Object.fromEntries(
+    (selected?.contacts ?? []).map((contact) => {
+      const task = selected?.tasks.find(
+        (candidate) => candidate.contactId === contact.id,
+      );
+      return [
+        contact.id,
+        String(
+          communicationHref({
+            contactId: contact.id,
+            channel: defaultChannelFor(contact),
+            taskId: task?.id,
+          }),
+        ),
+      ];
+    }),
+  );
+  const taskHrefs = Object.fromEntries(
+    (selected?.tasks ?? [])
+      .filter((task) => task.contactId === communicationContact?.id)
+      .map((task) => [
+        task.id,
+        String(
+          communicationHref({
+            contactId: communicationContact!.id,
+            channel:
+              communicationChannel ?? defaultChannelFor(communicationContact!),
+            taskId: task.id,
+          }),
+        ),
+      ]),
+  );
+  const channelHrefs = communicationContact
+    ? {
+        ...(communicationContact.phone?.trim()
+          ? {
+              sms: String(
+                communicationHref({
+                  contactId: communicationContact.id,
+                  channel: "sms",
+                  taskId: communicationTask?.id,
+                }),
+              ),
+            }
+          : {}),
+        ...(communicationContact.email?.trim()
+          ? {
+              email: String(
+                communicationHref({
+                  contactId: communicationContact.id,
+                  channel: "email",
+                  taskId: communicationTask?.id,
+                }),
+              ),
+            }
+          : {}),
+      }
+    : {};
+  const historyReturnHref =
+    communicationContact && communicationChannel
+      ? String(
+          communicationHref({
+            contactId: communicationContact.id,
+            channel: communicationChannel,
+            taskId: communicationTask?.id,
+          }),
+        )
+      : String(clearSelectionHref);
+  const fullInboxHref =
+    communicationContact && communicationChannel
+      ? String(
+          communicationHref({
+            contactId: communicationContact.id,
+            channel: communicationChannel,
+            taskId: communicationTask?.id,
+            view: "inbox",
+            threadId: communicationConversation?.detail
+              ? communicationConversation.selectedThreadId
+              : null,
+          }),
+        )
+      : String(
+          buildOutboundHref({
+            memberId: resolvedMemberId,
+            view: "inbox",
+            filters,
+          }),
+        );
 
   return (
     <section className="min-w-0 space-y-5 text-[color:var(--team-text)]">
@@ -699,11 +881,30 @@ export async function OutboundSection({
             </nav>
             <OutboundAccountDetail
               item={selected}
-              initialTaskId={filters.taskId}
+              initialTaskId={communicationTask?.id}
               members={members}
               permissions={permissions}
               closeHref={`${clearSelectionHref}#outbound-list`}
               afterOutcomeHref={afterOutcomeHref}
+              communication={
+                communicationContact
+                  ? {
+                      employeeId: principal.memberId,
+                      contactId: communicationContact.id,
+                      taskId: communicationTask?.id,
+                      channel: communicationChannel,
+                      conversation: communicationConversation,
+                      contactHrefs,
+                      taskHrefs,
+                      channelHrefs,
+                      historyReturnHref,
+                      fullInboxHref,
+                      canCall: permissions.canCall,
+                      canReadMessages,
+                      canSendMessages,
+                    }
+                  : undefined
+              }
             />
           </div>
         ) : null}

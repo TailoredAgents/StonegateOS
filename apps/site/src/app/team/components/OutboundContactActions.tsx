@@ -62,6 +62,10 @@ export function OutboundContactActions({
   outcomeKeys,
   initialTaskId,
   afterOutcomeHref,
+  fixedContactId,
+  selectedChannel,
+  taskHrefs,
+  hideCommunicationActions = false,
 }: {
   item: Pick<
     OutboundQueueItem,
@@ -72,6 +76,10 @@ export function OutboundContactActions({
   outcomeKeys: Record<string, string>;
   initialTaskId?: string;
   afterOutcomeHref: string;
+  fixedContactId?: string;
+  selectedChannel?: "email" | "sms" | null;
+  taskHrefs?: Record<string, string>;
+  hideCommunicationActions?: boolean;
 }) {
   const prefix = useId();
   const initialTask = initialTaskId
@@ -80,12 +88,13 @@ export function OutboundContactActions({
   const initialSignature = `${initialTaskId ?? ""}:${initialTask?.contactId ?? ""}:${initialTask?.id ?? ""}`;
   const previousInitialSignature = useRef(initialSignature);
   const [contactId, setContactId] = useState(
-    initialTaskId
-      ? (initialTask?.contactId ?? "")
-      : (item.contacts.find((contact) => contact.id === item.primaryContactId)
-          ?.id ??
+    fixedContactId ??
+      (initialTaskId
+        ? (initialTask?.contactId ?? "")
+        : (item.contacts.find((contact) => contact.id === item.primaryContactId)
+            ?.id ??
           item.contacts[0]?.id ??
-          ""),
+          "")),
   );
   const [taskSelections, setTaskSelections] = useState<Record<string, string>>(
     initialTask ? { [initialTask.contactId]: initialTask.id } : {},
@@ -111,9 +120,11 @@ export function OutboundContactActions({
   const changingInitialTask =
     previousInitialSignature.current !== initialSignature &&
     Boolean(initialTaskId);
-  const activeContactId = changingInitialTask
-    ? (initialTask?.contactId ?? "")
-    : contactId;
+  const activeContactId = fixedContactId
+    ? fixedContactId
+    : changingInitialTask
+      ? (initialTask?.contactId ?? "")
+      : contactId;
   const context =
     initialTaskId && !initialTask
       ? null
@@ -135,7 +146,7 @@ export function OutboundContactActions({
     );
   }
   const { contact, tasks, task, channels, outreachBlocked } = context;
-  const requestedChannel = channelSelections[contact.id];
+  const requestedChannel = selectedChannel ?? channelSelections[contact.id];
   const channel =
     requestedChannel && channels.includes(requestedChannel)
       ? requestedChannel
@@ -164,30 +175,34 @@ export function OutboundContactActions({
 
   return (
     <div className="space-y-4">
-      {item.contacts.length > 1 ? (
-        <label className="grid gap-2 text-base font-medium">
-          Contact
-          <select
-            className={INPUT}
-            value={contact.id}
-            onChange={(event) => setContactId(event.target.value)}
-          >
-            {item.contacts.map((candidate) => (
-              <option key={candidate.id} value={candidate.id}>
-                {candidate.name}
-                {candidate.doNotContact ? " — Do not contact" : ""}
-              </option>
-            ))}
-          </select>
-        </label>
-      ) : (
-        <h3 className="text-base font-semibold">{contact.name}</h3>
-      )}
+      {hideCommunicationActions ? null : (
+        <>
+          {item.contacts.length > 1 ? (
+            <label className="grid gap-2 text-base font-medium">
+              Contact
+              <select
+                className={INPUT}
+                value={contact.id}
+                onChange={(event) => setContactId(event.target.value)}
+              >
+                {item.contacts.map((candidate) => (
+                  <option key={candidate.id} value={candidate.id}>
+                    {candidate.name}
+                    {candidate.doNotContact ? " — Do not contact" : ""}
+                  </option>
+                ))}
+              </select>
+            </label>
+          ) : (
+            <h3 className="text-base font-semibold">{contact.name}</h3>
+          )}
 
-      <div className="space-y-1 break-words text-sm text-[color:var(--team-text-muted)]">
-        <p>{contact.phone || "No phone saved"}</p>
-        <p>{contact.email || "No email saved"}</p>
-      </div>
+          <div className="space-y-1 break-words text-sm text-[color:var(--team-text-muted)]">
+            <p>{contact.phone || "No phone saved"}</p>
+            <p>{contact.email || "No email saved"}</p>
+          </div>
+        </>
+      )}
 
       {task && !outreachBlocked ? (
         <div className="border-y border-[color:var(--team-border)] py-3">
@@ -208,16 +223,20 @@ export function OutboundContactActions({
       ) : null}
 
       {outreachBlocked ? (
-        <div role="status" className={teamStatePanelClass("danger")}>
-          <p className="font-semibold">Do not contact — outreach is blocked</p>
-          <p className="mt-1">
-            Calls, messages, drafts, outcomes, and callbacks are unavailable for{" "}
-            {contact.name}.
-          </p>
-          {contact.doNotContactReason ? (
-            <p className="mt-2">{contact.doNotContactReason}</p>
-          ) : null}
-        </div>
+        hideCommunicationActions ? null : (
+          <div role="status" className={teamStatePanelClass("danger")}>
+            <p className="font-semibold">
+              Do not contact — outreach is blocked
+            </p>
+            <p className="mt-1">
+              Calls, messages, drafts, outcomes, and callbacks are unavailable
+              for {contact.name}.
+            </p>
+            {contact.doNotContactReason ? (
+              <p className="mt-2">{contact.doNotContactReason}</p>
+            ) : null}
+          </div>
+        )
       ) : !hasActions ? (
         <p className="text-sm text-[color:var(--team-text-muted)]">
           You have read-only access to this account.
@@ -233,12 +252,18 @@ export function OutboundContactActions({
               <select
                 className={INPUT}
                 value={task?.id ?? ""}
-                onChange={(event) =>
+                onChange={(event) => {
+                  const nextTaskId = event.target.value;
+                  const nextHref = taskHrefs?.[nextTaskId];
+                  if (nextHref) {
+                    window.location.assign(nextHref);
+                    return;
+                  }
                   setTaskSelections((current) => ({
                     ...current,
-                    [contact.id]: event.target.value,
-                  }))
-                }
+                    [contact.id]: nextTaskId,
+                  }));
+                }}
               >
                 {!task ? (
                   <option value="">Choose this contact’s task</option>
@@ -254,7 +279,8 @@ export function OutboundContactActions({
             </label>
           ) : null}
 
-          {channels.length > 1 &&
+          {!hideCommunicationActions &&
+          channels.length > 1 &&
           (permissions.canMessage || permissions.canDraft) ? (
             <label className="grid gap-2 text-base font-medium">
               Message channel
@@ -274,45 +300,47 @@ export function OutboundContactActions({
             </label>
           ) : null}
 
-          <div className="flex flex-wrap gap-2">
-            {permissions.canCall && contact.phone?.trim() ? (
-              <form action={startContactCallAction}>
-                <input type="hidden" name="contactId" value={contact.id} />
-                {task ? (
-                  <input type="hidden" name="taskId" value={task.id} />
-                ) : null}
-                <input
-                  type="hidden"
-                  name="idempotencyKey"
-                  value={callKeys[task?.id ?? contact.id]}
-                />
-                <input
-                  type="hidden"
-                  name="explicitNewAttempt"
-                  value="START NEW CALL"
-                />
-                <SubmitButton
-                  className={teamButtonClass("primary")}
-                  pendingLabel="Starting call…"
-                >
-                  Call
-                </SubmitButton>
-              </form>
-            ) : null}
-            {permissions.canMessage && channel ? (
-              <form action={openContactThreadAction}>
-                <input type="hidden" name="contactId" value={contact.id} />
-                <input type="hidden" name="channel" value={channel} />
-                <SubmitButton
-                  className={teamButtonClass("secondary")}
-                  pendingLabel="Opening Inbox…"
-                >
-                  Open {channel === "email" ? "email" : "text"} in Inbox
-                </SubmitButton>
-              </form>
-            ) : null}
-          </div>
-          {!channels.length ? (
+          {!hideCommunicationActions ? (
+            <div className="flex flex-wrap gap-2">
+              {permissions.canCall && contact.phone?.trim() ? (
+                <form action={startContactCallAction}>
+                  <input type="hidden" name="contactId" value={contact.id} />
+                  {task ? (
+                    <input type="hidden" name="taskId" value={task.id} />
+                  ) : null}
+                  <input
+                    type="hidden"
+                    name="idempotencyKey"
+                    value={callKeys[task?.id ?? contact.id]}
+                  />
+                  <input
+                    type="hidden"
+                    name="explicitNewAttempt"
+                    value="START NEW CALL"
+                  />
+                  <SubmitButton
+                    className={teamButtonClass("primary")}
+                    pendingLabel="Starting call…"
+                  >
+                    Call
+                  </SubmitButton>
+                </form>
+              ) : null}
+              {permissions.canMessage && channel ? (
+                <form action={openContactThreadAction}>
+                  <input type="hidden" name="contactId" value={contact.id} />
+                  <input type="hidden" name="channel" value={channel} />
+                  <SubmitButton
+                    className={teamButtonClass("secondary")}
+                    pendingLabel="Opening Inbox…"
+                  >
+                    Open {channel === "email" ? "email" : "text"} in Inbox
+                  </SubmitButton>
+                </form>
+              ) : null}
+            </div>
+          ) : null}
+          {!hideCommunicationActions && !channels.length ? (
             <p className="text-sm text-[color:var(--team-text-muted)]">
               Save a phone number or email in the contact record before calling
               or messaging.
@@ -462,7 +490,7 @@ export function OutboundContactActions({
             </p>
           ) : null}
 
-          {permissions.canDraft && channel ? (
+          {permissions.canDraft && channel && !hideCommunicationActions ? (
             <details className="border-t border-[color:var(--team-border)]">
               <summary className={SUMMARY}>Help writing a message</summary>
               <p className="text-sm text-[color:var(--team-text-muted)]">

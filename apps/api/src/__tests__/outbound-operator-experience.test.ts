@@ -1,6 +1,7 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import {
+  buildOutboundCommunicationHref,
   buildOutboundHref,
   buildOutboundPartnersHref,
   outboundSubviewHrefFromReturn,
@@ -21,6 +22,7 @@ const MEMBER_ID = "11111111-1111-4111-8111-111111111111";
 const TASK_ID = "22222222-2222-4222-8222-222222222222";
 const CONTACT_ID = "33333333-3333-4333-8333-333333333333";
 const ACCOUNT_ID = "44444444-4444-4444-8444-444444444444";
+const THREAD_ID = "55555555-5555-4555-8555-555555555555";
 const CURSOR = "opaque_queue_cursor";
 
 function validQueuePayload(): Record<string, unknown> {
@@ -155,6 +157,17 @@ describe("Outbound operator experience", () => {
     const queue = buildOutboundHref({ memberId: MEMBER_ID, filters });
     expect(String(queue)).toBe(
       `/team/sales/outbound?memberId=${MEMBER_ID}&out_q=Acme+%26+Sons&out_campaign=property+management&out_attempt=2&out_due=today&out_has=both&out_disposition=callback_requested&out_taskId=${TASK_ID}&out_account=${ACCOUNT_ID}&out_cursor=${CURSOR}&out_direction=next`,
+    );
+
+    const communication = buildOutboundCommunicationHref({
+      memberId: MEMBER_ID,
+      filters,
+      contactId: CONTACT_ID,
+      channel: "email",
+      threadId: THREAD_ID,
+    });
+    expect(String(communication)).toBe(
+      `/team/sales/outbound?memberId=${MEMBER_ID}&out_q=Acme+%26+Sons&out_campaign=property+management&out_attempt=2&out_due=today&out_has=both&out_disposition=callback_requested&out_taskId=${TASK_ID}&out_account=${ACCOUNT_ID}&out_cursor=${CURSOR}&out_direction=next&contactId=${CONTACT_ID}&channel=email&threadId=${THREAD_ID}#outbound-communication`,
     );
 
     const importHref = outboundSubviewHrefFromReturn(queue, "import");
