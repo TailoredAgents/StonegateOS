@@ -15,7 +15,7 @@ type TeamMember = { id: string; name: string };
 const REVIEW_PAGE_SIZE = 50;
 const MAX_CSV_BYTES = 2 * 1024 * 1024;
 const CSV_TEMPLATE =
-  "company,contact_name,title,email,phone,website,domain,industry,company_size,linkedin_url,city,state,zip,source_list_name,notes\r\n";
+  "company,company_id,location_id,contact_name,title,email,phone,website,domain,industry,company_size,linkedin_url,city,state,zip,status,priority,next_action,follow_up_date,email_status,source_list_name,notes\r\n";
 type ReviewFilter = "all" | "accepted" | "excluded" | "unchanged";
 
 function newImportKey(): string {
@@ -80,8 +80,16 @@ const PLANNED_CHANGE_LABELS: Readonly<
   "contact.partner_owner": "Assign partner owner",
   "contact_note.create": "Create contact note",
   "partner.resolve_and_link": "Resolve and link partner",
+  "partner.identity": "Save stable company/location ID",
+  "partner.status": "Carry prior status",
+  "partner.priority": "Carry priority",
+  "partner.next_action": "Carry next action",
+  "partner.follow_up": "Schedule follow-up",
+  "partner.email_status": "Carry email status",
+  "partner.notes": "Preserve account notes",
   "pipeline.create": "Add pipeline row",
   "task.create": "Create outbound task",
+  "task.update": "Update outbound follow-up",
 };
 
 export function OutboundImportClient(props: {
@@ -418,10 +426,13 @@ export function OutboundImportClient(props: {
               Supported columns
             </summary>
             <p className="pb-2 text-sm leading-6 text-[color:var(--team-text-muted)]">
-              Company, contact name, title, email, phone, website, domain,
-              industry, company size, LinkedIn URL, city, state, ZIP, source
-              list name, and notes. Column order does not matter, and unused
-              optional columns may be left blank.
+              Company and location IDs, company, contact name, title, email,
+              phone, website, domain, industry, company size, LinkedIn URL,
+              city, state, ZIP, prior status, priority, next action, follow-up
+              date, email status, source list name, and notes. Column order does
+              not matter, and unused optional columns may be left blank. For a
+              chain, reuse its company ID and give every facility a unique
+              location ID so shared domains never combine locations.
             </p>
           </details>
         </div>
@@ -448,7 +459,7 @@ export function OutboundImportClient(props: {
               }}
               className={`${TEAM_INPUT} min-h-[140px] !text-base font-mono`}
               placeholder={
-                "company,contact_name,email,phone\nExample Company,Alex Morgan,alex@example.com,"
+                "company,company_id,location_id,contact_name,email,status,priority,next_action,follow_up_date,email_status,notes\nExample Company,company-42,location-7,Alex Morgan,alex@example.com,Contacted,High,Call manager,2026-10-20,Sent,Asked about commercial cleanouts"
               }
               spellCheck={false}
             />
@@ -577,8 +588,10 @@ export function OutboundImportClient(props: {
             <p className="mt-1">
               {success.data.counts.contactsCreated} contacts created,{" "}
               {success.data.counts.contactsModified} existing contacts updated,
-              and {success.data.counts.tasksCreated} follow-up tasks assigned to{" "}
-              {success.data.assignee.name}. No outreach was sent by this import.
+              {success.data.counts.tasksCreated} follow-up tasks created and{" "}
+              {success.data.counts.tasksUpdated ?? 0} existing follow-ups
+              updated for {success.data.assignee.name}. No outreach was sent by
+              this import.
             </p>
             <details className="mt-2">
               <summary className="min-h-[44px] cursor-pointer content-center font-medium">
@@ -726,6 +739,13 @@ export function OutboundImportClient(props: {
                 <p className="mt-2 break-words text-xs text-[color:var(--team-text-muted)]">
                   {row.email ?? row.phone ?? "No usable identity"}
                 </p>
+                {row.importedStatus || row.priority || row.followUpAt ? (
+                  <p className="mt-1 break-words text-xs text-[color:var(--team-text-muted)]">
+                    {[row.importedStatus, row.priority, row.followUpAt]
+                      .filter(Boolean)
+                      .join(" · ")}
+                  </p>
+                ) : null}
                 <p className="mt-2 text-xs text-[color:var(--team-text-muted)]">
                   {row.plannedChanges.length > 0
                     ? row.plannedChanges
@@ -774,10 +794,36 @@ export function OutboundImportClient(props: {
                       </span>
                     </td>
                     <td className="px-3 py-2">
-                      {row.contactName ?? row.company ?? "—"}
+                      <div>{row.contactName ?? row.company ?? "—"}</div>
+                      {row.contactName && row.company ? (
+                        <div className="mt-1 text-[color:var(--team-text-muted)]">
+                          {row.company}
+                        </div>
+                      ) : null}
+                      {row.importedStatus || row.priority || row.followUpAt ? (
+                        <div className="mt-1 text-[color:var(--team-text-muted)]">
+                          {[row.importedStatus, row.priority, row.followUpAt]
+                            .filter(Boolean)
+                            .join(" · ")}
+                        </div>
+                      ) : null}
                     </td>
                     <td className="px-3 py-2">
-                      {row.email ?? row.phone ?? "—"}
+                      <div>{row.email ?? row.phone ?? "—"}</div>
+                      {row.companyExternalId || row.locationExternalId ? (
+                        <div className="mt-1 break-all text-[color:var(--team-text-muted)]">
+                          {[
+                            row.companyExternalId
+                              ? `Company ${row.companyExternalId}`
+                              : null,
+                            row.locationExternalId
+                              ? `Location ${row.locationExternalId}`
+                              : null,
+                          ]
+                            .filter(Boolean)
+                            .join(" · ")}
+                        </div>
+                      ) : null}
                     </td>
                     <td className="max-w-sm px-3 py-2">
                       {row.plannedChanges.length > 0

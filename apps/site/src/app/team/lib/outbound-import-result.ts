@@ -19,8 +19,16 @@ export type OutboundImportPlannedChange =
   | "contact.partner_owner"
   | "contact_note.create"
   | "partner.resolve_and_link"
+  | "partner.identity"
+  | "partner.status"
+  | "partner.priority"
+  | "partner.next_action"
+  | "partner.follow_up"
+  | "partner.email_status"
+  | "partner.notes"
   | "pipeline.create"
-  | "task.create";
+  | "task.create"
+  | "task.update";
 
 export type OutboundImportCounts = {
   total: number;
@@ -43,6 +51,13 @@ export type OutboundImportRow = {
   contactName: string | null;
   email: string | null;
   phone: string | null;
+  companyExternalId?: string | null;
+  locationExternalId?: string | null;
+  importedStatus?: string | null;
+  priority?: string | null;
+  nextAction?: string | null;
+  followUpAt?: string | null;
+  emailStatus?: string | null;
   plannedChanges: OutboundImportPlannedChange[];
 };
 
@@ -83,6 +98,7 @@ export type OutboundImportSuccess = {
       partnerLinksCreated: number;
       contactNotesCreated: number;
       tasksCreated: number;
+      tasksUpdated?: number;
       pipelineRowsCreated: number;
     };
     exclusionReport: OutboundImportReport;
@@ -121,8 +137,16 @@ const PLANNED_CHANGES = new Set<OutboundImportPlannedChange>([
   "contact.partner_owner",
   "contact_note.create",
   "partner.resolve_and_link",
+  "partner.identity",
+  "partner.status",
+  "partner.priority",
+  "partner.next_action",
+  "partner.follow_up",
+  "partner.email_status",
+  "partner.notes",
   "pipeline.create",
   "task.create",
+  "task.update",
 ]);
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -214,6 +238,19 @@ function parseRow(value: unknown): OutboundImportRow | null {
     !nullableString(value["contactName"]) ||
     !nullableString(value["email"]) ||
     !nullableString(value["phone"]) ||
+    (value["companyExternalId"] !== undefined &&
+      !nullableString(value["companyExternalId"])) ||
+    (value["locationExternalId"] !== undefined &&
+      !nullableString(value["locationExternalId"])) ||
+    (value["importedStatus"] !== undefined &&
+      !nullableString(value["importedStatus"])) ||
+    (value["priority"] !== undefined && !nullableString(value["priority"])) ||
+    (value["nextAction"] !== undefined &&
+      !nullableString(value["nextAction"])) ||
+    (value["followUpAt"] !== undefined &&
+      !nullableString(value["followUpAt"])) ||
+    (value["emailStatus"] !== undefined &&
+      !nullableString(value["emailStatus"])) ||
     !Array.isArray(value["plannedChanges"]) ||
     !value["plannedChanges"].every(
       (change) =>
@@ -308,14 +345,17 @@ export function parseOutboundImportMutationSuccess(
     !nonnegativeInteger(rawCounts["partnerLinksCreated"]) ||
     !nonnegativeInteger(rawCounts["contactNotesCreated"]) ||
     !nonnegativeInteger(rawCounts["tasksCreated"]) ||
+    (rawCounts["tasksUpdated"] !== undefined &&
+      !nonnegativeInteger(rawCounts["tasksUpdated"])) ||
     !nonnegativeInteger(rawCounts["pipelineRowsCreated"]) ||
     rawCounts["rowsUpdated"] !== counts.update ||
     rawCounts["contactsCreated"] !== counts.create ||
     Number(rawCounts["contactsModified"]) > counts.update ||
     Number(rawCounts["partnerAccountsResolved"]) > counts.accepted ||
     Number(rawCounts["partnerLinksCreated"]) > counts.accepted ||
-    Number(rawCounts["contactNotesCreated"]) > counts.create ||
-    Number(rawCounts["tasksCreated"]) > counts.accepted ||
+    Number(rawCounts["contactNotesCreated"]) > counts.accepted ||
+    Number(rawCounts["tasksCreated"]) + Number(rawCounts["tasksUpdated"] ?? 0) >
+      counts.accepted ||
     Number(rawCounts["pipelineRowsCreated"]) > counts.accepted ||
     !parseReport(
       data["exclusionReport"],

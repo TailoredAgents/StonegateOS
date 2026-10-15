@@ -62,6 +62,12 @@ type DetailRow = {
   accountName: string;
   accountStatus: string | null;
   accountSegment: string | null;
+  accountImportedStatus: string | null;
+  accountOutreachPriority: string | null;
+  accountImportedNextAction: string | null;
+  accountImportedEmailStatus: string | null;
+  accountExternalCompanyId: string | null;
+  accountExternalLocationId: string | null;
   accountPortalFit: string | null;
   accountFitScore: number | null;
   accountLastTouchAt: Date | null;
@@ -74,6 +80,12 @@ export type OutboundQueueAccount = {
   name: string;
   status: string | null;
   segment: string | null;
+  importedStatus: string | null;
+  priority: string | null;
+  importedNextAction: string | null;
+  importedEmailStatus: string | null;
+  externalCompanyId: string | null;
+  externalLocationId: string | null;
   portalFit: string | null;
   fitScore: number | null;
   campaign: string | null;
@@ -411,6 +423,12 @@ function baseTasksCte(query: OutboundQueueRequest): SQL {
         lower(coalesce(account."name", '')) AS "accountSearchText",
         account."status"::text AS "accountStatus",
         account."segment" AS "accountSegment",
+        account."imported_status" AS "accountImportedStatus",
+        account."outreach_priority" AS "accountOutreachPriority",
+        account."imported_next_action" AS "accountImportedNextAction",
+        account."imported_email_status" AS "accountImportedEmailStatus",
+        account."external_company_id" AS "accountExternalCompanyId",
+        account."external_location_id" AS "accountExternalLocationId",
         account."portal_fit" AS "accountPortalFit",
         account."fit_score" AS "accountFitScore",
         account."last_touch_at" AS "accountLastTouchAt",
@@ -608,6 +626,18 @@ function parseDetailRow(row: RawRecord): DetailRow {
     accountName: asString(row["accountName"], "accountName"),
     accountStatus: asNullableString(row["accountStatus"]),
     accountSegment: asNullableString(row["accountSegment"]),
+    accountImportedStatus: asNullableString(row["accountImportedStatus"]),
+    accountOutreachPriority: asNullableString(row["accountOutreachPriority"]),
+    accountImportedNextAction: asNullableString(
+      row["accountImportedNextAction"],
+    ),
+    accountImportedEmailStatus: asNullableString(
+      row["accountImportedEmailStatus"],
+    ),
+    accountExternalCompanyId: asNullableString(row["accountExternalCompanyId"]),
+    accountExternalLocationId: asNullableString(
+      row["accountExternalLocationId"],
+    ),
     accountPortalFit: asNullableString(row["accountPortalFit"]),
     accountFitScore: asNullableNumber(row["accountFitScore"]),
     accountLastTouchAt: asNullableDate(row["accountLastTouchAt"]),
@@ -650,6 +680,12 @@ function accountFromRows(input: {
     name: primary.accountName,
     status: primary.accountStatus,
     segment: primary.accountSegment,
+    importedStatus: primary.accountImportedStatus,
+    priority: primary.accountOutreachPriority,
+    importedNextAction: primary.accountImportedNextAction,
+    importedEmailStatus: primary.accountImportedEmailStatus,
+    externalCompanyId: primary.accountExternalCompanyId,
+    externalLocationId: primary.accountExternalLocationId,
     portalFit: primary.accountPortalFit,
     fitScore: primary.accountFitScore,
     campaign: primary.campaign,

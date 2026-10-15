@@ -738,6 +738,20 @@ export async function OutboundSection({
                           {item.account.segment.replace(/_/g, " ")}
                         </p>
                       ) : null}
+                      {item.account.priority || item.account.importedStatus ? (
+                        <p className={`mt-1 text-xs ${MUTED}`}>
+                          {[
+                            item.account.priority
+                              ? `Priority: ${item.account.priority}`
+                              : null,
+                            item.account.importedStatus
+                              ? `Prior status: ${item.account.importedStatus}`
+                              : null,
+                          ]
+                            .filter(Boolean)
+                            .join(" · ")}
+                        </p>
+                      ) : null}
                       <div className="mt-2">
                         <OutboundOutreachProgress
                           outreach={item.outreach}

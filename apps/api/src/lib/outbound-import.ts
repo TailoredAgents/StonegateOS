@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { Buffer } from "node:buffer";
 import { parsePhoneNumberFromString } from "libphonenumber-js";
+import { DateTime } from "luxon";
 import { TeamMutationFailure } from "@/lib/team-mutation";
 
 export const OUTBOUND_IMPORT_MAX_ROWS = 2_000;
@@ -31,8 +32,16 @@ export const OUTBOUND_IMPORT_PLANNED_CHANGES = [
   "contact.partner_owner",
   "contact_note.create",
   "partner.resolve_and_link",
+  "partner.identity",
+  "partner.status",
+  "partner.priority",
+  "partner.next_action",
+  "partner.follow_up",
+  "partner.email_status",
+  "partner.notes",
   "pipeline.create",
   "task.create",
+  "task.update",
 ] as const;
 
 export type OutboundImportPlannedChange =
@@ -53,7 +62,14 @@ export type OutboundImportCanonicalField =
   | "state"
   | "zip"
   | "sourceListName"
-  | "notes";
+  | "notes"
+  | "companyExternalId"
+  | "locationExternalId"
+  | "status"
+  | "priority"
+  | "nextAction"
+  | "followUpAt"
+  | "emailStatus";
 
 export type NormalizedOutboundImportRow = Record<
   OutboundImportCanonicalField,
@@ -87,6 +103,13 @@ export type OutboundImportPublicRow = {
   contactName: string | null;
   email: string | null;
   phone: string | null;
+  companyExternalId?: string | null;
+  locationExternalId?: string | null;
+  importedStatus?: string | null;
+  priority?: string | null;
+  nextAction?: string | null;
+  followUpAt?: string | null;
+  emailStatus?: string | null;
   plannedChanges: OutboundImportPlannedChange[];
 };
 
@@ -175,6 +198,33 @@ const HEADER_ALIASES: Readonly<Record<string, OutboundImportCanonicalField>> = {
   notes: "notes",
   note: "notes",
   details: "notes",
+  company_id: "companyExternalId",
+  company_external_id: "companyExternalId",
+  external_company_id: "companyExternalId",
+  account_id: "companyExternalId",
+  location_id: "locationExternalId",
+  location_external_id: "locationExternalId",
+  external_location_id: "locationExternalId",
+  facility_id: "locationExternalId",
+  lead_status: "status",
+  outreach_status: "status",
+  contact_status: "status",
+  current_status: "status",
+  crm_status: "status",
+  status: "status",
+  priority: "priority",
+  lead_priority: "priority",
+  next_action: "nextAction",
+  next_step: "nextAction",
+  follow_up_date: "followUpAt",
+  followup_date: "followUpAt",
+  follow_up_at: "followUpAt",
+  follow_up: "followUpAt",
+  next_follow_up: "followUpAt",
+  email_status: "emailStatus",
+  email_outreach_status: "emailStatus",
+  email_delivery_status: "emailStatus",
+  last_email_status: "emailStatus",
 };
 
 const FIELD_LIMITS: Readonly<Record<OutboundImportCanonicalField, number>> = {
@@ -193,6 +243,13 @@ const FIELD_LIMITS: Readonly<Record<OutboundImportCanonicalField, number>> = {
   zip: 32,
   sourceListName: 240,
   notes: 2_000,
+  companyExternalId: 160,
+  locationExternalId: 160,
+  status: 120,
+  priority: 80,
+  nextAction: 500,
+  followUpAt: 80,
+  emailStatus: 120,
 };
 
 const CANONICAL_FIELDS: readonly OutboundImportCanonicalField[] = [
@@ -211,6 +268,13 @@ const CANONICAL_FIELDS: readonly OutboundImportCanonicalField[] = [
   "zip",
   "sourceListName",
   "notes",
+  "companyExternalId",
+  "locationExternalId",
+  "status",
+  "priority",
+  "nextAction",
+  "followUpAt",
+  "emailStatus",
 ];
 
 function invalidImport(
@@ -472,6 +536,13 @@ function emptyCanonicalRow(): Record<
     zip: null,
     sourceListName: null,
     notes: null,
+    companyExternalId: null,
+    locationExternalId: null,
+    status: null,
+    priority: null,
+    nextAction: null,
+    followUpAt: null,
+    emailStatus: null,
   };
 }
 
@@ -612,6 +683,37 @@ function parseRows(records: CsvRecord[]): {
     }
     if (!normalizedEmailResult.value && !normalizedPhoneResult.value) {
       invalidReason ??= "A valid email or phone is required.";
+    }
+    if (values.followUpAt) {
+      const rawFollowUp = values.followUpAt;
+      const dateOnly = /^\d{4}-\d{2}-\d{2}$/u.test(rawFollowUp);
+      let parsedFollowUp = dateOnly
+        ? DateTime.fromISO(rawFollowUp, { zone: "America/New_York" })
+            .set({ hour: 9 })
+            .toUTC()
+        : DateTime.fromISO(rawFollowUp, {
+            zone: "America/New_York",
+            setZone: true,
+          }).toUTC();
+      if (!parsedFollowUp.isValid) {
+        for (const format of ["M/d/yyyy", "M/d/yy"]) {
+          const candidate = DateTime.fromFormat(rawFollowUp, format, {
+            zone: "America/New_York",
+          })
+            .set({ hour: 9 })
+            .toUTC();
+          if (candidate.isValid) {
+            parsedFollowUp = candidate;
+            break;
+          }
+        }
+      }
+      if (!parsedFollowUp.isValid) {
+        invalidReason ??=
+          "Follow-up date must be YYYY-MM-DD or a valid date and time.";
+      } else {
+        values.followUpAt = parsedFollowUp.toISO();
+      }
     }
 
     rows.push({
@@ -792,6 +894,8 @@ export function buildOutboundImportExclusionReport(
     "duplicate_of_row",
     "existing_contact_id",
     "company",
+    "company_external_id",
+    "location_external_id",
     "contact_name",
     "email",
     "phone",
@@ -806,6 +910,8 @@ export function buildOutboundImportExclusionReport(
         row.duplicateOfRow,
         row.existingContactId,
         row.company,
+        row.companyExternalId ?? null,
+        row.locationExternalId ?? null,
         row.contactName,
         row.email,
         row.phone,

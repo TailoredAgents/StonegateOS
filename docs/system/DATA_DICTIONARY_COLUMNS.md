@@ -1,6 +1,6 @@
 # Data Dictionary (Generated Columns)
 
-Generated from `apps/api/src/db/schema.ts`. Fingerprint: `a1961766317ca7f7`.
+Generated from `apps/api/src/db/schema.ts`. Fingerprint: `aeafc8ba62bd2241`.
 
 Parsed tables: 228
 
@@ -1781,7 +1781,7 @@ Columns (15):
 
 Schema export: `partnerAccounts`
 
-Columns (55):
+Columns (61):
 
 - `id`
 - `name`
@@ -1794,6 +1794,12 @@ Columns (55):
 - `source`
 - `sourceCampaign`
 - `sourceListName`
+- `externalCompanyId`
+- `externalLocationId`
+- `importedStatus`
+- `outreachPriority`
+- `importedNextAction`
+- `importedEmailStatus`
 - `city`
 - `state`
 - `ownerMemberId`

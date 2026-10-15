@@ -1,6 +1,14 @@
+import { createHash } from "node:crypto";
 import { and, eq, ilike, inArray, isNotNull, or, sql } from "drizzle-orm";
 import { parsePhoneNumberFromString } from "libphonenumber-js";
-import { contacts, crmPipeline, crmTasks, teamMembers, teamRoles } from "@/db";
+import {
+  contacts,
+  crmPipeline,
+  crmTasks,
+  partnerAccounts,
+  teamMembers,
+  teamRoles,
+} from "@/db";
 import type { getDb } from "@/db";
 import {
   buildOutboundImportExclusionReport,
@@ -56,6 +64,15 @@ type PlannedImportRow = {
   existing: ExistingContact | null;
   needsPipeline: boolean;
   needsOutboundTask: boolean;
+  needsOutboundTaskUpdate: boolean;
+  closesOutboundTask: boolean;
+  existingOutboundTask: {
+    id: string;
+    title: string;
+    dueAt: Date | null;
+    notes: string;
+  } | null;
+  needsContactNote: boolean;
   needsPartnerAccount: boolean;
 };
 
@@ -97,6 +114,7 @@ export type OutboundImportExecution = {
     partnerLinksCreated: number;
     contactNotesCreated: number;
     tasksCreated: number;
+    tasksUpdated: number;
     pipelineRowsCreated: number;
   };
   exclusionReport: OutboundImportExclusionReport;
@@ -244,6 +262,9 @@ function outboundTaskNotes(input: {
   campaign: string;
   company: string | null;
   notes: string | null;
+  priority: string | null;
+  emailStatus: string | null;
+  importedStatus: string | null;
 }): string {
   const lines = [
     "[outbound]",
@@ -252,8 +273,123 @@ function outboundTaskNotes(input: {
     "attempt=1",
   ];
   if (input.company) lines.push(`company=${input.company}`);
+  if (input.priority) lines.push(`priority=${input.priority}`);
+  if (input.emailStatus) lines.push(`emailStatus=${input.emailStatus}`);
+  if (input.importedStatus)
+    lines.push(`importedStatus=${input.importedStatus}`);
   if (input.notes) lines.push(`notes=${input.notes}`);
   return lines.join("\n");
+}
+
+function upsertTaskNoteField(
+  notes: string,
+  key: string,
+  value: string,
+): string {
+  const line = `${key}=${value.replace(/[\r\n]+/gu, " ")}`;
+  const pattern = new RegExp(`(^|\\n)${key}=[^\\n]*`, "iu");
+  return pattern.test(notes)
+    ? notes.replace(pattern, `$1${line}`)
+    : notes.length > 0
+      ? `${notes}\n${line}`
+      : line;
+}
+
+export function classifyImportedAccountStatus(
+  value: string | null,
+): typeof partnerAccounts.$inferInsert.status | undefined {
+  const token = slugText(value);
+  if (!token) return undefined;
+  if (
+    /(not interested|not a fit|disqualified|declined|do not pursue)/u.test(
+      token,
+    )
+  )
+    return "not_a_fit";
+  if (/(dormant|cold|paused|on hold)/u.test(token)) return "dormant";
+  if (
+    /(qualified|interested|hot lead|ready to partner|converted|partner)/u.test(
+      token,
+    )
+  )
+    return "qualified_partner";
+  if (/(replied|responded|conversation|talking|connected)/u.test(token))
+    return "conversation_active";
+  if (/(new|uncontacted|not contacted|ready)/u.test(token))
+    return "ready_for_first_touch";
+  if (
+    /(contacted|attempted|called|emailed|texted|no answer|voicemail|outreach)/u.test(
+      token,
+    )
+  )
+    return "attempting_contact";
+  return undefined;
+}
+
+export function classifyImportedDisposition(input: {
+  status: string | null;
+  emailStatus: string | null;
+}): string | null {
+  const email = slugText(input.emailStatus);
+  const status = slugText(input.status);
+  if (
+    /(replied|responded)/u.test(email) ||
+    /(replied|responded|connected)/u.test(status)
+  )
+    return "connected";
+  if (/(not sent|unsent|draft|pending)/u.test(email)) return null;
+  if (
+    /(failed|bounced|invalid|not delivered|undelivered|rejected)/u.test(email)
+  )
+    return "email_failed";
+  if (/(sent|delivered|emailed)/u.test(email)) return "email_sent";
+  if (/voicemail/u.test(status)) return "left_voicemail";
+  if (/(no answer|unreachable)/u.test(status)) return "no_answer";
+  if (/(not interested|not a fit|declined)/u.test(status))
+    return "not_interested";
+  return null;
+}
+
+function importedFollowUpAt(row: NormalizedOutboundImportRow): Date | null {
+  if (!row.followUpAt) return null;
+  const parsed = new Date(row.followUpAt);
+  return Number.isNaN(parsed.getTime()) ? null : parsed;
+}
+
+function isProtectedPartnerStatus(status: string | null | undefined): boolean {
+  return Boolean(
+    status &&
+      [
+        "trial_partner",
+        "active_partner",
+        "portal_partner",
+        "managed_partner",
+        "not_a_fit",
+      ].includes(status),
+  );
+}
+
+function contactNoteMarker(row: NormalizedOutboundImportRow): string | null {
+  const body = contactNoteBody(row);
+  if (!body) return null;
+  const fingerprint = createHash("sha256")
+    .update(body)
+    .digest("hex")
+    .slice(0, 20);
+  return `[outbound-import-note:${fingerprint}]`;
+}
+
+function hasImportedHistory(row: NormalizedOutboundImportRow): boolean {
+  return Boolean(
+    row.notes ||
+      row.status ||
+      row.priority ||
+      row.nextAction ||
+      row.followUpAt ||
+      row.emailStatus ||
+      row.companyExternalId ||
+      row.locationExternalId,
+  );
 }
 
 function researchNotes(row: NormalizedOutboundImportRow): string | null {
@@ -263,12 +399,19 @@ function researchNotes(row: NormalizedOutboundImportRow): string | null {
     row.companySize ? `Company size: ${row.companySize}` : null,
     row.linkedinUrl ? `LinkedIn: ${row.linkedinUrl}` : null,
     row.sourceListName ? `Source list: ${row.sourceListName}` : null,
+    row.companyExternalId ? `Company ID: ${row.companyExternalId}` : null,
+    row.locationExternalId ? `Location ID: ${row.locationExternalId}` : null,
+    row.status ? `Prior status: ${row.status}` : null,
+    row.priority ? `Priority: ${row.priority}` : null,
+    row.nextAction ? `Next action: ${row.nextAction}` : null,
+    row.followUpAt ? `Follow-up: ${row.followUpAt}` : null,
+    row.emailStatus ? `Email status: ${row.emailStatus}` : null,
     row.notes,
   ].filter((value): value is string => Boolean(value));
   return values.length > 0 ? Array.from(new Set(values)).join(" | ") : null;
 }
 
-function contactNote(row: NormalizedOutboundImportRow): string | null {
+function contactNoteBody(row: NormalizedOutboundImportRow): string | null {
   const values = [
     row.company ? `Company: ${row.company}` : null,
     row.title ? `Title: ${row.title}` : null,
@@ -281,16 +424,29 @@ function contactNote(row: NormalizedOutboundImportRow): string | null {
       ? `Location: ${[row.city, row.state, row.zip].filter(Boolean).join(", ")}`
       : null,
     row.notes ? `Notes: ${row.notes}` : null,
+    row.companyExternalId ? `Company ID: ${row.companyExternalId}` : null,
+    row.locationExternalId ? `Location ID: ${row.locationExternalId}` : null,
+    row.status ? `Prior status: ${row.status}` : null,
+    row.priority ? `Priority: ${row.priority}` : null,
+    row.nextAction ? `Next action: ${row.nextAction}` : null,
+    row.followUpAt ? `Follow-up: ${row.followUpAt}` : null,
+    row.emailStatus ? `Email status: ${row.emailStatus}` : null,
   ].filter((value): value is string => Boolean(value));
   return values.length > 0 ? values.join("\n") : null;
+}
+
+function contactNote(row: NormalizedOutboundImportRow): string | null {
+  const body = contactNoteBody(row);
+  const marker = contactNoteMarker(row);
+  return body && marker ? `${marker}\n${body}` : null;
 }
 
 function rowCanCreatePartner(row: NormalizedOutboundImportRow): boolean {
   return Boolean(
     row.company ||
-      normalizePartnerAccountDomain(
-        row.domain ?? row.website ?? row.emailNormalized,
-      ),
+      normalizePartnerAccountDomain(row.domain ?? row.website) ||
+      row.companyExternalId ||
+      row.locationExternalId,
   );
 }
 
@@ -517,32 +673,95 @@ export async function prepareOutboundImportPreview(
         .filter((id): id is string => Boolean(id)),
     ),
   );
-  const [pipelineRows, outboundTaskRows] = await Promise.all([
-    matchedIds.length > 0
-      ? db
-          .select({ contactId: crmPipeline.contactId })
-          .from(crmPipeline)
-          .where(inArray(crmPipeline.contactId, matchedIds))
-      : Promise.resolve([]),
-    matchedIds.length > 0
-      ? db
-          .select({ contactId: crmTasks.contactId })
-          .from(crmTasks)
-          .where(
-            and(
-              inArray(crmTasks.contactId, matchedIds),
-              eq(crmTasks.status, "open"),
-              isNotNull(crmTasks.notes),
-              ilike(crmTasks.notes, "%kind=outbound%"),
-            ),
-          )
-      : Promise.resolve([]),
-  ]);
+  const matchedAccountIds = Array.from(
+    new Set(
+      Array.from(initialMatches.values())
+        .map((match) => match.existing?.partnerAccountId)
+        .filter((id): id is string => Boolean(id)),
+    ),
+  );
+  const [pipelineRows, outboundTaskRows, importedNoteRows, matchedAccountRows] =
+    await Promise.all([
+      matchedIds.length > 0
+        ? db
+            .select({ contactId: crmPipeline.contactId })
+            .from(crmPipeline)
+            .where(inArray(crmPipeline.contactId, matchedIds))
+        : Promise.resolve([]),
+      matchedIds.length > 0
+        ? db
+            .select({
+              id: crmTasks.id,
+              contactId: crmTasks.contactId,
+              title: crmTasks.title,
+              dueAt: crmTasks.dueAt,
+              notes: crmTasks.notes,
+            })
+            .from(crmTasks)
+            .where(
+              and(
+                inArray(crmTasks.contactId, matchedIds),
+                eq(crmTasks.status, "open"),
+                isNotNull(crmTasks.notes),
+                ilike(crmTasks.notes, "%kind=outbound%"),
+              ),
+            )
+        : Promise.resolve([]),
+      matchedIds.length > 0
+        ? db
+            .select({ contactId: crmTasks.contactId, notes: crmTasks.notes })
+            .from(crmTasks)
+            .where(
+              and(
+                inArray(crmTasks.contactId, matchedIds),
+                eq(crmTasks.status, "completed"),
+                eq(crmTasks.title, "Note"),
+                isNotNull(crmTasks.notes),
+                ilike(crmTasks.notes, "%[outbound-import-note:%"),
+              ),
+            )
+        : Promise.resolve([]),
+      matchedAccountIds.length > 0
+        ? db
+            .select({
+              id: partnerAccounts.id,
+              status: partnerAccounts.status,
+              externalCompanyId: partnerAccounts.externalCompanyId,
+              externalLocationId: partnerAccounts.externalLocationId,
+            })
+            .from(partnerAccounts)
+            .where(inArray(partnerAccounts.id, matchedAccountIds))
+        : Promise.resolve([]),
+    ]);
   const contactsWithPipeline = new Set(
     pipelineRows.map((row) => row.contactId),
   );
-  const contactsWithOutboundTask = new Set(
-    outboundTaskRows.map((row) => row.contactId),
+  const outboundTaskByContact = new Map(
+    outboundTaskRows.map((row) => [
+      row.contactId,
+      {
+        id: row.id,
+        title: row.title,
+        dueAt: row.dueAt,
+        notes: row.notes ?? "",
+      },
+    ]),
+  );
+  const outboundTaskCountByContact = new Map<string, number>();
+  for (const task of outboundTaskRows) {
+    outboundTaskCountByContact.set(
+      task.contactId,
+      (outboundTaskCountByContact.get(task.contactId) ?? 0) + 1,
+    );
+  }
+  const importedNotesByContact = new Map<string, string[]>();
+  for (const note of importedNoteRows) {
+    const values = importedNotesByContact.get(note.contactId) ?? [];
+    if (note.notes) values.push(note.notes);
+    importedNotesByContact.set(note.contactId, values);
+  }
+  const matchedAccountById = new Map(
+    matchedAccountRows.map((account) => [account.id, account]),
   );
 
   const plans: PlannedImportRow[] = [];
@@ -560,11 +779,22 @@ export async function prepareOutboundImportPreview(
           contactName: row.contactName,
           email: row.emailNormalized ?? row.email,
           phone: row.phoneE164 ?? row.phone,
+          companyExternalId: row.companyExternalId,
+          locationExternalId: row.locationExternalId,
+          importedStatus: row.status,
+          priority: row.priority,
+          nextAction: row.nextAction,
+          followUpAt: row.followUpAt,
+          emailStatus: row.emailStatus,
           plannedChanges: [],
         },
         existing: null,
         needsPipeline: false,
         needsOutboundTask: false,
+        needsOutboundTaskUpdate: false,
+        closesOutboundTask: false,
+        existingOutboundTask: null,
+        needsContactNote: false,
         needsPartnerAccount: false,
       });
       continue;
@@ -583,36 +813,137 @@ export async function prepareOutboundImportPreview(
           contactName: row.contactName,
           email: row.emailNormalized,
           phone: row.phoneE164,
+          companyExternalId: row.companyExternalId,
+          locationExternalId: row.locationExternalId,
+          importedStatus: row.status,
+          priority: row.priority,
+          nextAction: row.nextAction,
+          followUpAt: row.followUpAt,
+          emailStatus: row.emailStatus,
           plannedChanges: [],
         },
         existing: match.existing,
         needsPipeline: false,
         needsOutboundTask: false,
+        needsOutboundTaskUpdate: false,
+        closesOutboundTask: false,
+        existingOutboundTask: null,
+        needsContactNote: false,
         needsPartnerAccount: false,
       });
       continue;
     }
     const existing = match?.existing ?? null;
+    const linkedAccount = existing?.partnerAccountId
+      ? matchedAccountById.get(existing.partnerAccountId)
+      : null;
+    const identityConflict =
+      linkedAccount &&
+      ((row.locationExternalId &&
+        linkedAccount.externalLocationId &&
+        row.locationExternalId !== linkedAccount.externalLocationId) ||
+        (row.companyExternalId &&
+          linkedAccount.externalCompanyId &&
+          row.companyExternalId !== linkedAccount.externalCompanyId));
+    if (identityConflict) {
+      plans.push({
+        source: row,
+        publicRow: {
+          rowNumber: row.rowNumber,
+          status: "conflict",
+          reason:
+            "The matched contact is linked to a company/location with a different stable ID.",
+          duplicateOfRow: null,
+          existingContactId: existing?.id ?? null,
+          company: row.company,
+          contactName: row.contactName,
+          email: row.emailNormalized,
+          phone: row.phoneE164,
+          companyExternalId: row.companyExternalId,
+          locationExternalId: row.locationExternalId,
+          importedStatus: row.status,
+          priority: row.priority,
+          nextAction: row.nextAction,
+          followUpAt: row.followUpAt,
+          emailStatus: row.emailStatus,
+          plannedChanges: [],
+        },
+        existing,
+        needsPipeline: false,
+        needsOutboundTask: false,
+        needsOutboundTaskUpdate: false,
+        closesOutboundTask: false,
+        existingOutboundTask: null,
+        needsContactNote: false,
+        needsPartnerAccount: false,
+      });
+      continue;
+    }
     const needsPipeline = existing
       ? !contactsWithPipeline.has(existing.id)
       : true;
-    const needsOutboundTask = existing
-      ? !contactsWithOutboundTask.has(existing.id)
-      : true;
-    const needsPartnerAccount = existing
-      ? !existing.partnerAccountId && rowCanCreatePartner(row)
-      : rowCanCreatePartner(row);
+    const existingOutboundTaskCount = existing
+      ? (outboundTaskCountByContact.get(existing.id) ?? 0)
+      : 0;
+    const existingOutboundTask =
+      existing && existingOutboundTaskCount === 1
+        ? (outboundTaskByContact.get(existing.id) ?? null)
+        : null;
+    const mappedAccountStatus = classifyImportedAccountStatus(row.status);
+    const preservesExistingWorkflow = isProtectedPartnerStatus(
+      linkedAccount?.status,
+    );
+    const closesOutboundTask = Boolean(
+      (mappedAccountStatus === "not_a_fit" ||
+        mappedAccountStatus === "dormant") &&
+        !preservesExistingWorkflow &&
+        !row.nextAction &&
+        !row.followUpAt,
+    );
+    const needsOutboundTask =
+      existingOutboundTaskCount === 0 &&
+      !closesOutboundTask &&
+      !preservesExistingWorkflow;
+    const needsOutboundTaskUpdate = Boolean(
+      existingOutboundTask &&
+        !preservesExistingWorkflow &&
+        (closesOutboundTask ||
+          row.nextAction ||
+          row.followUpAt ||
+          row.priority ||
+          row.emailStatus ||
+          row.status),
+    );
+    const needsPartnerAccount = rowCanCreatePartner(row);
+    const noteMarker = contactNoteMarker(row);
+    const needsContactNote = Boolean(
+      noteMarker &&
+        (!existing || hasImportedHistory(row)) &&
+        (!existing ||
+          !(importedNotesByContact.get(existing.id) ?? []).some((note) =>
+            note.includes(noteMarker),
+          )),
+    );
     const plannedChanges: OutboundImportPlannedChange[] = existing
       ? contactFieldChanges(existing, row, assignee.id)
       : ["contact.create"];
-    if (!existing && contactNote(row)) {
+    if (needsContactNote) {
       plannedChanges.push("contact_note.create");
     }
     if (needsPartnerAccount) {
       plannedChanges.push("partner.resolve_and_link");
+      if (row.companyExternalId || row.locationExternalId)
+        plannedChanges.push("partner.identity");
+      if (row.status) plannedChanges.push("partner.status");
+      if (row.priority) plannedChanges.push("partner.priority");
+      if (row.nextAction) plannedChanges.push("partner.next_action");
+      if (row.followUpAt) plannedChanges.push("partner.follow_up");
+      if (row.emailStatus) plannedChanges.push("partner.email_status");
+      if (researchNotes(row)) plannedChanges.push("partner.notes");
     }
     if (needsPipeline) plannedChanges.push("pipeline.create");
     if (needsOutboundTask) plannedChanges.push("task.create");
+    if (needsOutboundTaskUpdate) plannedChanges.push("task.update");
     const status = !existing
       ? "create"
       : plannedChanges.length > 0
@@ -633,11 +964,22 @@ export async function prepareOutboundImportPreview(
         contactName: row.contactName,
         email: row.emailNormalized,
         phone: row.phoneE164,
+        companyExternalId: row.companyExternalId,
+        locationExternalId: row.locationExternalId,
+        importedStatus: row.status,
+        priority: row.priority,
+        nextAction: row.nextAction,
+        followUpAt: row.followUpAt,
+        emailStatus: row.emailStatus,
         plannedChanges,
       },
       existing,
       needsPipeline,
       needsOutboundTask,
+      needsOutboundTaskUpdate,
+      closesOutboundTask,
+      existingOutboundTask,
+      needsContactNote,
       needsPartnerAccount,
     });
   }
@@ -670,9 +1012,15 @@ export async function prepareOutboundImportPreview(
 
 function partnerLockKeys(row: NormalizedOutboundImportRow): string[] {
   const keys: string[] = [];
-  const domain = normalizePartnerAccountDomain(
-    row.domain ?? row.website ?? row.emailNormalized,
-  );
+  if (row.locationExternalId)
+    keys.push(
+      `outbound-import:partner:location-id:${row.locationExternalId.toLowerCase()}`,
+    );
+  else if (row.companyExternalId)
+    keys.push(
+      `outbound-import:partner:company-id:${row.companyExternalId.toLowerCase()}`,
+    );
+  const domain = normalizePartnerAccountDomain(row.domain ?? row.website);
   if (domain) keys.push(`outbound-import:partner:domain:${domain}`);
   const name = normalizePartnerAccountName(row.company);
   if (name) {
@@ -756,15 +1104,17 @@ async function resolveRowPartnerAccount(
   row: NormalizedOutboundImportRow,
   parsed: ParsedOutboundImport,
   assignee: OutboundImportAssignee,
+  existingAccountId: string | null,
 ): Promise<string | null> {
   if (!rowCanCreatePartner(row)) return null;
   const { segment, subsegment } = classifyOutboundSegment({
     row,
   });
   const account = await resolveOrCreatePartnerAccount(tx, {
+    existingAccountId,
     name: row.company,
     website: row.website,
-    domain: row.domain ?? row.website ?? row.emailNormalized,
+    domain: row.domain ?? row.website,
     segment,
     subsegment,
     city: row.city,
@@ -772,6 +1122,18 @@ async function resolveRowPartnerAccount(
     source: `outbound:${parsed.campaign}`,
     sourceCampaign: parsed.campaign,
     sourceListName: row.sourceListName,
+    externalCompanyId: row.companyExternalId,
+    externalLocationId: row.locationExternalId,
+    importedStatus: row.status,
+    outreachPriority: row.priority,
+    importedNextAction: row.nextAction,
+    importedEmailStatus: row.emailStatus,
+    status: classifyImportedAccountStatus(row.status),
+    lastDisposition: classifyImportedDisposition({
+      status: row.status,
+      emailStatus: row.emailStatus,
+    }),
+    nextTouchAt: importedFollowUpAt(row),
     ownerMemberId: assignee.id,
     notes: researchNotes(row),
   });
@@ -791,6 +1153,7 @@ export async function executePreparedOutboundImport(
   let partnerLinksCreated = 0;
   let contactNotesCreated = 0;
   let tasksCreated = 0;
+  let tasksUpdated = 0;
   let pipelineRowsCreated = 0;
   const source = `outbound:${parsed.campaign}`;
 
@@ -806,12 +1169,13 @@ export async function executePreparedOutboundImport(
       splitName(row.company) ?? { firstName: "Property", lastName: "Manager" };
     let contactId: string;
     let partnerAccountId = plan.existing?.partnerAccountId ?? null;
-    if (!partnerAccountId && plan.needsPartnerAccount) {
+    if (plan.needsPartnerAccount) {
       partnerAccountId = await resolveRowPartnerAccount(
         tx,
         row,
         parsed,
         assignee,
+        partnerAccountId,
       );
       if (!partnerAccountId) {
         throw new TeamMutationFailure(
@@ -907,17 +1271,23 @@ export async function executePreparedOutboundImport(
       contactId = created.id;
       contactsCreated += 1;
       if (partnerAccountId) partnerLinksCreated += 1;
+    }
+
+    if (plan.needsContactNote) {
       const note = contactNote(row);
       if (note) {
         const insertedNotes = await tx
           .insert(crmTasks)
           .values({
             contactId,
+            partnerAccountId,
             title: "Note",
             status: "completed",
             notes: note,
             dueAt: null,
             assignedTo: null,
+            createdAt: now,
+            updatedAt: now,
           })
           .returning({ id: crmTasks.id });
         if (insertedNotes.length !== 1) {
@@ -948,15 +1318,20 @@ export async function executePreparedOutboundImport(
         .values({
           contactId,
           partnerAccountId,
-          title: chooseOutboundTaskTitle(segment),
+          title: row.nextAction ?? chooseOutboundTaskTitle(segment),
           status: "open",
-          dueAt: null,
+          dueAt: importedFollowUpAt(row),
           assignedTo: assignee.id,
           notes: outboundTaskNotes({
             campaign: parsed.campaign,
             company: row.company,
             notes: row.notes,
+            priority: row.priority,
+            emailStatus: row.emailStatus,
+            importedStatus: row.status,
           }),
+          createdAt: now,
+          updatedAt: now,
         })
         .returning({ id: crmTasks.id });
       if (insertedTasks.length !== 1) {
@@ -967,6 +1342,41 @@ export async function executePreparedOutboundImport(
         );
       }
       tasksCreated += insertedTasks.length;
+    } else if (plan.needsOutboundTaskUpdate && plan.existingOutboundTask) {
+      let notes = plan.existingOutboundTask.notes;
+      if (row.priority)
+        notes = upsertTaskNoteField(notes, "priority", row.priority);
+      if (row.emailStatus)
+        notes = upsertTaskNoteField(notes, "emailStatus", row.emailStatus);
+      if (row.status)
+        notes = upsertTaskNoteField(notes, "importedStatus", row.status);
+      const updatedTasks = await tx
+        .update(crmTasks)
+        .set({
+          partnerAccountId,
+          status: plan.closesOutboundTask ? "completed" : "open",
+          title: row.nextAction ?? plan.existingOutboundTask.title,
+          dueAt: plan.closesOutboundTask
+            ? null
+            : (importedFollowUpAt(row) ?? plan.existingOutboundTask.dueAt),
+          notes,
+          updatedAt: now,
+        })
+        .where(
+          and(
+            eq(crmTasks.id, plan.existingOutboundTask.id),
+            eq(crmTasks.status, "open"),
+          ),
+        )
+        .returning({ id: crmTasks.id });
+      if (updatedTasks.length !== 1) {
+        throw new TeamMutationFailure(
+          "conflict",
+          `The existing outbound task changed before CSV row ${row.rowNumber} could be applied. No import changes were saved.`,
+          { retryable: true },
+        );
+      }
+      tasksUpdated += 1;
     }
   }
 
@@ -985,6 +1395,7 @@ export async function executePreparedOutboundImport(
       partnerLinksCreated,
       contactNotesCreated,
       tasksCreated,
+      tasksUpdated,
       pipelineRowsCreated,
     },
     exclusionReport: prepared.preview.exclusionReport,

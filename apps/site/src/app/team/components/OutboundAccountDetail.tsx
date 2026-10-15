@@ -187,6 +187,49 @@ export function OutboundAccountDetail({
               <dd>{item.account.status.replace(/_/g, " ")}</dd>
             </>
           ) : null}
+          {item.account.importedStatus ? (
+            <>
+              <dt>Imported status</dt>
+              <dd className="break-words">{item.account.importedStatus}</dd>
+            </>
+          ) : null}
+          {item.account.priority ? (
+            <>
+              <dt>Priority</dt>
+              <dd className="break-words">{item.account.priority}</dd>
+            </>
+          ) : null}
+          {item.account.importedNextAction ? (
+            <>
+              <dt>Imported next action</dt>
+              <dd className="break-words">{item.account.importedNextAction}</dd>
+            </>
+          ) : null}
+          {item.account.importedEmailStatus ? (
+            <>
+              <dt>Imported email status</dt>
+              <dd className="break-words">
+                {item.account.importedEmailStatus}
+              </dd>
+            </>
+          ) : null}
+          {item.account.externalCompanyId || item.account.externalLocationId ? (
+            <>
+              <dt>Import identity</dt>
+              <dd className="break-words">
+                {[
+                  item.account.externalCompanyId
+                    ? `Company ${item.account.externalCompanyId}`
+                    : null,
+                  item.account.externalLocationId
+                    ? `Location ${item.account.externalLocationId}`
+                    : null,
+                ]
+                  .filter(Boolean)
+                  .join(" · ")}
+              </dd>
+            </>
+          ) : null}
           {item.reminderAt ? (
             <>
               <dt>Reminder</dt>

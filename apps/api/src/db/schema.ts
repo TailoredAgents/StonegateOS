@@ -269,6 +269,12 @@ export const partnerAccounts = pgTable(
     source: text("source"),
     sourceCampaign: text("source_campaign"),
     sourceListName: text("source_list_name"),
+    externalCompanyId: text("external_company_id"),
+    externalLocationId: text("external_location_id"),
+    importedStatus: text("imported_status"),
+    outreachPriority: text("outreach_priority"),
+    importedNextAction: text("imported_next_action"),
+    importedEmailStatus: text("imported_email_status"),
     city: text("city"),
     state: varchar("state", { length: 32 }),
     ownerMemberId: uuid("owner_member_id"),
@@ -369,6 +375,12 @@ export const partnerAccounts = pgTable(
     normalizedNameIdx: index("partner_accounts_normalized_name_idx").on(
       table.normalizedName,
     ),
+    externalCompanyIdx: index("partner_accounts_external_company_idx")
+      .on(table.externalCompanyId)
+      .where(sql`${table.externalCompanyId} IS NOT NULL`),
+    externalLocationIdx: uniqueIndex("partner_accounts_external_location_idx")
+      .on(table.externalLocationId)
+      .where(sql`${table.externalLocationId} IS NOT NULL`),
     portalContactKey: uniqueIndex("partner_accounts_portal_contact_key")
       .on(table.portalContactId)
       .where(sql`${table.portalContactId} IS NOT NULL`),

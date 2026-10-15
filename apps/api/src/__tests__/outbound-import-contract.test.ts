@@ -19,6 +19,10 @@ describe("Outbound import production contract", () => {
   );
   const parser = apiSource("src/lib/outbound-import.ts");
   const service = apiSource("src/lib/outbound-import-service.ts");
+  const partnerAccounts = apiSource("src/lib/partner-accounts.ts");
+  const migration = apiSource(
+    "src/db/migrations/0183_outbound_import_history_identity.sql",
+  );
   const proxy = siteSource("src/app/api/team/outbound/import/route.ts");
   const client = siteSource("src/app/team/components/OutboundImportClient.tsx");
   const section = siteSource("src/app/team/components/OutboundSection.tsx");
@@ -61,6 +65,25 @@ describe("Outbound import production contract", () => {
     );
     expect(service).toContain("Resolves to the same existing contact as row");
     expect(service).toContain("regexp_replace(coalesce(${contacts.phone}");
+    expect(parser).toContain('company_id: "companyExternalId"');
+    expect(parser).toContain('location_id: "locationExternalId"');
+    expect(parser).toContain('follow_up_date: "followUpAt"');
+    expect(service).toContain("row.companyExternalId");
+    expect(service).toContain("row.locationExternalId");
+    expect(service).toContain("hasImportedHistory(row)");
+    expect(service).toContain(".update(body)");
+    expect(service).not.toContain(
+      "row.domain ?? row.website ?? row.emailNormalized",
+    );
+    expect(partnerAccounts).toContain("PUBLIC_EMAIL_DOMAINS");
+    expect(partnerAccounts).toContain("input.externalLocationId");
+    expect(partnerAccounts).toContain("input.externalCompanyId");
+    expect(
+      partnerAccounts.indexOf("if (input.externalLocationId)"),
+    ).toBeLessThan(partnerAccounts.indexOf("if (input.normalizedName)"));
+    expect(partnerAccounts.indexOf("if (input.normalizedName)")).toBeLessThan(
+      partnerAccounts.indexOf("// Domain is only a last-resort identity"),
+    );
   });
 
   it("validates assignee eligibility from effective permissions", () => {
@@ -70,6 +93,31 @@ describe("Outbound import production contract", () => {
       'permissionMatches(permission, "outbound.write")',
     );
     expect(service).toContain("member.active !== true || !eligible");
+  });
+
+  it("adds only nullable import history fields and a unique location identity", () => {
+    expect(migration).toContain(
+      'ADD COLUMN IF NOT EXISTS "external_company_id" text',
+    );
+    expect(migration).toContain(
+      'ADD COLUMN IF NOT EXISTS "external_location_id" text',
+    );
+    expect(migration).toContain(
+      'ADD COLUMN IF NOT EXISTS "imported_status" text',
+    );
+    expect(migration).toContain(
+      'ADD COLUMN IF NOT EXISTS "outreach_priority" text',
+    );
+    expect(migration).toContain(
+      'ADD COLUMN IF NOT EXISTS "imported_next_action" text',
+    );
+    expect(migration).toContain(
+      'ADD COLUMN IF NOT EXISTS "imported_email_status" text',
+    );
+    expect(migration).toContain(
+      'CREATE UNIQUE INDEX IF NOT EXISTS "partner_accounts_external_location_idx"',
+    );
+    expect(migration).not.toMatch(/\b(?:DELETE|TRUNCATE|DROP)\b/iu);
   });
 
   it("binds typed confirmation and If-Match to the exact preview hash", () => {

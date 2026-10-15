@@ -76,6 +76,12 @@ export type OutboundQueueItem = {
     name: string;
     status: string | null;
     segment: string | null;
+    importedStatus?: string | null;
+    priority?: string | null;
+    importedNextAction?: string | null;
+    importedEmailStatus?: string | null;
+    externalCompanyId?: string | null;
+    externalLocationId?: string | null;
     portalFit?: string | null;
     fitScore?: number | null;
     lastTouchAt: string | null;
@@ -334,6 +340,18 @@ function isOutboundQueueItem(
     isString(account["name"]) &&
     isStringOrNull(account["status"]) &&
     isStringOrNull(account["segment"]) &&
+    (account["importedStatus"] === undefined ||
+      isStringOrNull(account["importedStatus"])) &&
+    (account["priority"] === undefined ||
+      isStringOrNull(account["priority"])) &&
+    (account["importedNextAction"] === undefined ||
+      isStringOrNull(account["importedNextAction"])) &&
+    (account["importedEmailStatus"] === undefined ||
+      isStringOrNull(account["importedEmailStatus"])) &&
+    (account["externalCompanyId"] === undefined ||
+      isStringOrNull(account["externalCompanyId"])) &&
+    (account["externalLocationId"] === undefined ||
+      isStringOrNull(account["externalLocationId"])) &&
     (account["portalFit"] === undefined ||
       isStringOrNull(account["portalFit"])) &&
     (account["fitScore"] === undefined ||

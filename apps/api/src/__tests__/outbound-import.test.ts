@@ -10,7 +10,12 @@ import {
   type OutboundImportPublicRow,
 } from "@/lib/outbound-import";
 import { runOutboundImportAtomic } from "@/lib/outbound-import-transaction";
-import { classifyOutboundSegment } from "@/lib/outbound-import-service";
+import {
+  classifyImportedAccountStatus,
+  classifyImportedDisposition,
+  classifyOutboundSegment,
+} from "@/lib/outbound-import-service";
+import { normalizePartnerAccountDomain } from "@/lib/partner-accounts";
 import {
   readBoundedRequestBytes,
   type BoundedRequestBodyError,
@@ -64,6 +69,69 @@ describe("Outbound import CSV normalization", () => {
       preflightStatus: "candidate",
     });
     expect(parsed.ignoredHeaders).toEqual(["Extra"]);
+  });
+
+  it("carries historical outreach fields and stable company/location IDs", () => {
+    const parsed = parseOutboundImportPayload(
+      payload(
+        [
+          "company,company_id,facility_id,email,outreach_status,lead_priority,next_step,follow_up_date,email_status,notes",
+          'Extra Space Storage,extra-space,atl-142,manager@example.test,Contacted,High,"Call the facility manager",10/20/2026,Sent,"Discussed recurring cleanouts"',
+        ].join("\r\n"),
+      ),
+    );
+
+    expect(parsed.rows[0]).toMatchObject({
+      companyExternalId: "extra-space",
+      locationExternalId: "atl-142",
+      status: "Contacted",
+      priority: "High",
+      nextAction: "Call the facility manager",
+      followUpAt: "2026-10-20T13:00:00.000Z",
+      emailStatus: "Sent",
+      notes: "Discussed recurring cleanouts",
+    });
+  });
+
+  it("never treats a public mailbox provider as a company domain", () => {
+    expect(normalizePartnerAccountDomain("manager@gmail.com")).toBeNull();
+    expect(
+      normalizePartnerAccountDomain("https://www.gmail.com/inbox"),
+    ).toBeNull();
+    expect(
+      normalizePartnerAccountDomain("https://mail.gmail.com/inbox"),
+    ).toBeNull();
+    expect(normalizePartnerAccountDomain("https://acme.example/about")).toBe(
+      "acme.example",
+    );
+  });
+
+  it("maps imported history without treating not-contacted as contacted", () => {
+    expect(classifyImportedAccountStatus("Not Contacted")).toBe(
+      "ready_for_first_touch",
+    );
+    expect(classifyImportedAccountStatus("Called - no answer")).toBe(
+      "attempting_contact",
+    );
+    expect(classifyImportedAccountStatus("Replied")).toBe(
+      "conversation_active",
+    );
+    expect(classifyImportedAccountStatus("Interested")).toBe(
+      "qualified_partner",
+    );
+    expect(classifyImportedAccountStatus("Not Interested")).toBe("not_a_fit");
+    expect(
+      classifyImportedDisposition({
+        status: "Contacted",
+        emailStatus: "Not Sent",
+      }),
+    ).toBeNull();
+    expect(
+      classifyImportedDisposition({
+        status: "Contacted",
+        emailStatus: "Bounced",
+      }),
+    ).toBe("email_failed");
   });
 
   it("accepts exactly 2,000 data rows and rejects 2,001 before execution", () => {
