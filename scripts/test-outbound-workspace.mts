@@ -158,7 +158,10 @@ async function harness() {
     format: "iife",
     jsx: "automatic",
     minify: true,
-    define: { "process.env.NODE_ENV": '"production"' },
+    define: {
+      "process.env.NODE_ENV": '"production"',
+      "process.env": "{}",
+    },
     logLevel: "error",
     plugins: [
       {
@@ -266,7 +269,10 @@ for (const engine of [chromium, webkit]) {
         );
         await page.goto(`${app.url}/?out_account=${accountId}`);
         await expect(
-          page.getByRole("heading", { name: "Outbound", exact: true }),
+          page.getByRole("heading", {
+            name: "Partner Outreach",
+            exact: true,
+          }),
         ).toBeVisible();
         await expect(
           page.getByRole("link", { name: "Add partner", exact: true }),
@@ -330,7 +336,7 @@ for (const engine of [chromium, webkit]) {
       await expect(
         page.getByText("You have read-only access to this account."),
       ).toBeVisible();
-      for (const name of ["Add partner", "Partners", "Import contacts"])
+      for (const name of ["Add partner", "Partners", "Import"])
         await expect(page.getByRole("link", { name, exact: true })).toHaveCount(
           0,
         );
@@ -342,10 +348,12 @@ for (const engine of [chromium, webkit]) {
       ).toHaveCount(0);
       await page.goto(`${app.url}/?unavailable=1`);
       await expect(
-        page.getByRole("heading", { name: "Follow-ups could not be loaded" }),
+        page.getByRole("heading", {
+          name: "Work Queue could not be loaded",
+        }),
       ).toBeVisible();
       await expect(
-        page.getByLabel("Choose whose follow-ups to open"),
+        page.getByLabel("Choose whose prospects to open"),
       ).toBeVisible();
       await page.goto(
         `${app.url}/?empty=1&out_q=missing&out_account=${accountId}`,
@@ -406,7 +414,7 @@ for (const engine of [chromium, webkit]) {
         .click();
       await expect(
         page.getByRole("button", {
-          name: "Create company & invite Administrator",
+          name: "Create company and continue",
           exact: true,
         }),
       ).toBeVisible();

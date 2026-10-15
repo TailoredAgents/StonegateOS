@@ -4,15 +4,16 @@
 
 ## Status
 
-| Field                    | Current value                                                                             |
-| ------------------------ | ----------------------------------------------------------------------------------------- |
-| Discovery                | Complete from current `main` on 2026-10-15                                                |
-| Existing implementation  | Substantial and already merged into `main`                                                |
-| Current route            | `/team/sales/outbound`                                                                    |
-| Team navigation          | Restored as the only visible Sales workspace; still gated by `outbound.read`              |
-| Focused API verification | 15 suites and 160 tests passing locally                                                   |
-| Production certification | Controlled smoke test still required                                                      |
-| Recommended next step    | Verify the existing workflow with controlled identities, then add a prospect-scoped Inbox |
+| Field                    | Current value                                                                           |
+| ------------------------ | --------------------------------------------------------------------------------------- |
+| Discovery                | Complete from current `main` on 2026-10-15                                              |
+| Existing implementation  | Substantial and already merged into `main`                                              |
+| Current route            | `/team/sales/outbound`                                                                  |
+| Team navigation          | Restored as the only visible Sales workspace; still gated by `outbound.read`            |
+| Phase 1                  | Complete locally: guided queue, continue-to-next outcomes, and full CSV guidance        |
+| Focused API verification | 15 suites and 160 tests passing locally                                                 |
+| Production certification | Controlled smoke test still required                                                    |
+| Recommended next step    | Add the prospect-scoped Inbox, then verify the complete flow with controlled identities |
 
 ## Business problem
 
@@ -64,10 +65,8 @@ Imported records remain isolated operationally by their outbound campaign/source
 ## Gaps relative to the desired experience
 
 1. **No prospect-scoped Inbox inside Outbound.** Staff leave the queue and enter the general Inbox to compose or reply. Replies are retained correctly, but the experience does not feel like one dedicated pre-partnership area.
-2. **The queue is account-first, but not yet a strict guided “next prospect” workflow.** Staff can select records, but the fastest possible call-next-disposition-next loop should be more prominent.
-3. **Campaign and company-type reporting is operational rather than managerial.** It needs simple totals for imported, attempted, replied, callback, interested, converted, DNC, and not interested.
-4. **The downloadable CSV template exposes fewer optional enrichment columns than the importer already supports.** Industry, company size, LinkedIn, domain, source-list name, and similar fields should be available in the template and mapping help.
-5. **Current production behavior has not been smoke-tested and signed off against controlled call, SMS, email, reply, and conversion identities.** Source and local tests are not enough to claim production readiness.
+2. **Campaign and company-type reporting is operational rather than managerial.** It needs simple totals for imported, attempted, replied, callback, interested, converted, DNC, and not interested.
+3. **Current production behavior has not been smoke-tested and signed off against controlled call, SMS, email, reply, and conversion identities.** Source and local tests are not enough to claim production readiness.
 
 ## Target desktop experience
 
@@ -105,6 +104,8 @@ No real lead import occurs in this phase.
 Acceptance gate: every controlled workflow is verified without contacting a real prospect, losing history, duplicating identities, or exposing a production-data reset path.
 
 ### Phase 1 — Make the existing workspace obvious and fast
+
+Status: **Complete locally on 2026-10-15.** Production deploy and controlled smoke verification remain separate gates.
 
 - Use the staff-facing label **Partner Outreach** while retaining the existing route and API contracts.
 - Rename Follow-ups to Work Queue and clarify pre-partnership status language.

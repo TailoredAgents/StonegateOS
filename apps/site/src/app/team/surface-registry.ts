@@ -80,7 +80,7 @@ export const TEAM_SURFACES = [
     canonicalPath: "/team/sales/outbound",
     legacyTabs: ["outbound"],
     group: "sales",
-    label: "Outbound",
+    label: "Partner Outreach",
     requiredPermissions: ["outbound.read"],
     subviews: ["queue", "import", "partners"],
   },

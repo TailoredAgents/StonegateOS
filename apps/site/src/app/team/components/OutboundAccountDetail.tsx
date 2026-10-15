@@ -19,12 +19,14 @@ export function OutboundAccountDetail({
   members,
   permissions,
   closeHref,
+  afterOutcomeHref,
   initialTaskId,
 }: {
   item: OutboundQueueItem;
   members: TeamMember[];
   permissions: OutboundDetailPermissions;
   closeHref: string;
+  afterOutcomeHref: string;
   initialTaskId?: string;
 }) {
   const owner =
@@ -82,6 +84,7 @@ export function OutboundAccountDetail({
           callKeys={callKeys}
           outcomeKeys={outcomeKeys}
           initialTaskId={initialTaskId}
+          afterOutcomeHref={afterOutcomeHref}
         />
       </div>
 

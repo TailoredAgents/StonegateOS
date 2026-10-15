@@ -219,7 +219,7 @@ void test("normal contact and quote surfaces no longer expose legacy invitation 
   assert.match(relationships, /name="p_admin" value="relationships"/);
   assert.doesNotMatch(
     relationships,
-    /aria-label="Outbound views"|href=\{outbound(?:Queue|Import)Href\}/,
+    /aria-label="Partner Outreach views"|href=\{outbound(?:Queue|Import)Href\}/,
   );
   assert.doesNotMatch(instantQuotes, /href="\/team\/sales\/hq/);
 });

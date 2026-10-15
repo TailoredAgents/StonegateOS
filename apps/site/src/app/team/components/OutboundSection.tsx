@@ -61,9 +61,12 @@ function OutboundHeader({
     <header className="space-y-4">
       <div className="flex flex-wrap items-start justify-between gap-4">
         <div>
-          <h2 className="text-2xl font-semibold tracking-tight">Outbound</h2>
+          <h2 className="text-2xl font-semibold tracking-tight">
+            Partner Outreach
+          </h2>
           <p className={`mt-1 text-sm ${MUTED}`}>
-            Follow up with businesses and look after partner relationships.
+            Work interested business prospects from first contact through a
+            confirmed partner relationship.
           </p>
         </div>
         {canCreatePartner ? (
@@ -76,18 +79,18 @@ function OutboundHeader({
         ) : null}
       </div>
       <nav
-        aria-label="Outbound views"
+        aria-label="Partner Outreach views"
         className="flex flex-wrap gap-1 border-b border-[color:var(--team-border)] pb-2"
       >
         {[
           {
-            label: "Follow-ups",
+            label: "Work Queue",
             href: buildOutboundHref({ memberId, filters }),
             active: view === "queue",
             show: true,
           },
           {
-            label: "Import contacts",
+            label: "Import",
             href: buildOutboundHref({ memberId, filters, view: "import" }),
             active: view === "import",
             show: canImport,
@@ -166,13 +169,13 @@ export async function OutboundSection({
           <h3 className="font-semibold">Import access is required</h3>
           <p className="mt-1">
             Ask your administrator for import access. You can still use your
-            follow-up list.
+            prospect work queue.
           </p>
           <a
             href={buildOutboundHref({ memberId, filters })}
             className={`${teamButtonClass("secondary")} mt-3`}
           >
-            Back to follow-ups
+            Back to Work Queue
           </a>
         </div>
       </section>
@@ -256,7 +259,7 @@ export async function OutboundSection({
       <section className="space-y-5">
         {header()}
         <div role="alert" className={teamStatePanelClass("danger")}>
-          <h3 className="font-semibold">Follow-ups could not be loaded</h3>
+          <h3 className="font-semibold">Work Queue could not be loaded</h3>
           <p className="mt-1">
             We couldn’t verify the current accounts and contact restrictions. No
             outreach controls or misleading zero totals are shown.
@@ -275,7 +278,7 @@ export async function OutboundSection({
             className={`${PANEL} space-y-3 p-4`}
           >
             <label className="grid gap-1 text-sm font-medium">
-              Choose whose follow-ups to open
+              Choose whose prospects to open
               <select
                 name="memberId"
                 defaultValue={memberId ?? ""}
@@ -295,7 +298,7 @@ export async function OutboundSection({
               open their list.
             </p>
             <button type="submit" className={teamButtonClass("primary")}>
-              Open follow-ups
+              Open Work Queue
             </button>
           </form>
         ) : null}
@@ -334,7 +337,7 @@ export async function OutboundSection({
     filters.disposition,
   ].filter(Boolean).length;
   const quickFilters = [
-    { label: "All follow-ups", due: "", disposition: "" },
+    { label: "All prospects", due: "", disposition: "" },
     { label: "Overdue", due: "overdue", disposition: "" },
     { label: "Due now", due: "due_now", disposition: "" },
     {
@@ -344,6 +347,31 @@ export async function OutboundSection({
     },
     { label: "Not started", due: "not_started", disposition: "" },
   ];
+  const selectedIndex = selected
+    ? queue.items.findIndex((item) => item.id === selected.id)
+    : -1;
+  const previousProspect =
+    selectedIndex > 0 ? queue.items[selectedIndex - 1] : undefined;
+  const nextProspect =
+    selectedIndex >= 0 ? queue.items[selectedIndex + 1] : undefined;
+  const isWorkableProspect = (item: OutboundQueueItem) =>
+    item.tasks.some(
+      (task) => task.id === item.primaryTaskId && !task.doNotContact,
+    );
+  const firstWorkableProspect = queue.items.find(isWorkableProspect);
+  const nextWorkableProspect =
+    selectedIndex >= 0
+      ? queue.items.slice(selectedIndex + 1).find(isWorkableProspect)
+      : undefined;
+  const prospectHref = (item: OutboundQueueItem) =>
+    buildOutboundHref({
+      memberId: resolvedMemberId,
+      filters,
+      patch: { accountId: item.id, taskId: item.primaryTaskId },
+    });
+  const afterOutcomeHref = nextWorkableProspect
+    ? prospectHref(nextWorkableProspect)
+    : clearSelectionHref;
 
   return (
     <section className="min-w-0 space-y-5 text-[color:var(--team-text)]">
@@ -358,26 +386,36 @@ export async function OutboundSection({
         <p>
           {owner ? (
             <>
-              <span className="font-semibold">{owner}’s</span> follow-ups
+              <span className="font-semibold">{owner}’s</span> prospects
             </>
           ) : (
-            "Assigned follow-ups"
+            "Assigned prospects"
           )}{" "}
           <span className={MUTED}>
             · {queue.total} matching{" "}
             {queue.total === 1 ? "account" : "accounts"}
           </span>
         </p>
-        <a
-          href={buildOutboundHref({
-            memberId: resolvedMemberId,
-            filters,
-            patch: { cursor: "", direction: "" },
-          })}
-          className={`inline-flex min-h-11 items-center rounded-lg px-3 font-semibold ${TEAM_FOCUS_RING}`}
-        >
-          Refresh list
-        </a>
+        <div className="flex flex-wrap gap-2">
+          {!selected && firstWorkableProspect ? (
+            <a
+              href={`${prospectHref(firstWorkableProspect)}#outbound-account`}
+              className={teamButtonClass("primary", "sm")}
+            >
+              Work next prospect
+            </a>
+          ) : null}
+          <a
+            href={buildOutboundHref({
+              memberId: resolvedMemberId,
+              filters,
+              patch: { cursor: "", direction: "" },
+            })}
+            className={`inline-flex min-h-11 items-center rounded-lg px-3 font-semibold ${TEAM_FOCUS_RING}`}
+          >
+            Refresh queue
+          </a>
+        </div>
       </div>
       <div className={`${PANEL} p-4`}>
         <nav
@@ -527,18 +565,42 @@ export async function OutboundSection({
       >
         {selected ? (
           <div className="order-first min-w-0 xl:order-last">
+            <nav
+              aria-label="Prospect navigation"
+              className="mb-2 flex min-h-11 items-center justify-between gap-2"
+            >
+              {previousProspect ? (
+                <a
+                  href={`${prospectHref(previousProspect)}#outbound-account`}
+                  className={teamButtonClass("secondary", "sm")}
+                >
+                  Previous prospect
+                </a>
+              ) : (
+                <span />
+              )}
+              {nextProspect ? (
+                <a
+                  href={`${prospectHref(nextProspect)}#outbound-account`}
+                  className={teamButtonClass("secondary", "sm")}
+                >
+                  Next prospect
+                </a>
+              ) : null}
+            </nav>
             <OutboundAccountDetail
               item={selected}
               initialTaskId={filters.taskId}
               members={members}
               permissions={permissions}
               closeHref={`${clearSelectionHref}#outbound-list`}
+              afterOutcomeHref={afterOutcomeHref}
             />
           </div>
         ) : null}
         <div id="outbound-list" className={`${PANEL} scroll-mt-24`}>
           <div className="flex flex-wrap items-center justify-between gap-2 border-b border-[color:var(--team-border)] px-4 py-3">
-            <h3 className="font-semibold">Your follow-up list</h3>
+            <h3 className="font-semibold">Prospect work queue</h3>
             <span className={`text-sm ${MUTED}`}>
               {queue.items.length
                 ? `${queue.offset + 1}–${Math.min(queue.offset + queue.items.length, queue.total)} of ${queue.total}`
@@ -555,7 +617,7 @@ export async function OutboundSection({
                 return (
                   <li key={item.id}>
                     <a
-                      href={`${buildOutboundHref({ memberId: resolvedMemberId, filters, patch: { accountId: item.id, taskId: item.primaryTaskId } })}#outbound-account`}
+                      href={`${prospectHref(item)}#outbound-account`}
                       aria-current={active ? "true" : undefined}
                       className={`block min-w-0 p-4 ${TEAM_FOCUS_RING} ${active ? "bg-[color:var(--team-surface-muted)]" : "hover:bg-[color:var(--team-surface-muted)]"}`}
                     >
@@ -617,7 +679,7 @@ export async function OutboundSection({
               <p className={`text-sm ${MUTED}`}>
                 {hasFilters
                   ? "Try a different search or clear the filters."
-                  : "There are no open follow-up accounts assigned to this teammate."}
+                  : "There are no open prospect accounts assigned to this teammate."}
               </p>
               {hasFilters ? (
                 <a href={resetHref} className={teamButtonClass("secondary")}>
@@ -639,7 +701,7 @@ export async function OutboundSection({
           )}
           {queue.previousCursor || queue.nextCursor ? (
             <nav
-              aria-label="Follow-up pages"
+              aria-label="Prospect pages"
               className="flex justify-between gap-3 border-t border-[color:var(--team-border)] p-3"
             >
               {queue.previousCursor ? (

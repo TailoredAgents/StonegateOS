@@ -210,7 +210,7 @@ async function harness(engine: BrowserType, width: number, readOnly = false) {
   const bundle = await build({
     stdin: {
       contents: `import React from'react';import{createRoot}from'react-dom/client';import{OutboundAccountDetail}from'./src/app/team/components/OutboundAccountDetail';
-      function App(){const[item,setItem]=React.useState(${JSON.stringify(item)});const[initialTaskId,setInitialTaskId]=React.useState(undefined);React.useEffect(()=>{window.__setInitialTask=setInitialTaskId;window.__refreshTask=(id)=>setItem(current=>({...current,tasks:current.tasks.map(task=>task.id===id?{...task,version:'2026-09-09T13:00:00.000Z'}:task)}))},[]);return <main><h1>Outbound</h1><OutboundAccountDetail item={item} initialTaskId={initialTaskId} members={[{id:'owner',name:'Owner'}]} permissions={{canCall:${!readOnly},canMessage:${!readOnly},canDraft:${!readOnly},canManage:${!readOnly}}} closeHref='/queue'/></main>}createRoot(document.getElementById('root')).render(<App/>);`,
+      function App(){const[item,setItem]=React.useState(${JSON.stringify(item)});const[initialTaskId,setInitialTaskId]=React.useState(undefined);React.useEffect(()=>{window.__setInitialTask=setInitialTaskId;window.__refreshTask=(id)=>setItem(current=>({...current,tasks:current.tasks.map(task=>task.id===id?{...task,version:'2026-09-09T13:00:00.000Z'}:task)}))},[]);return <main><h1>Partner Outreach</h1><OutboundAccountDetail item={item} initialTaskId={initialTaskId} members={[{id:'owner',name:'Owner'}]} permissions={{canCall:${!readOnly},canMessage:${!readOnly},canDraft:${!readOnly},canManage:${!readOnly}}} closeHref='/queue' afterOutcomeHref='/team/sales/outbound?out_account=next'/></main>}createRoot(document.getElementById('root')).render(<App/>);`,
       resolveDir: `${repo}/apps/site`,
       loader: "tsx",
     },
@@ -357,7 +357,10 @@ for (const engine of [chromium, webkit]) {
         const callback = page.locator("input[name=callbackAt]");
         assert.equal(await callback.getAttribute("required"), "");
         await page
-          .getByRole("button", { name: "Save callback", exact: true })
+          .getByRole("button", {
+            name: "Save callback & continue",
+            exact: true,
+          })
           .click();
         assert.equal(
           await page.evaluate(() => (window as any).__submissions?.length ?? 0),
@@ -365,7 +368,10 @@ for (const engine of [chromium, webkit]) {
         );
         await callback.fill("2026-09-10T09:00");
         await page
-          .getByRole("button", { name: "Save callback", exact: true })
+          .getByRole("button", {
+            name: "Save callback & continue",
+            exact: true,
+          })
           .click();
         await page.waitForFunction(
           () => (window as any).__submissions?.length === 1,
@@ -378,6 +384,10 @@ for (const engine of [chromium, webkit]) {
         assert.equal(submission.data.expectedVersion, version);
         assert.equal(submission.data.recap, "Jordan first task notes");
         assert.equal(submission.data.callbackAt, "2026-09-10T09:00");
+        assert.equal(
+          submission.data.returnTo,
+          "/team/sales/outbound?out_account=next",
+        );
         assert.match(submission.data.idempotencyKey, /^outbound-disposition:/);
         await page.evaluate(() => (window as any).__refreshTask("linked-task"));
         await page
@@ -387,7 +397,10 @@ for (const engine of [chromium, webkit]) {
           .waitFor();
         assert.equal(
           await page
-            .getByRole("button", { name: "Save callback", exact: true })
+            .getByRole("button", {
+              name: "Save callback & continue",
+              exact: true,
+            })
             .isDisabled(),
           true,
         );
@@ -402,7 +415,10 @@ for (const engine of [chromium, webkit]) {
           .click();
         assert.equal(
           await page
-            .getByRole("button", { name: "Save callback", exact: true })
+            .getByRole("button", {
+              name: "Save callback & continue",
+              exact: true,
+            })
             .isDisabled(),
           false,
         );

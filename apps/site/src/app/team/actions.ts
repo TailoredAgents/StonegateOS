@@ -69,6 +69,10 @@ import {
   callAdminMutationWithSafeReplay,
   createAdminMutationRequest,
 } from "./lib/team-mutation-transport";
+import {
+  buildOutboundHref,
+  parseOutboundReturnHref,
+} from "./outbound-navigation";
 import { teamSurfaceHref } from "./surface-registry";
 import { quoteWorkspaceHref } from "./quotes-workspace";
 import { parsePartnerRateCsv } from "./lib/partner-rate-input";
@@ -8355,6 +8359,7 @@ export async function setOutboundDispositionAction(formData: FormData) {
   const recapRaw = formData.get("recap");
   const idempotencyKey = formData.get("idempotencyKey");
   const expectedVersionRaw = formData.get("expectedVersion");
+  const returnTo = parseOutboundReturnHref(formData.get("returnTo"));
 
   const taskId = typeof taskIdRaw === "string" ? taskIdRaw.trim() : "";
   const disposition =
@@ -8464,6 +8469,15 @@ export async function setOutboundDispositionAction(formData: FormData) {
     path: "/",
   });
   revalidatePath("/team");
+  if (returnTo) {
+    redirect(
+      buildOutboundHref({
+        memberId: returnTo.memberId,
+        view: returnTo.view,
+        filters: returnTo.filters,
+      }),
+    );
+  }
 }
 
 export async function draftOutboundFollowupAction(formData: FormData) {

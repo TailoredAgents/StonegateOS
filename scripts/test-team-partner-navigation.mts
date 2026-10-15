@@ -174,7 +174,7 @@ async function harness() {
 
 for (const engine of [chromium, webkit]) {
   test(
-    `${engine.name()}: direct Partners replaces Sales in desktop and mobile CRM navigation`,
+    `${engine.name()}: Partners and Partner Outreach coexist in desktop and mobile CRM navigation`,
     { timeout: 90_000 },
     async () => {
       const app = await harness();
@@ -224,13 +224,16 @@ for (const engine of [chromium, webkit]) {
           await expect(partners).toHaveAttribute("aria-current", "page");
           const target = await partners.boundingBox();
           assert.ok(target && target.height >= 44 && target.width >= 44);
-          for (const label of [
-            "Sales",
-            "Pipeline",
-            "Sales HQ",
-            "Outbound",
-            "Sales Activity",
-          ])
+          await expect(
+            navigation.getByText("Sales", { exact: true }),
+          ).toBeVisible();
+          await expect(
+            navigation.getByRole("button", {
+              name: "Partner Outreach",
+              exact: true,
+            }),
+          ).toBeVisible();
+          for (const label of ["Pipeline", "Sales HQ", "Sales Activity"])
             await expect(
               navigation.getByText(label, { exact: true }),
             ).toHaveCount(0);
@@ -312,12 +315,12 @@ for (const engine of [chromium, webkit]) {
             .getByRole("button", { name: "Partners", exact: true });
           if (allowed) await expect(control).toBeVisible();
           else await expect(control).toHaveCount(0);
-          for (const legacy of [
-            "pipeline",
-            "sales-hq",
-            "outbound",
-            "sales-log",
-          ])
+          assert.equal(
+            values.normal.includes("outbound"),
+            role === "owner" || role === "sales",
+            `${role} Partner Outreach permission`,
+          );
+          for (const legacy of ["pipeline", "sales-hq", "sales-log"])
             assert.equal(values.normal.includes(legacy), false);
         }
         await page.close();

@@ -15,7 +15,7 @@ type TeamMember = { id: string; name: string };
 const REVIEW_PAGE_SIZE = 50;
 const MAX_CSV_BYTES = 2 * 1024 * 1024;
 const CSV_TEMPLATE =
-  "company,contact_name,title,email,phone,website,city,state,zip,notes\r\n";
+  "company,contact_name,title,email,phone,website,domain,industry,company_size,linkedin_url,city,state,zip,source_list_name,notes\r\n";
 type ReviewFilter = "all" | "accepted" | "excluded" | "unchanged";
 
 function newImportKey(): string {
@@ -413,6 +413,17 @@ export function OutboundImportClient(props: {
             needs an email or phone number. Importing creates CRM work; it does
             not send outreach.
           </p>
+          <details>
+            <summary className="min-h-[44px] cursor-pointer content-center text-sm font-medium text-[color:var(--team-text)]">
+              Supported columns
+            </summary>
+            <p className="pb-2 text-sm leading-6 text-[color:var(--team-text-muted)]">
+              Company, contact name, title, email, phone, website, domain,
+              industry, company size, LinkedIn URL, city, state, ZIP, source
+              list name, and notes. Column order does not matter, and unused
+              optional columns may be left blank.
+            </p>
+          </details>
         </div>
         <details className="border-b border-[color:var(--team-border)] pb-3">
           <summary className="min-h-[44px] cursor-pointer content-center text-sm font-medium text-[color:var(--team-text)]">
@@ -621,17 +632,21 @@ export function OutboundImportClient(props: {
               duplicates, or conflicting details are skipped.
             </p>
           </div>
-          <dl className="grid grid-cols-2 gap-x-4 gap-y-3 border-y border-[color:var(--team-border)] py-4 sm:grid-cols-3 lg:grid-cols-6">
+          <p className="rounded-xl bg-[color:var(--team-surface-muted)] p-3 text-sm font-medium text-[color:var(--team-text)]">
+            {preview.counts.accepted} of {preview.counts.total} rows are ready
+            to import. {preview.counts.total - preview.counts.accepted} will be
+            excluded and remain unchanged.
+          </p>
+          <dl className="grid grid-cols-2 gap-x-4 gap-y-3 border-y border-[color:var(--team-border)] py-4 sm:grid-cols-4">
             {[
-              ["Accepted", preview.counts.accepted],
-              ["Create", preview.counts.create],
-              ["Update", preview.counts.update],
-              ["Unchanged", preview.counts.unchanged],
+              ["Ready", preview.counts.accepted],
+              ["New contacts", preview.counts.create],
+              ["Updates", preview.counts.update],
+              ["No changes", preview.counts.unchanged],
+              ["Duplicates", preview.counts.duplicate],
+              ["Conflicts", preview.counts.conflict],
               ["Invalid", preview.counts.invalid],
-              [
-                "Duplicate / conflict",
-                preview.counts.duplicate + preview.counts.conflict,
-              ],
+              ["Excluded", preview.counts.total - preview.counts.accepted],
             ].map(([label, value]) => (
               <div key={String(label)} className="min-w-0">
                 <dt className="text-xs text-[color:var(--team-text-soft)]">

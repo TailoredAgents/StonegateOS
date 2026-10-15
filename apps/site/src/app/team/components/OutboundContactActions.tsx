@@ -61,6 +61,7 @@ export function OutboundContactActions({
   callKeys,
   outcomeKeys,
   initialTaskId,
+  afterOutcomeHref,
 }: {
   item: Pick<
     OutboundQueueItem,
@@ -70,6 +71,7 @@ export function OutboundContactActions({
   callKeys: Record<string, string>;
   outcomeKeys: Record<string, string>;
   initialTaskId?: string;
+  afterOutcomeHref: string;
 }) {
   const prefix = useId();
   const initialTask = initialTaskId
@@ -364,6 +366,7 @@ export function OutboundContactActions({
                 name="idempotencyKey"
                 value={outcomeKeys[task.id]}
               />
+              <input type="hidden" name="returnTo" value={afterOutcomeHref} />
               <label className="grid gap-2 text-base font-medium">
                 Outcome
                 <select
@@ -442,10 +445,10 @@ export function OutboundContactActions({
                 disabled={revisionChanged}
               >
                 {input.outcome === "callback_requested"
-                  ? "Save callback"
+                  ? "Save callback & continue"
                   : input.outcome === "dnc"
-                    ? "Save Do Not Contact"
-                    : "Save outcome"}
+                    ? "Save Do Not Contact & continue"
+                    : "Save outcome & continue"}
               </SubmitButton>
               <p className="text-sm text-[color:var(--team-text-muted)]">
                 Record only outreach that actually happened. Saving an outcome
