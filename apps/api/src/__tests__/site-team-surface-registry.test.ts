@@ -232,29 +232,31 @@ describe("Site Team surface registry", () => {
     );
   });
 
-  it("keeps legacy Sales URLs without putting a Sales workspace in normal navigation", () => {
+  it("keeps retired Sales URLs while showing the two partner workspaces together", () => {
     const teamPage = read("page.tsx");
     const ownerNavigation = getTeamNavigationSurfaces(["*"]);
-    for (const id of [
-      "pipeline",
-      "sales-hq",
-      "outbound",
-      "sales-log",
-    ] as const) {
+    for (const id of ["pipeline", "sales-hq", "sales-log"] as const) {
       expect(TEAM_SURFACE_BY_ID.has(id)).toBe(true);
       expect(teamSurfaceHref(id)).toMatch(/^\/team\/sales\//u);
       expect(canAccessTeamSurface(id, ["*"])).toBe(true);
       expect(ownerNavigation.some((surface) => surface.id === id)).toBe(false);
     }
     expect(
-      TEAM_NAVIGATION_SURFACES.some((surface) => surface.group === "sales"),
-    ).toBe(false);
+      ownerNavigation
+        .filter((surface) => surface.group === "sales")
+        .map((surface) => surface.id),
+    ).toEqual(["outbound", "partners"]);
     expect(teamPage).not.toContain('tab === "partners" ? "outbound"');
   });
 
-  it("places Partners directly in daily work without granting new permissions", () => {
-    expect(TEAM_PRIMARY_NAVIGATION_IDS).toContain("partners");
-    expect(TEAM_SURFACE_BY_ID.get("partners")?.group).toBe("daily");
+  it("places Partners beside Partner Outreach without granting new permissions", () => {
+    expect(TEAM_PRIMARY_NAVIGATION_IDS).not.toContain("partners");
+    expect(TEAM_SURFACE_BY_ID.get("partners")?.group).toBe("sales");
+    expect(
+      TEAM_NAVIGATION_SURFACES.filter(
+        (surface) => surface.group === "sales",
+      ).map((surface) => surface.id),
+    ).toEqual(["outbound", "partners"]);
     expect(teamSurfaceHref("partners")).toBe("/team/partners");
     for (const permissions of [
       ["*"],
@@ -286,13 +288,13 @@ describe("Site Team surface registry", () => {
     expect(resolveDefaultTeamSurfaceId(["partners.accounts.read"])).toBe(
       "partners",
     );
-    expect(["pipeline", "sales-hq", "outbound", "sales-log"]).not.toContain(
+    expect(
       resolveDefaultTeamSurfaceId([
         "sales.read",
         "outbound.read",
         "pipeline.read",
       ]),
-    );
+    ).toBe("outbound");
   });
 
   it("encodes a direct Add partner link without carrying old Sales selection state", () => {

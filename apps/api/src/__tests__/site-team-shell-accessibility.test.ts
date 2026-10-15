@@ -105,7 +105,7 @@ describe("modern Team shell accessibility contract", () => {
     );
 
     expect(registry).toMatch(
-      /TEAM_PRIMARY_NAVIGATION_IDS[\s\S]*"calendar",[\s\S]*"inbox",[\s\S]*"contacts",[\s\S]*"partners",[\s\S]*"quotes",[\s\S]*"expenses"/u,
+      /TEAM_PRIMARY_NAVIGATION_IDS[\s\S]*"calendar",[\s\S]*"inbox",[\s\S]*"contacts",[\s\S]*"quotes",[\s\S]*"expenses"/u,
     );
     expect(page).toContain("const quickIds = TEAM_PRIMARY_NAVIGATION_IDS");
     expect(shell).toContain("const MAX_MOBILE_DAILY_ANCHORS = 5");

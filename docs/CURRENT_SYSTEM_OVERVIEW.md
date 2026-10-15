@@ -56,8 +56,8 @@ The repository currently targets one company per deployment. It is not documente
 
 `apps/site/src/app/team/surface-registry.ts` is the navigation source of truth. It defines canonical paths and permission gates for 23 surfaces, including:
 
-- Daily work: Calendar, Inbox, Contacts, Partners, Quotes, and Expenses.
-- Sales: Pipeline, Sales HQ, Outbound, and Sales Activity.
+- Daily work: Calendar, Inbox, Contacts, Quotes, and Expenses.
+- Sales: Pipeline, Sales HQ, Partner Outreach, Partners, and Sales Activity.
 - Marketing: Ads, Website Analytics, and SEO.
 - Owner: Owner HQ.
 - Administration: Policy Center, Messaging Automation, Commissions, Access, Audit Log, and Merge Queue.

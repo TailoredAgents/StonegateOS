@@ -211,7 +211,7 @@ for (const engine of [chromium, webkit]) {
                   exact: true,
                 })
                 .getByRole("button", { name: "Partners", exact: true }),
-            ).toBeVisible();
+            ).toHaveCount(0);
             await page
               .getByRole("button", { name: "Open navigation", exact: true })
               .click();

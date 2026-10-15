@@ -88,7 +88,7 @@ export const TEAM_SURFACES = [
     id: "partners",
     canonicalPath: "/team/partners",
     legacyTabs: ["partners"],
-    group: "daily",
+    group: "sales",
     label: "Partners",
     requiredPermissions: [
       "partners.accounts.read",
@@ -278,19 +278,21 @@ export function isTeamSurfaceId(value: string): value is TeamSurfaceId {
   return TEAM_SURFACE_IDS.has(value as TeamSurfaceId);
 }
 
-// Keep historical Sales routes resolvable without presenting them as daily work.
-// Outbound remains a supported workspace and must stay discoverable for users
-// with outbound access. This is navigation policy only: permissions, records
-// and automation are unchanged.
+// Keep historical Sales routes resolvable without presenting them in normal
+// navigation. Partner Outreach and Partners remain the supported, discoverable
+// Sales workspaces. This is navigation policy only: permissions, records, and
+// automation are unchanged.
 export const TEAM_NAVIGATION_SURFACES = TEAM_SURFACES.filter(
-  (surface) => surface.group !== "sales" || surface.id === "outbound",
+  (surface) =>
+    surface.group !== "sales" ||
+    surface.id === "outbound" ||
+    surface.id === "partners",
 );
 
 export const TEAM_PRIMARY_NAVIGATION_IDS: readonly TeamSurfaceId[] = [
   "calendar",
   "inbox",
   "contacts",
-  "partners",
   "quotes",
   "expenses",
 ];
