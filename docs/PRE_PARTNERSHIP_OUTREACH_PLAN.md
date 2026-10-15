@@ -48,7 +48,7 @@ Imported records remain isolated operationally by their outbound campaign/source
 | CSV upload or paste    | Upload-first Import contacts view                                                                                                                                             | Implemented                            |
 | Import size            | Up to 2 MiB and 2,000 data rows                                                                                                                                               | Implemented                            |
 | Supported data         | Company/location IDs, company, contact, phone, email, website/domain, title, per-row industry, status, priority, next action, follow-up, email status, source list, and notes | Implemented                            |
-| Safe preview           | Preview -> Review -> explicit `IMPORT N` confirmation                                                                                                                         | Implemented                            |
+| Safe preview           | Preview -> Review -> one-click import of the accepted rows                                                                                                                    | Implemented                            |
 | Deduplication          | Normalized email/phone matching, within-file duplicate clusters, archived/DNC/conflict handling                                                                               | Implemented                            |
 | Import safety          | Exact preview hash, idempotency, transaction, advisory/row locks, complete exclusion CSV                                                                                      | Implemented                            |
 | Recoverable warnings   | A bad secondary email/phone or follow-up date is ignored with a visible warning when the row still has a usable contact method                                                | Implemented locally                    |
@@ -80,7 +80,7 @@ Keep the existing route and underlying API names to avoid unnecessary risk. Pres
 
 1. **Work Queue** — the next company/contact to reach, owner, campaign, available channels, last activity, next action, and outcome.
 2. **Prospect Inbox** — only conversations connected to active outbound prospects, with Needs Reply, Waiting, Failed, and All queues.
-3. **Import** — CSV template, campaign and owner selection, preview, exclusions, confirmation, and receipt.
+3. **Import** — CSV template, campaign and owner selection, preview, exclusions, one-click import, and receipt.
 4. **Partners** — a contextual handoff to existing Partner administration after confirmation.
 
 The Work Queue should keep the operator in one place:
@@ -161,7 +161,7 @@ Acceptance gate: the owner can understand the status of the 80-lead effort witho
 
 1. Never reset, replace, truncate, or bulk-delete the production database.
 2. Previewing a CSV remains read-only.
-3. Import requires explicit row-count confirmation and an idempotency key.
+3. Import requires an exact current preview and an idempotency key; the reviewed rows can then be imported with one click.
 4. Do not automatically send bulk SMS, email, calls, invitations, or portal credentials.
 5. Keep outreach human-initiated one prospect at a time unless a later, separately approved compliance plan permits automation.
 6. Respect DNC and provider delivery state before every external action.

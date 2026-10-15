@@ -108,6 +108,7 @@ async function harness(engine: BrowserType) {
       key: string | undefined;
       csv: string;
       file: boolean;
+      confirmation: string;
     }[],
   };
   const server = createServer(async (request, response) => {
@@ -128,6 +129,7 @@ async function harness(engine: BrowserType) {
         key: request.headers["idempotency-key"] as string | undefined,
         csv: String(data.get("csv") ?? ""),
         file: data.has("file"),
+        confirmation: String(data.get("confirmation") ?? ""),
       });
       const status =
         mode === "preview" ? controls.previewStatus : controls.executeStatus;
@@ -190,7 +192,7 @@ async function harness(engine: BrowserType) {
 }
 
 for (const engine of [chromium, webkit]) {
-  test(`${engine.name()}: upload, keyboard review, row filters, confirmation and receipt`, async () => {
+  test(`${engine.name()}: upload, keyboard review, row filters, one-click import and receipt`, async () => {
     const h = await harness(engine);
     try {
       assert.equal(
@@ -241,14 +243,15 @@ for (const engine of [chromium, webkit]) {
       await expect(
         h.page.getByText("Showing 1–50 of 51 matching rows."),
       ).toBeVisible();
-      const confirmation = h.page.getByRole("textbox", {
-        name: /Type IMPORT 51/,
-      });
       await expect(
         h.page.getByRole("button", { name: "Import 51 accepted rows" }),
-      ).toBeDisabled();
-      await confirmation.fill("IMPORT 51");
-      await confirmation.press("Enter");
+      ).toBeEnabled();
+      await expect(
+        h.page.getByRole("textbox", { name: /Type IMPORT 51/ }),
+      ).toHaveCount(0);
+      await h.page
+        .getByRole("button", { name: "Import 51 accepted rows" })
+        .click();
       await expect(
         h.page.getByText("Contacts imported", { exact: true }),
       ).toBeVisible();
@@ -257,6 +260,7 @@ for (const engine of [chromium, webkit]) {
           .length,
         1,
       );
+      assert.equal(h.controls.requests.at(-1)?.confirmation, "IMPORT 51");
       await expect(h.page.getByLabel("Choose a CSV file")).toBeDisabled();
       await h.page
         .getByRole("button", { name: "Start another import" })
@@ -345,9 +349,6 @@ for (const engine of [chromium, webkit]) {
       await h.upload();
       h.controls.executeStatus = 503;
       await h.page
-        .getByRole("textbox", { name: /Type IMPORT 51/ })
-        .fill("IMPORT 51");
-      await h.page
         .getByRole("button", { name: "Import 51 accepted rows" })
         .click();
       await expect(
@@ -386,14 +387,11 @@ for (const engine of [chromium, webkit]) {
     }
   });
 
-  test(`${engine.name()}: changed CRM data clears confirmation and allows a new review`, async () => {
+  test(`${engine.name()}: changed CRM data requires a new review before one-click import`, async () => {
     const h = await harness(engine);
     try {
       await h.upload();
       h.controls.executeStatus = 409;
-      await h.page
-        .getByRole("textbox", { name: /Type IMPORT 51/ })
-        .fill("IMPORT 51");
       await h.page
         .getByRole("button", { name: "Import 51 accepted rows" })
         .click();
@@ -412,8 +410,8 @@ for (const engine of [chromium, webkit]) {
         h.page.getByRole("heading", { name: "Review before importing" }),
       ).toBeVisible();
       await expect(
-        h.page.getByRole("textbox", { name: /Type IMPORT 51/ }),
-      ).toHaveValue("");
+        h.page.getByRole("button", { name: "Import 51 accepted rows" }),
+      ).toBeEnabled();
     } finally {
       await h.close();
     }

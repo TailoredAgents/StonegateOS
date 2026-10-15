@@ -120,7 +120,7 @@ describe("Outbound import production contract", () => {
     expect(migration).not.toMatch(/\b(?:DELETE|TRUNCATE|DROP)\b/iu);
   });
 
-  it("binds typed confirmation and If-Match to the exact preview hash", () => {
+  it("binds one-click execution and If-Match to the exact preview hash", () => {
     expect(executeRoute).toContain("parsePreviewHash(");
     expect(executeRoute).toContain("mutation.expectedVersion !== previewHash");
     expect(executeRoute).toContain("parseOutboundImportConfirmation(");
@@ -133,7 +133,10 @@ describe("Outbound import production contract", () => {
     expect(parser).toContain("row.plannedChanges");
     expect(service).toContain("contactFieldChanges");
     expect(proxy).toContain('headers.set("If-Match", `"${previewHash}"`)');
-    expect(client).toContain("preview.confirmationPhrase");
+    expect(client).toContain(
+      'form.set("confirmation", preview.confirmationPhrase)',
+    );
+    expect(client).not.toContain("Type <strong>{preview.confirmationPhrase}");
   });
 
   it("uses durable replay and one transaction for records, audit, and receipt", () => {
@@ -228,7 +231,7 @@ describe("Outbound import production contract", () => {
     expect(client).toContain('aria-live="polite"');
     expect(client).toContain('role="alert"');
     expect(client).toContain("min-h-[44px]");
-    expect(client).toContain("disabled={Boolean(busy)");
+    expect(client).toContain("preview.counts.accepted === 0");
     expect(client).toContain("Your CSV is still here");
     expect(client).toContain("REVIEW_PAGE_SIZE = 50");
     expect(client).toContain("md:hidden");

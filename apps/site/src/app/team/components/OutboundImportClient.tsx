@@ -108,7 +108,6 @@ export function OutboundImportClient(props: {
   const [success, setSuccess] = React.useState<OutboundImportSuccess | null>(
     null,
   );
-  const [confirmation, setConfirmation] = React.useState("");
   const [reviewPage, setReviewPage] = React.useState(0);
   const [idempotencyKey, setIdempotencyKey] = React.useState("");
   const [busy, setBusy] = React.useState<"preview" | "execute" | null>(null);
@@ -163,7 +162,6 @@ export function OutboundImportClient(props: {
   const invalidatePreview = React.useCallback(() => {
     setPreview(null);
     setSuccess(null);
-    setConfirmation("");
     setReviewPage(0);
     setIdempotencyKey("");
     setError(null);
@@ -181,11 +179,11 @@ export function OutboundImportClient(props: {
       else if (file) form.set("file", file, file.name);
       if (mode === "execute" && preview) {
         form.set("previewHash", preview.previewHash);
-        form.set("confirmation", confirmation);
+        form.set("confirmation", preview.confirmationPhrase);
       }
       return form;
     },
-    [assigneeId, campaign, confirmation, csv, file, preview],
+    [assigneeId, campaign, csv, file, preview],
   );
 
   const requestPreview = async (
@@ -225,7 +223,6 @@ export function OutboundImportClient(props: {
         return;
       }
       setPreview(parsed);
-      setConfirmation("");
       setReviewPage(0);
       setIdempotencyKey(newImportKey());
     } catch {
@@ -239,13 +236,7 @@ export function OutboundImportClient(props: {
   };
 
   const executeImport = async (): Promise<void> => {
-    if (
-      busy ||
-      inFlightRef.current ||
-      !preview ||
-      confirmation !== preview.confirmationPhrase ||
-      !idempotencyKey
-    ) {
+    if (busy || inFlightRef.current || !preview || !idempotencyKey) {
       return;
     }
     inFlightRef.current = true;
@@ -271,7 +262,6 @@ export function OutboundImportClient(props: {
         );
         if (response.status === 409) {
           setPreview(null);
-          setConfirmation("");
           setReviewPage(0);
           setIdempotencyKey("");
         }
@@ -951,28 +941,17 @@ export function OutboundImportClient(props: {
                   Do not start a second import to resolve this one.
                 </p>
               ) : null}
-              <label className="flex flex-col gap-1 text-sm text-[color:var(--team-text)]">
-                <span>
-                  Type <strong>{preview.confirmationPhrase}</strong> to import
-                  the {preview.counts.accepted} ready rows.
-                </span>
-                <input
-                  value={confirmation}
-                  disabled={Boolean(busy) || Boolean(success)}
-                  onChange={(event) => setConfirmation(event.target.value)}
-                  className={`${TEAM_INPUT} min-h-[44px] !text-base`}
-                  autoComplete="off"
-                  spellCheck={false}
-                />
-              </label>
+              <p className="text-sm text-[color:var(--team-text)]">
+                Import the {preview.counts.accepted} ready rows shown in this
+                review. Skipped rows will not be imported.
+              </p>
               <div>
                 <button
                   type="submit"
                   disabled={
                     Boolean(busy) ||
                     Boolean(success) ||
-                    preview.counts.accepted === 0 ||
-                    confirmation !== preview.confirmationPhrase
+                    preview.counts.accepted === 0
                   }
                   className={`${teamButtonClass("primary")} min-h-[44px] disabled:cursor-not-allowed disabled:opacity-50`}
                 >
