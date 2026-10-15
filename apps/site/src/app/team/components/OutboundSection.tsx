@@ -37,7 +37,7 @@ import { OutboundOutreachProgress } from "./OutboundOutreachProgress";
 import { InboxView } from "./InboxView";
 
 const PANEL =
-  "min-w-0 rounded-2xl border border-[color:var(--team-border)] bg-[color:var(--team-surface)]";
+  "min-w-0 rounded-2xl border border-[color:var(--team-border)] bg-[color:var(--team-card)] shadow-[0_8px_22px_var(--team-card-shadow)]";
 const FIELD = `${TEAM_INPUT_COMPACT} !text-base w-full min-w-0`;
 const MUTED = "text-[color:var(--team-text-muted)]";
 
@@ -47,6 +47,16 @@ function dueLabel(item: OutboundQueueItem) {
   if (item.minutesUntilDue !== null && item.minutesUntilDue <= 0)
     return "Due now";
   return "Scheduled";
+}
+
+function dueBadgeClass(item: OutboundQueueItem) {
+  if (item.overdue)
+    return "bg-[color:var(--team-danger-surface)] text-[color:var(--team-danger-text)]";
+  if (item.minutesUntilDue !== null && item.minutesUntilDue <= 0)
+    return "bg-[color:var(--team-warning-surface)] text-[color:var(--team-warning-text)]";
+  if (item.dueAt)
+    return "bg-[color:var(--team-info-surface)] text-[color:var(--team-info-text)]";
+  return "bg-[color:var(--team-surface-muted)] text-[color:var(--team-text-muted)]";
 }
 
 function OutboundHeader({
@@ -67,7 +77,9 @@ function OutboundHeader({
   canCreatePartner: boolean;
 }) {
   return (
-    <header className="space-y-4">
+    <header
+      className={`${PANEL} space-y-4 border-t-4 border-t-[color:var(--team-brand-green)] p-4 sm:p-5`}
+    >
       <div className="flex flex-wrap items-start justify-between gap-4">
         <div>
           <h2 className="text-2xl font-semibold tracking-tight">
@@ -123,7 +135,7 @@ function OutboundHeader({
               key={link.label}
               href={link.href}
               aria-current={link.active ? "page" : undefined}
-              className={`inline-flex min-h-11 items-center rounded-xl px-4 py-2 text-sm font-semibold ${TEAM_FOCUS_RING} ${link.active ? "bg-[color:var(--team-surface-muted)] text-[color:var(--team-text)]" : `${MUTED} hover:bg-[color:var(--team-surface-muted)]`}`}
+              className={`inline-flex min-h-11 items-center rounded-xl px-4 py-2 text-sm font-semibold ${TEAM_FOCUS_RING} ${link.active ? "bg-[color:var(--team-selection)] text-[color:var(--team-brand-green-strong)]" : `${MUTED} hover:bg-[color:var(--team-surface-muted)]`}`}
             >
               {link.label}
             </a>
@@ -526,7 +538,7 @@ export async function OutboundSection({
                   filters,
                   patch: shortcut,
                 })}
-                className={`inline-flex min-h-11 items-center rounded-full border px-3 py-2 text-sm font-medium ${TEAM_FOCUS_RING} ${active ? "border-[color:var(--team-focus-ring)] bg-[color:var(--team-surface-muted)]" : "border-[color:var(--team-border)]"}`}
+                className={`inline-flex min-h-11 items-center rounded-xl border px-3 py-2 text-sm font-medium ${TEAM_FOCUS_RING} ${active ? "border-[color:var(--team-control-hover-border)] bg-[color:var(--team-selection)] text-[color:var(--team-brand-green-strong)]" : "border-[color:var(--team-border)] hover:bg-[color:var(--team-surface-muted)]"}`}
               >
                 {shortcut.label}
               </a>
@@ -661,7 +673,7 @@ export async function OutboundSection({
         className={`grid min-w-0 items-start gap-5 ${selected ? "xl:grid-cols-[minmax(0,1fr)_minmax(360px,0.9fr)]" : ""}`}
       >
         {selected ? (
-          <div className="order-first min-w-0 xl:order-last">
+          <div className="order-first min-w-0 xl:sticky xl:top-24 xl:order-last xl:max-h-[calc(100dvh-7rem)] xl:self-start xl:overflow-y-auto">
             <nav
               aria-label="Prospect navigation"
               className="mb-2 flex min-h-11 items-center justify-between gap-2"
@@ -716,14 +728,14 @@ export async function OutboundSection({
                     <a
                       href={`${prospectHref(item)}#outbound-account`}
                       aria-current={active ? "true" : undefined}
-                      className={`block min-w-0 p-4 ${TEAM_FOCUS_RING} ${active ? "bg-[color:var(--team-surface-muted)]" : "hover:bg-[color:var(--team-surface-muted)]"}`}
+                      className={`block min-w-0 border-l-4 p-4 transition ${TEAM_FOCUS_RING} ${active ? "border-l-[color:var(--team-brand-green)] bg-[color:var(--team-selection)]" : "border-l-transparent hover:bg-[color:var(--team-surface-muted)]"}`}
                     >
                       <div className="flex flex-wrap items-start justify-between gap-2">
                         <span className="min-w-0 break-words text-base font-semibold">
                           {item.account.name}
                         </span>
                         <span
-                          className={`rounded-full px-2.5 py-1 text-xs font-semibold ${item.overdue ? "bg-rose-100 text-rose-900" : "bg-[color:var(--team-surface-muted)]"}`}
+                          className={`rounded-full px-2.5 py-1 text-xs font-semibold ${dueBadgeClass(item)}`}
                         >
                           {dueLabel(item)}
                         </span>

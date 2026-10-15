@@ -61,38 +61,48 @@
 @layer base {
   .team-theme-light {
     color-scheme: light;
-    --team-app-bg: #f1f5f9;
-    --team-sidebar-bg: rgba(248, 250, 252, 0.86);
-    --team-header-bg: rgba(255, 255, 255, 0.76);
-    --team-card: rgba(255, 255, 255, 0.9);
+    --team-brand-navy: #0f2536;
+    --team-brand-green: #167e69;
+    --team-brand-green-strong: #116452;
+    --team-brand-gold: #d4a72c;
+    --team-brand-gold-soft: #fff7dc;
+    --team-app-bg: #f4f2ed;
+    --team-sidebar-bg: #0f2b3b;
+    --team-sidebar-logo-surface: #ffffff;
+    --team-header-bg: rgba(255, 255, 255, 0.94);
+    --team-card: rgba(255, 255, 255, 0.96);
     --team-surface: #ffffff;
-    --team-surface-muted: rgba(248, 250, 252, 0.92);
-    --team-panel-alt: rgba(248, 250, 252, 0.84);
-    --team-border: rgba(226, 232, 240, 0.92);
-    --team-border-strong: rgba(203, 213, 225, 0.92);
-    --team-text: #0f172a;
-    --team-text-muted: #475569;
-    --team-text-soft: #64748b;
-    --team-card-shadow: rgba(148, 163, 184, 0.22);
-    --team-list-item: rgba(255, 255, 255, 0.94);
-    --team-list-item-hover: rgba(248, 250, 252, 0.98);
-    --team-list-item-active: rgba(239, 246, 255, 0.96);
-    --team-bubble-inbound: rgba(241, 245, 249, 0.98);
-    --team-bubble-outbound: rgba(219, 234, 254, 0.98);
-    --team-focus-ring: #0f766e;
+    --team-surface-muted: #f4f7f6;
+    --team-panel-alt: #edf3f1;
+    --team-elevated: #ffffff;
+    --team-selection: #eaf6f2;
+    --team-selection-strong: #d8eee7;
+    --team-border: #d8e1de;
+    --team-border-strong: #b9c9c4;
+    --team-text: #102431;
+    --team-text-muted: #445a66;
+    --team-text-soft: #6b7d86;
+    --team-card-shadow: rgba(15, 37, 54, 0.1);
+    --team-list-item: #ffffff;
+    --team-list-item-hover: #f4f7f6;
+    --team-list-item-active: #eaf6f2;
+    --team-bubble-inbound: #f0f3f2;
+    --team-bubble-outbound: #e3f2ed;
+    --team-focus-ring: #167e69;
     --team-focus-offset: #ffffff;
-    --team-link: #0f766e;
-    --team-nav-active-surface: #f5f8fa;
-    --team-nav-active-border: #d3e0e8;
-    --team-nav-active-text: #1f3e52;
-    --team-nav-active-icon: #2e5267;
-    --team-nav-active-shadow: rgba(46, 82, 103, 0.14);
-    --team-control-hover-border: #afc4d2;
-    --team-action-primary: #0f766e;
-    --team-action-primary-hover: #115e59;
+    --team-link: #116452;
+    --team-nav-active-surface: #eaf6f2;
+    --team-nav-active-border: #98caba;
+    --team-nav-active-text: #0f4f42;
+    --team-nav-active-icon: #116452;
+    --team-nav-active-icon-surface: #ffffff;
+    --team-nav-active-shadow: rgba(22, 126, 105, 0.14);
+    --team-control-hover-border: #74ae9f;
+    --team-action-primary: #167e69;
+    --team-action-primary-hover: #116452;
     --team-action-primary-text: #ffffff;
-    --team-action-shadow: rgba(15, 118, 110, 0.24);
-    --team-skeleton: #e2e8f0;
+    --team-action-shadow: rgba(22, 126, 105, 0.2);
+    --team-skeleton: #d8e1de;
     --team-info-surface: #eff6ff;
     --team-info-border: #93c5fd;
     --team-info-text: #1e3a8a;
@@ -110,13 +120,22 @@
 
   .team-theme-dark {
     color-scheme: dark;
+    --team-brand-navy: #dbe8ee;
+    --team-brand-green: #5eead4;
+    --team-brand-green-strong: #99f6e4;
+    --team-brand-gold: #f2c94c;
+    --team-brand-gold-soft: rgba(146, 101, 14, 0.28);
     --team-app-bg: #020617;
-    --team-sidebar-bg: rgba(15, 23, 42, 0.9);
-    --team-header-bg: rgba(15, 23, 42, 0.78);
+    --team-sidebar-bg: #07111d;
+    --team-sidebar-logo-surface: #ffffff;
+    --team-header-bg: rgba(9, 16, 31, 0.94);
     --team-card: rgba(15, 23, 42, 0.88);
     --team-surface: rgba(15, 23, 42, 0.98);
     --team-surface-muted: rgba(15, 23, 42, 0.78);
     --team-panel-alt: rgba(8, 15, 31, 0.94);
+    --team-elevated: #111c30;
+    --team-selection: rgba(17, 100, 82, 0.28);
+    --team-selection-strong: rgba(22, 126, 105, 0.38);
     --team-border: rgba(51, 65, 85, 0.92);
     --team-border-strong: rgba(71, 85, 105, 0.92);
     --team-text: #e2e8f0;
@@ -135,6 +154,7 @@
     --team-nav-active-border: #475569;
     --team-nav-active-text: #99f6e4;
     --team-nav-active-icon: #5eead4;
+    --team-nav-active-icon-surface: rgba(15, 23, 42, 0.96);
     --team-nav-active-shadow: rgba(2, 6, 23, 0.42);
     --team-control-hover-border: #2dd4bf;
     --team-action-primary: #0f766e;
@@ -155,6 +175,67 @@
     --team-danger-surface-hover: rgba(159, 18, 57, 0.7);
     --team-danger-border: #f43f5e;
     --team-danger-text: #fecdd3;
+  }
+
+  .team-theme-light .team-sidebar-theme {
+    --team-text: #f8fafc;
+    --team-text-muted: #d9e2e7;
+    --team-text-soft: #9fb0bb;
+    --team-surface: rgba(255, 255, 255, 0.08);
+    --team-surface-muted: rgba(255, 255, 255, 0.1);
+    --team-panel-alt: rgba(255, 255, 255, 0.1);
+    --team-border: rgba(255, 255, 255, 0.14);
+    --team-border-strong: rgba(255, 255, 255, 0.26);
+    --team-nav-active-surface: #ffffff;
+    --team-nav-active-border: rgba(212, 167, 44, 0.68);
+    --team-nav-active-text: #0f2536;
+    --team-nav-active-icon: #116452;
+    --team-nav-active-icon-surface: #edf7f3;
+    --team-nav-active-shadow: rgba(2, 6, 23, 0.3);
+    --team-control-hover-border: #f2c94c;
+    --team-focus-ring: #f2c94c;
+    --team-focus-offset: #0f2b3b;
+  }
+
+  .team-theme-dark .team-sidebar-theme {
+    --team-text: #e5edf2;
+    --team-text-muted: #c6d2d9;
+    --team-text-soft: #8296a3;
+    --team-surface: rgba(255, 255, 255, 0.06);
+    --team-border: rgba(255, 255, 255, 0.12);
+    --team-border-strong: rgba(255, 255, 255, 0.22);
+    --team-nav-active-surface: rgba(22, 126, 105, 0.25);
+    --team-nav-active-border: rgba(94, 234, 212, 0.45);
+    --team-nav-active-text: #ccfbf1;
+    --team-nav-active-icon: #5eead4;
+    --team-nav-active-icon-surface: rgba(15, 23, 42, 0.96);
+    --team-focus-offset: #07111d;
+  }
+
+  .team-theme-light.team-app-canvas {
+    background-color: var(--team-app-bg);
+    background-image:
+      radial-gradient(
+        circle at 78% -12%,
+        rgba(22, 126, 105, 0.08),
+        transparent 32%
+      ),
+      radial-gradient(
+        circle at 4% 96%,
+        rgba(212, 167, 44, 0.07),
+        transparent 26%
+      );
+    background-attachment: fixed;
+  }
+
+  .team-theme-dark.team-app-canvas {
+    background-color: var(--team-app-bg);
+    background-image: radial-gradient(
+      circle at 78% -12%,
+      rgba(45, 212, 191, 0.08),
+      transparent 34%
+    );
+    background-attachment: fixed;
   }
 
   .team-reduce-motion *,

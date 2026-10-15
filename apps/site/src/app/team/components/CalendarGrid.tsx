@@ -62,6 +62,7 @@ export function CalendarGrid({
   onSelectEvent,
 }: Props): React.ReactElement {
   const startOfWeek = getCalendarWeekStart(anchorDay);
+  const todayKey = formatCalendarDayKey(new Date());
   const days = Array.from({ length: 7 }).map((_, index) => {
     const key = addCalendarDays(startOfWeek, index);
     return { key, date: calendarDayKeyForLabel(key) ?? new Date() };
@@ -103,11 +104,14 @@ export function CalendarGrid({
           typeof selectedDay === "string" && selectedDay.length > 0
             ? selectedDay === key
             : false;
+        const isToday = key === todayKey;
         return (
           <div
             key={key}
-            className={`min-w-0 overflow-hidden rounded-xl border border-slate-200 bg-white/90 p-3 shadow-sm ${
-              isSelected ? "ring-2 ring-primary-200" : ""
+            className={`min-w-0 overflow-hidden rounded-xl border bg-[color:var(--team-card)] p-3 shadow-[0_6px_18px_var(--team-card-shadow)] lg:min-h-[320px] ${
+              isSelected
+                ? "border-[color:var(--team-control-hover-border)] bg-[color:var(--team-selection)] ring-2 ring-[color:var(--team-selection-strong)]"
+                : "border-[color:var(--team-border)]"
             }`}
           >
             <button
@@ -118,10 +122,12 @@ export function CalendarGrid({
                   ? `${revenueSummary.label} revenue ${revenueLabel}`
                   : undefined
               }
-              className={`mb-2 min-h-11 w-full text-left text-xs font-semibold uppercase ${
+              className={`mb-2 min-h-11 w-full rounded-lg px-2 text-left text-xs font-semibold uppercase tracking-wide transition ${
                 isSelected
-                  ? "text-primary-700"
-                  : "text-slate-500 hover:text-primary-700"
+                  ? "bg-[color:var(--team-brand-green)] text-white"
+                  : isToday
+                    ? "bg-[color:var(--team-brand-gold-soft)] text-[color:var(--team-text)]"
+                    : "text-[color:var(--team-text-muted)] hover:bg-[color:var(--team-panel-alt)] hover:text-[color:var(--team-link)]"
               }`}
             >
               <span className="block">
@@ -140,7 +146,9 @@ export function CalendarGrid({
             </button>
             <div className="space-y-2">
               {bucket.length === 0 ? (
-                <p className="text-xs text-slate-400">Empty</p>
+                <p className="rounded-lg border border-dashed border-[color:var(--team-border)] bg-[color:var(--team-surface-muted)] px-2 py-3 text-center text-xs text-[color:var(--team-text-soft)]">
+                  No appointments
+                </p>
               ) : (
                 bucket
                   .sort((a, b) => Date.parse(a.start) - Date.parse(b.start))

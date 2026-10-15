@@ -58,6 +58,7 @@ export function CalendarMonthGrid({
 }: Props): React.ReactElement {
   const anchorParts = parseCalendarDayKey(anchorDay);
   const anchorMonth = anchorParts?.month ?? new Date().getUTCMonth() + 1;
+  const todayKey = formatCalendarDayKey(new Date());
   const gridStart = getCalendarMonthGridStart(anchorDay);
   const cells = Array.from({ length: 42 }).map((_, index) => {
     const key = addCalendarDays(gridStart, index);
@@ -97,14 +98,15 @@ export function CalendarMonthGrid({
           typeof selectedDay === "string" && selectedDay.length > 0
             ? selectedDay === key
             : false;
+        const isToday = key === todayKey;
         return (
           <div
             key={key + idx}
-            className={`min-h-[120px] min-w-0 overflow-hidden rounded-xl border p-2 ${
+            className={`min-h-[120px] min-w-0 overflow-hidden rounded-xl border p-2 shadow-[0_4px_14px_var(--team-card-shadow)] ${
               inMonth
-                ? "border-slate-200 bg-white/90"
-                : "border-slate-100 bg-slate-50"
-            } ${isSelected ? "ring-2 ring-primary-200" : ""}`}
+                ? "border-[color:var(--team-border)] bg-[color:var(--team-card)]"
+                : "border-[color:var(--team-border)] bg-[color:var(--team-surface-muted)] opacity-70"
+            } ${isSelected ? "border-[color:var(--team-control-hover-border)] bg-[color:var(--team-selection)] ring-2 ring-[color:var(--team-selection-strong)]" : ""}`}
           >
             <button
               type="button"
@@ -114,8 +116,12 @@ export function CalendarMonthGrid({
                   ? `${revenueSummary.label} revenue ${revenueLabel}`
                   : undefined
               }
-              className={`mb-1 min-h-11 w-full text-left text-[11px] font-semibold uppercase ${
-                isSelected ? "text-primary-700" : "text-slate-500"
+              className={`mb-1 min-h-11 w-full rounded-lg px-2 text-left text-[11px] font-semibold uppercase tracking-wide ${
+                isSelected
+                  ? "bg-[color:var(--team-brand-green)] text-white"
+                  : isToday
+                    ? "bg-[color:var(--team-brand-gold-soft)] text-[color:var(--team-text)]"
+                    : "text-[color:var(--team-text-muted)]"
               }`}
             >
               <span className="block">

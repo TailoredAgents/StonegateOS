@@ -362,7 +362,7 @@ export function CalendarViewer({
   return (
     <div className="space-y-4">
       <div
-        className={`${TEAM_CARD} flex flex-col gap-3 p-4 sm:flex-row sm:items-center sm:justify-between`}
+        className={`${TEAM_CARD} flex flex-col gap-3 border-t-4 border-t-[color:var(--team-brand-green)] p-4 sm:flex-row sm:items-center sm:justify-between`}
       >
         <div className="flex flex-wrap items-center gap-2">
           <button
@@ -463,7 +463,7 @@ export function CalendarViewer({
         </div>
       </div>
 
-      <div className={`${TEAM_CARD} p-3`}>
+      <div className="rounded-xl border border-[color:var(--team-border)] bg-[color:var(--team-panel-alt)] p-3 shadow-[0_6px_18px_var(--team-card-shadow)]">
         <div className="mb-2 flex min-h-11 flex-wrap items-center justify-between gap-2">
           <div>
             <h2 className="text-sm font-semibold text-[color:var(--team-text)]">
@@ -602,9 +602,9 @@ export function CalendarViewer({
               onSelectEvent={handleSelectEvent}
             />
           ) : view === "day" ? (
-            <div className="rounded-xl border border-slate-200 bg-white/90 p-4 shadow-sm">
+            <div className="rounded-xl border border-[color:var(--team-border)] bg-[color:var(--team-card)] p-4 shadow-[0_6px_18px_var(--team-card-shadow)]">
               <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
-                <div className="text-xs font-semibold uppercase text-slate-500">
+                <div className="text-xs font-semibold uppercase tracking-wide text-[color:var(--team-text-muted)]">
                   {formatDayKeyLabel(selectedDay)}
                 </div>
                 {selectedDayRevenueSummary && selectedDayRevenueLabel ? (
@@ -614,7 +614,7 @@ export function CalendarViewer({
                 ) : null}
               </div>
               {dayEvents.length === 0 ? (
-                <p className="text-sm text-slate-500">
+                <p className="rounded-lg border border-dashed border-[color:var(--team-border)] bg-[color:var(--team-surface-muted)] px-3 py-6 text-center text-sm text-[color:var(--team-text-muted)]">
                   {activeFilterCount > 0
                     ? "No items on this day match the active filters."
                     : "No CRM appointments or Google events on this day."}
@@ -709,15 +709,15 @@ export function CalendarViewer({
           onKeyDown={(event) => {
             if (event.key === "Escape" && selectedEvent) closeEventDetail();
           }}
-          className="min-w-0 focus:outline-none"
+          className="min-w-0 focus:outline-none lg:sticky lg:top-24 lg:max-h-[calc(100dvh-7rem)] lg:self-start lg:overflow-y-auto"
         >
-          <div className="rounded-2xl border border-slate-200 bg-white/90 p-4 shadow-lg shadow-slate-200/50">
+          <div className="rounded-2xl border border-[color:var(--team-border)] border-t-4 border-t-[color:var(--team-brand-gold)] bg-[color:var(--team-card)] p-4 shadow-[0_12px_28px_var(--team-card-shadow)]">
             <div className="flex items-center justify-between gap-2">
               <div>
-                <div className="text-xs font-semibold uppercase text-slate-500">
+                <div className="text-xs font-semibold uppercase tracking-wide text-[color:var(--team-text-muted)]">
                   Details
                 </div>
-                <div className="mt-1 text-sm font-semibold text-slate-900">
+                <div className="mt-1 text-sm font-semibold text-[color:var(--team-text)]">
                   {formatDayKeyLabel(selectedDay)}
                 </div>
                 {selectedDayRevenueSummary && selectedDayRevenueLabel ? (
@@ -726,14 +726,14 @@ export function CalendarViewer({
                   </div>
                 ) : null}
               </div>
-              <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[11px] font-semibold text-slate-700">
+              <span className="rounded-full bg-[color:var(--team-surface-muted)] px-2 py-0.5 text-[11px] font-semibold text-[color:var(--team-text-muted)]">
                 {dayEvents.length} {dayEvents.length === 1 ? "item" : "items"}
               </span>
             </div>
 
             <div className="mt-3 space-y-2">
               {dayEvents.length === 0 ? (
-                <p className="text-sm text-slate-500">
+                <p className="text-sm text-[color:var(--team-text-muted)]">
                   Select a date to see appointments.
                 </p>
               ) : (

@@ -1,9 +1,9 @@
 export const TEAM_CARD =
-  "rounded-3xl border border-[color:var(--team-border)] bg-[color:var(--team-card)] text-[color:var(--team-text)] shadow-[0_24px_56px_var(--team-card-shadow)] backdrop-blur";
+  "rounded-2xl border border-[color:var(--team-border)] bg-[color:var(--team-card)] text-[color:var(--team-text)] shadow-[0_12px_28px_var(--team-card-shadow)]";
 
 export const TEAM_CARD_PADDED = `${TEAM_CARD} p-4 sm:p-6`;
 
-export const TEAM_PAGE_HEADER = `${TEAM_CARD_PADDED} space-y-4`;
+export const TEAM_PAGE_HEADER = `${TEAM_CARD_PADDED} space-y-4 border-t-4 border-t-[color:var(--team-brand-green)]`;
 
 export const TEAM_SECTION_TITLE =
   "text-lg font-semibold text-[color:var(--team-text)]";
@@ -13,14 +13,14 @@ export const TEAM_SECTION_SUBTITLE =
 export const TEAM_FOCUS_RING =
   "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[color:var(--team-focus-ring)] focus-visible:ring-offset-2 focus-visible:ring-offset-[color:var(--team-focus-offset)]";
 
-export const TEAM_INPUT = `min-h-11 rounded-xl border border-[color:var(--team-border)] bg-[color:var(--team-surface)] px-4 py-3 text-sm text-[color:var(--team-text)] shadow-sm placeholder:text-[color:var(--team-text-soft)] focus-visible:border-[color:var(--team-focus-ring)] ${TEAM_FOCUS_RING}`;
+export const TEAM_INPUT = `min-h-11 rounded-lg border border-[color:var(--team-border)] bg-[color:var(--team-surface)] px-4 py-3 text-sm text-[color:var(--team-text)] shadow-sm placeholder:text-[color:var(--team-text-soft)] focus-visible:border-[color:var(--team-focus-ring)] ${TEAM_FOCUS_RING}`;
 
-export const TEAM_INPUT_COMPACT = `min-h-11 rounded-xl border border-[color:var(--team-border)] bg-[color:var(--team-surface)] px-3 py-2 text-sm text-[color:var(--team-text)] shadow-sm placeholder:text-[color:var(--team-text-soft)] focus-visible:border-[color:var(--team-focus-ring)] ${TEAM_FOCUS_RING}`;
+export const TEAM_INPUT_COMPACT = `min-h-11 rounded-lg border border-[color:var(--team-border)] bg-[color:var(--team-surface)] px-3 py-2 text-sm text-[color:var(--team-text)] shadow-sm placeholder:text-[color:var(--team-text-soft)] focus-visible:border-[color:var(--team-focus-ring)] ${TEAM_FOCUS_RING}`;
 
 export const TEAM_SELECT = TEAM_INPUT_COMPACT;
 
 export const TEAM_SUBNAV =
-  "grid grid-cols-2 gap-2 rounded-2xl border border-[color:var(--team-border)] bg-[color:var(--team-surface-muted)] p-2 sm:flex sm:flex-wrap";
+  "grid grid-cols-2 gap-2 rounded-xl border border-[color:var(--team-border)] bg-[color:var(--team-surface-muted)] p-2 sm:flex sm:flex-wrap";
 
 export const TEAM_ACTION_BAR =
   "sticky bottom-0 z-20 flex flex-wrap items-center justify-end gap-2 border-t border-[color:var(--team-border)] bg-[color:var(--team-card)] p-3 backdrop-blur";
@@ -33,7 +33,7 @@ export function teamButtonClass(
   size: TeamButtonSize = "md",
 ): string {
   const sizeClass = size === "sm" ? "px-3 py-2 text-xs" : "px-4 py-2 text-sm";
-  const baseClass = `inline-flex min-h-11 min-w-11 items-center justify-center rounded-full font-semibold transition ${TEAM_FOCUS_RING}`;
+  const baseClass = `inline-flex min-h-11 min-w-11 items-center justify-center rounded-xl font-semibold transition ${TEAM_FOCUS_RING}`;
   const disabledClass =
     "disabled:pointer-events-none disabled:cursor-not-allowed disabled:opacity-60";
 

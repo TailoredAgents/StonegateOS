@@ -883,7 +883,7 @@ export function TeamAppShell(props: {
   const hasLayoutParam = searchParams.get("layout");
   const isClassic = hasLayoutParam === "classic";
 
-  const sidebarWidth = collapsed ? "w-[72px]" : "w-[280px]";
+  const sidebarWidth = collapsed ? "w-[72px]" : "w-[272px]";
   const themeClass = cn(
     theme === "dark" ? "team-theme-dark" : "team-theme-light",
     motion === "reduce" ? "team-reduce-motion" : null,
@@ -909,7 +909,7 @@ export function TeamAppShell(props: {
         )}
       >
         <div className="flex items-center gap-3">
-          <div className="flex h-10 w-10 items-center justify-center overflow-hidden rounded-2xl border border-[color:var(--team-border)] bg-[color:var(--team-surface)] shadow-sm">
+          <div className="flex h-10 w-10 items-center justify-center overflow-hidden rounded-xl border border-[color:var(--team-nav-active-border)] bg-[color:var(--team-sidebar-logo-surface)] shadow-sm">
             {props.brand?.logoPath ? (
               <Image
                 src={props.brand.logoPath}
@@ -970,7 +970,7 @@ export function TeamAppShell(props: {
                     className={cn(
                       "flex h-9 w-9 items-center justify-center rounded-2xl border",
                       active
-                        ? "border-[color:var(--team-nav-active-border)] bg-[color:var(--team-surface)] text-[color:var(--team-nav-active-icon)]"
+                        ? "border-[color:var(--team-nav-active-border)] bg-[color:var(--team-nav-active-icon-surface)] text-[color:var(--team-nav-active-icon)]"
                         : "border-[color:var(--team-border)] bg-[color:var(--team-surface)] text-[color:var(--team-text-soft)] group-hover:text-[color:var(--team-text)]",
                     )}
                   >
@@ -1040,7 +1040,7 @@ export function TeamAppShell(props: {
                             className={cn(
                               "flex h-9 w-9 items-center justify-center rounded-2xl border",
                               active
-                                ? "border-[color:var(--team-nav-active-border)] bg-[color:var(--team-surface)] text-[color:var(--team-nav-active-icon)]"
+                                ? "border-[color:var(--team-nav-active-border)] bg-[color:var(--team-nav-active-icon-surface)] text-[color:var(--team-nav-active-icon)]"
                                 : "border-[color:var(--team-border)] bg-[color:var(--team-surface)] text-[color:var(--team-text-soft)] group-hover:text-[color:var(--team-text)]",
                             )}
                           >
@@ -1087,7 +1087,7 @@ export function TeamAppShell(props: {
                       className={cn(
                         "flex h-9 w-9 items-center justify-center rounded-2xl border",
                         active
-                          ? "border-[color:var(--team-nav-active-border)] bg-[color:var(--team-surface)] text-[color:var(--team-nav-active-icon)]"
+                          ? "border-[color:var(--team-nav-active-border)] bg-[color:var(--team-nav-active-icon-surface)] text-[color:var(--team-nav-active-icon)]"
                           : "border-[color:var(--team-border)] bg-[color:var(--team-surface)] text-[color:var(--team-text-soft)] group-hover:text-[color:var(--team-text)]",
                       )}
                     >
@@ -1152,7 +1152,7 @@ export function TeamAppShell(props: {
   return (
     <div
       className={cn(
-        "bg-[color:var(--team-app-bg)] text-[color:var(--team-text)] transition-colors",
+        "team-app-canvas bg-[color:var(--team-app-bg)] text-[color:var(--team-text)] transition-colors",
         inboxViewport ? "h-dvh overflow-hidden" : "min-h-screen",
         themeClass,
       )}
@@ -1176,7 +1176,7 @@ export function TeamAppShell(props: {
           <aside
             aria-label="Team sidebar"
             className={cn(
-              "hidden shrink-0 border-r border-[color:var(--team-border)] bg-[color:var(--team-sidebar-bg)] backdrop-blur lg:block",
+              "team-sidebar-theme hidden shrink-0 border-r border-[color:var(--team-border)] bg-[color:var(--team-sidebar-bg)] shadow-[8px_0_30px_var(--team-card-shadow)] lg:block",
               sidebarWidth,
             )}
           >
@@ -1184,7 +1184,7 @@ export function TeamAppShell(props: {
           </aside>
 
           <div className="flex min-h-0 min-w-0 flex-1 flex-col">
-            <header className="sticky top-0 z-40 shrink-0 border-b border-[color:var(--team-border)] bg-[color:var(--team-header-bg)] backdrop-blur">
+            <header className="sticky top-0 z-40 shrink-0 border-b border-[color:var(--team-border-strong)] bg-[color:var(--team-header-bg)] shadow-[0_4px_18px_var(--team-card-shadow)] backdrop-blur">
               <div className="flex w-full items-center justify-between gap-3 px-4 py-2.5 sm:gap-4 sm:px-6 sm:py-3">
                 <div className="flex min-w-0 flex-1 items-center gap-3">
                   <button
@@ -1202,12 +1202,13 @@ export function TeamAppShell(props: {
                     <IconMenu className="h-5 w-5" />
                   </button>
                   <div className="min-w-0">
-                    <div className="text-[11px] font-semibold uppercase tracking-[0.2em] text-[color:var(--team-text-soft)]">
-                      Team
+                    <div className="flex items-center gap-2 text-[11px] font-semibold uppercase tracking-[0.2em] text-[color:var(--team-brand-green)]">
+                      <span className="h-1.5 w-1.5 rounded-full bg-[color:var(--team-brand-gold)]" />
+                      Team workspace
                     </div>
                     <h1
                       id="team-page-title"
-                      className="truncate text-base font-semibold text-[color:var(--team-text)] sm:text-lg"
+                      className="truncate text-lg font-semibold tracking-tight text-[color:var(--team-text)] sm:text-xl"
                     >
                       {props.title}
                     </h1>
@@ -1475,7 +1476,7 @@ export function TeamAppShell(props: {
                       className={cn(
                         "flex h-8 w-8 items-center justify-center rounded-2xl border",
                         active
-                          ? "border-[color:var(--team-nav-active-border)] bg-[color:var(--team-surface)] text-[color:var(--team-nav-active-icon)]"
+                          ? "border-[color:var(--team-nav-active-border)] bg-[color:var(--team-nav-active-icon-surface)] text-[color:var(--team-nav-active-icon)]"
                           : "border-[color:var(--team-border)] bg-[color:var(--team-surface)] text-[color:var(--team-text-soft)]",
                       )}
                     >
@@ -1502,13 +1503,13 @@ export function TeamAppShell(props: {
         >
           <div
             aria-hidden="true"
-            className="absolute inset-0 bg-slate-900/30 backdrop-blur-sm"
+            className="absolute inset-0 bg-[#0f2536]/50 backdrop-blur-sm"
             onClick={closeMobileNavigation}
           />
           <div
             ref={mobileDrawerRef}
             tabIndex={-1}
-            className="absolute inset-y-0 left-0 w-[300px] max-w-[85vw] border-r border-[color:var(--team-border)] bg-[color:var(--team-sidebar-bg)] shadow-2xl focus:outline-none"
+            className="team-sidebar-theme absolute inset-y-0 left-0 w-[300px] max-w-[85vw] border-r border-[color:var(--team-border)] bg-[color:var(--team-sidebar-bg)] shadow-2xl focus:outline-none"
           >
             <div className="flex items-center justify-between px-3 py-3">
               <h2
