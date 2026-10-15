@@ -124,6 +124,10 @@ export async function GET(
   if (campaign && (parsedScope.scope !== "outbound" || campaign.length > 160)) {
     return NextResponse.json({ error: "invalid_campaign" }, { status: 422 });
   }
+  const segment = request.nextUrl.searchParams.get("segment")?.trim() || null;
+  if (segment && (parsedScope.scope !== "outbound" || segment.length > 160)) {
+    return NextResponse.json({ error: "invalid_segment" }, { status: 422 });
+  }
   const outboundMemberId =
     request.nextUrl.searchParams.get("memberId")?.trim() || null;
   if (
@@ -135,6 +139,7 @@ export async function GET(
   const messageSearchParams = new URLSearchParams(request.nextUrl.searchParams);
   messageSearchParams.delete("scope");
   messageSearchParams.delete("campaign");
+  messageSearchParams.delete("segment");
   messageSearchParams.delete("memberId");
   const parsedMessageQuery = parseInboxThreadMessageQuery(
     messageSearchParams,
@@ -210,6 +215,7 @@ export async function GET(
         parsedScope.scope === "outbound"
           ? activeOutboundProspectCondition({
               campaign,
+              segment,
               memberId: outboundMemberId,
             })
           : undefined,
@@ -355,7 +361,10 @@ export async function GET(
     .orderBy(
       ...(messageCursor?.direction === "newer"
         ? [asc(conversationMessages.createdAt), asc(conversationMessages.id)]
-        : [desc(conversationMessages.createdAt), desc(conversationMessages.id)]),
+        : [
+            desc(conversationMessages.createdAt),
+            desc(conversationMessages.id),
+          ]),
     )
     .limit(messageLimit + 1);
 

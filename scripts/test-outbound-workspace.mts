@@ -98,7 +98,7 @@ const payload = {
   scope: {
     facets: "assignee_snapshot",
     summary: "filtered_account_snapshot",
-    scoreboard: "assignee_campaign_snapshot",
+    scoreboard: "assignee_campaign_segment_snapshot",
   },
   total: 1,
   truncated: false,
@@ -129,6 +129,7 @@ const payload = {
   },
   facets: {
     campaigns: ["property_management"],
+    segments: ["property_manager"],
     dispositions: ["no_answer", "callback_requested"],
     attempts: ["2"],
   },
@@ -150,7 +151,7 @@ async function harness() {
     stdin: {
       contents: `import React from'react';import{createRoot}from'react-dom/client';import{OutboundSection}from'./src/app/team/components/OutboundSection';import{PartnerRelationshipSetup}from'./src/app/team/components/PartnerRelationshipSetup';
         const p=new URLSearchParams(location.search);window.__calls=[];
-        const filters={due:p.get('out_due')||'',disposition:p.get('out_disposition')||'',accountId:p.get('out_account')||'',taskId:p.get('out_taskId')||'',cursor:p.get('out_cursor')||'',q:p.get('out_q')||'',campaign:p.get('out_campaign')||''};
+        const filters={due:p.get('out_due')||'',disposition:p.get('out_disposition')||'',accountId:p.get('out_account')||'',taskId:p.get('out_taskId')||'',cursor:p.get('out_cursor')||'',q:p.get('out_q')||'',campaign:p.get('out_campaign')||'',segment:p.get('out_segment')||''};
         const render=element=>createRoot(document.getElementById('root')).render(<main style={{padding:16,maxWidth:1280,margin:'auto'}}><h1 className='sr-only'>Stonegate CRM</h1>{element}</main>);
         if(location.pathname==='/team/partners'){render(<PartnerRelationshipSetup canCreate canInvite canConfigure openCreate={p.get('p_setup')==='create'}/>)}else{OutboundSection({memberId:p.get('memberId')||undefined,filters,view:p.get('view')||'queue'}).then(render)}`,
       resolveDir: `${repo}/apps/site`,
@@ -286,6 +287,10 @@ for (const engine of [chromium, webkit]) {
         await expect(
           page.getByRole("button", { name: "Call", exact: true }),
         ).toBeVisible();
+        await expect(page.locator('select[name="out_segment"]')).toHaveCount(1);
+        await expect(
+          page.getByText("Company type: property manager"),
+        ).toBeVisible();
         assert.equal(await page.locator("#outbound-account").count(), 1);
         assert.equal(
           await page.evaluate(
@@ -381,7 +386,7 @@ for (const engine of [chromium, webkit]) {
         .click();
       await expect(page.getByRole("checkbox")).toBeDisabled();
       await page.goto(
-        `${app.url}/?view=inbox&memberId=${memberId}&out_campaign=property_management&out_account=${accountId}`,
+        `${app.url}/?view=inbox&memberId=${memberId}&out_campaign=property_management&out_segment=property_manager&out_account=${accountId}`,
       );
       await expect(
         page.getByRole("link", { name: "Prospect Inbox", exact: true }),
@@ -391,7 +396,10 @@ for (const engine of [chromium, webkit]) {
       ).toBeVisible();
       await expect(
         page.getByRole("link", { name: "Open Work Queue", exact: true }),
-      ).toHaveAttribute("href", /out_campaign=property_management/);
+      ).toHaveAttribute(
+        "href",
+        /out_campaign=property_management.*out_segment=property_manager/,
+      );
       const prospectInboxRead = await page.evaluate(() =>
         (window as any).__calls.find((path: string) =>
           path.startsWith("/api/admin/inbox/threads?"),
@@ -403,6 +411,7 @@ for (const engine of [chromium, webkit]) {
       ).searchParams;
       assert.equal(prospectInboxParams.get("scope"), "outbound");
       assert.equal(prospectInboxParams.get("campaign"), "property_management");
+      assert.equal(prospectInboxParams.get("segment"), "property_manager");
       assert.equal(prospectInboxParams.get("memberId"), memberId);
       // Real Axe, using generated current Tailwind styles; no live service calls.
       for (const variant of [

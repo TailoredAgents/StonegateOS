@@ -225,6 +225,7 @@ export async function OutboundSection({
       ...inbox,
       scope: "outbound",
       outboundCampaign: filters.campaign,
+      outboundSegment: filters.segment,
       outboundMemberId: memberId,
     };
     const read = (path: string) => callAdminApiAs(principal, path);
@@ -295,6 +296,7 @@ export async function OutboundSection({
     "direction",
     "q",
     "campaign",
+    "segment",
     "attempt",
     "due",
     "has",
@@ -412,6 +414,7 @@ export async function OutboundSection({
   const hasFilters = [
     filters.q,
     filters.campaign,
+    filters.segment,
     filters.attempt,
     filters.due,
     filters.has,
@@ -419,6 +422,7 @@ export async function OutboundSection({
   ].some(Boolean);
   const advancedCount = [
     filters.campaign,
+    filters.segment,
     filters.attempt,
     filters.has,
     filters.disposition,
@@ -570,12 +574,18 @@ export async function OutboundSection({
             >
               More filters{advancedCount ? ` (${advancedCount} active)` : ""}
             </summary>
-            <div className="grid gap-3 pb-2 sm:grid-cols-2 xl:grid-cols-4">
+            <div className="grid gap-3 pb-2 sm:grid-cols-2 xl:grid-cols-5">
               <FilterSelect
                 label="Campaign"
                 name="out_campaign"
                 value={filters.campaign}
                 values={queue.facets.campaigns}
+              />
+              <FilterSelect
+                label="Company type"
+                name="out_segment"
+                value={filters.segment}
+                values={queue.facets.segments}
               />
               <FilterSelect
                 label="Attempt"
@@ -722,6 +732,12 @@ export async function OutboundSection({
                         {contact.name} ·{" "}
                         {contact.email ?? contact.phone ?? "No contact details"}
                       </p>
+                      {item.account.segment ? (
+                        <p className={`mt-1 text-xs ${MUTED}`}>
+                          Company type:{" "}
+                          {item.account.segment.replace(/_/g, " ")}
+                        </p>
+                      ) : null}
                       <div className="mt-2">
                         <OutboundOutreachProgress
                           outreach={item.outreach}

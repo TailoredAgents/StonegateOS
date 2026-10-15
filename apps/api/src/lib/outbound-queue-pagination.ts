@@ -20,6 +20,7 @@ const OUTBOUND_QUEUE_QUERY_KEYS = new Set([
   "direction",
   "q",
   "campaign",
+  "segment",
   "attempt",
   "due",
   "has",
@@ -39,6 +40,7 @@ export type OutboundHasFilter = "any" | "phone" | "email" | "both";
 export type OutboundQueueFilters = {
   q: string | null;
   campaign: string | null;
+  segment: string | null;
   attempt: number | null;
   due: OutboundDueFilter;
   has: OutboundHasFilter;
@@ -146,6 +148,7 @@ export function outboundQueueFilterFingerprint(input: {
         memberId: input.memberId.toLowerCase(),
         q: input.filters.q,
         campaign: input.filters.campaign,
+        segment: input.filters.segment,
         attempt: input.filters.attempt,
         due: input.filters.due,
         has: input.filters.has,
@@ -298,6 +301,8 @@ export function parseOutboundQueueRequest(input: {
   if (!q.ok) return invalid("q", q.message);
   const campaign = readText(input.searchParams, "campaign", MAX_FILTER_LENGTH);
   if (!campaign.ok) return invalid("campaign", campaign.message);
+  const segment = readText(input.searchParams, "segment", MAX_FILTER_LENGTH);
+  if (!segment.ok) return invalid("segment", segment.message);
   const disposition = readText(
     input.searchParams,
     "disposition",
@@ -333,6 +338,7 @@ export function parseOutboundQueueRequest(input: {
   const filters: OutboundQueueFilters = {
     q: q.value,
     campaign: campaign.value,
+    segment: segment.value,
     attempt,
     due: due as OutboundDueFilter,
     has: has as OutboundHasFilter,

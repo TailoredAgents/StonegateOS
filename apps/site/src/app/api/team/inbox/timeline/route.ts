@@ -27,6 +27,8 @@ export async function GET(request: NextRequest): Promise<Response> {
   if (scope) params.set("scope", scope);
   const campaign = (request.nextUrl.searchParams.get("campaign") ?? "").trim();
   if (campaign) params.set("campaign", campaign);
+  const segment = (request.nextUrl.searchParams.get("segment") ?? "").trim();
+  if (segment) params.set("segment", segment);
   const memberId = (request.nextUrl.searchParams.get("memberId") ?? "").trim();
   if (memberId) params.set("memberId", memberId);
 

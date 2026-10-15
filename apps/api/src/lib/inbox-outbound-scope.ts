@@ -13,6 +13,7 @@ export type InboxThreadScope = "outbound" | null;
 
 export type OutboundProspectScopeFilters = {
   campaign?: string | null;
+  segment?: string | null;
   memberId?: string | null;
 };
 
@@ -38,6 +39,9 @@ export function activeOutboundProspectCondition(
     ),
     filters.campaign
       ? sql`lower(coalesce(${partnerAccounts.sourceCampaign}, '')) = lower(${filters.campaign})`
+      : undefined,
+    filters.segment
+      ? sql`lower(coalesce(${partnerAccounts.segment}, '')) = lower(${filters.segment})`
       : undefined,
     filters.memberId
       ? eq(partnerAccounts.ownerMemberId, filters.memberId)

@@ -154,22 +154,19 @@ function slugText(value: string | null): string {
     .trim();
 }
 
-function classifyOutboundSegment(input: {
-  campaign: string;
+export function classifyOutboundSegment(input: {
   row: NormalizedOutboundImportRow;
 }): { segment: string | null; subsegment: string | null } {
-  const haystack = slugText(
-    [
-      input.campaign,
-      input.row.company,
-      input.row.title,
-      input.row.industry,
-      input.row.notes,
-      input.row.sourceListName,
-    ]
-      .filter(Boolean)
-      .join(" "),
-  );
+  const importedIndustry = slugText(input.row.industry);
+  // An explicit per-row industry is authoritative. Other row text is only a
+  // fallback for files that omit the industry column/value.
+  const haystack =
+    importedIndustry ||
+    slugText(
+      [input.row.company, input.row.title, input.row.notes]
+        .filter(Boolean)
+        .join(" "),
+    );
   if (
     /(property manager|property management|community manager|apartment|multifamily|leasing)/u.test(
       haystack,
@@ -212,8 +209,14 @@ function classifyOutboundSegment(input: {
   if (/(junk|haul|cleanout|removal)/u.test(haystack)) {
     return { segment: "cleanout_referral", subsegment: "general_referral" };
   }
-  if (input.campaign.trim().toLowerCase() === "property_management") {
-    return { segment: "property_manager", subsegment: "property_management" };
+  const importedIndustrySegment = importedIndustry
+    .replace(/\s+/gu, "_")
+    .slice(0, 80);
+  if (importedIndustrySegment) {
+    return {
+      segment: importedIndustrySegment,
+      subsegment: "imported_industry",
+    };
   }
   return { segment: null, subsegment: null };
 }
@@ -756,7 +759,6 @@ async function resolveRowPartnerAccount(
 ): Promise<string | null> {
   if (!rowCanCreatePartner(row)) return null;
   const { segment, subsegment } = classifyOutboundSegment({
-    campaign: parsed.campaign,
     row,
   });
   const account = await resolveOrCreatePartnerAccount(tx, {
@@ -939,7 +941,6 @@ export async function executePreparedOutboundImport(
     }
     if (plan.needsOutboundTask) {
       const { segment } = classifyOutboundSegment({
-        campaign: parsed.campaign,
         row,
       });
       const insertedTasks = await tx

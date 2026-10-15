@@ -9,6 +9,7 @@ const QUERY_KEYS = new Set([
   "limit",
   "scope",
   "campaign",
+  "segment",
   "memberId",
 ]);
 

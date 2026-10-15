@@ -333,6 +333,7 @@ void test("outbound prospect scope stays attached to list, timeline, and detail 
   const input = {
     scope: "outbound" as const,
     outboundCampaign: "property managers",
+    outboundSegment: "property_manager",
     outboundMemberId: "11111111-1111-4111-8111-111111111111",
     contactId,
     channel: "sms",
@@ -374,6 +375,7 @@ void test("outbound prospect scope stays attached to list, timeline, and detail 
     const params = new URL(path, "http://example.test").searchParams;
     assert.equal(params.get("scope"), "outbound");
     assert.equal(params.get("campaign"), "property managers");
+    assert.equal(params.get("segment"), "property_manager");
     assert.equal(
       params.get("memberId"),
       "11111111-1111-4111-8111-111111111111",

@@ -33,7 +33,7 @@ function validQueuePayload(): Record<string, unknown> {
     scope: {
       facets: "assignee_snapshot",
       summary: "filtered_account_snapshot",
-      scoreboard: "assignee_campaign_snapshot",
+      scoreboard: "assignee_campaign_segment_snapshot",
     },
     total: 1,
     truncated: false,
@@ -64,6 +64,7 @@ function validQueuePayload(): Record<string, unknown> {
     },
     facets: {
       campaigns: ["property_management"],
+      segments: ["property_manager"],
       dispositions: ["callback_requested"],
       attempts: ["2"],
     },

@@ -29,6 +29,7 @@ export async function GET(request: NextRequest): Promise<Response> {
     "snapshot",
     "scope",
     "campaign",
+    "segment",
     "memberId",
   ] as const;
   for (const key of passthroughKeys) {

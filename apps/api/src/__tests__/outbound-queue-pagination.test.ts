@@ -23,6 +23,7 @@ const SNAPSHOT = new Date("2026-08-09T16:00:00.000Z");
 const FILTERS: OutboundQueueFilters = {
   q: null,
   campaign: null,
+  segment: null,
   attempt: null,
   due: "all",
   has: "any",
@@ -276,6 +277,7 @@ describe("outbound queue account-level keyset pagination", () => {
           notStarted: 30,
           callbacksToday: 12,
           campaigns: ["property_management"],
+          segments: ["property_manager"],
           dispositions: ["left_voicemail"],
           attempts: ["1", "2"],
         },
@@ -341,6 +343,7 @@ describe("outbound queue account-level keyset pagination", () => {
     ]);
     expect(new Set(result.items.map((item) => item.key)).size).toBe(50);
     expect(result.summary.dueNow).toBe(120);
+    expect(result.facets.segments).toEqual(["property_manager"]);
     expect(result.facets.attempts).toEqual(["1", "2"]);
   });
 
@@ -359,6 +362,7 @@ describe("outbound queue account-level keyset pagination", () => {
           notStarted: 0,
           callbacksToday: 0,
           campaigns: [],
+          segments: [],
           dispositions: [],
           attempts: [],
         },

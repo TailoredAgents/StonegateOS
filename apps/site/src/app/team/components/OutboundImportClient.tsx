@@ -89,7 +89,7 @@ export function OutboundImportClient(props: {
   defaultMemberId: string;
   directoryUnavailable: boolean;
 }): React.ReactElement {
-  const [campaign, setCampaign] = React.useState("property_management");
+  const [campaign, setCampaign] = React.useState("va_interested_leads");
   const [assigneeId, setAssigneeId] = React.useState(props.defaultMemberId);
   const [csv, setCsv] = React.useState("");
   const [file, setFile] = React.useState<File | null>(null);
@@ -462,7 +462,7 @@ export function OutboundImportClient(props: {
         <div className="grid gap-4 md:grid-cols-2">
           <label className="flex flex-col gap-1 text-sm text-[color:var(--team-text-muted)]">
             <span className="font-medium text-[color:var(--team-text)]">
-              Campaign name
+              List / campaign name
             </span>
             <input
               value={campaign}
@@ -488,6 +488,10 @@ export function OutboundImportClient(props: {
                 {fieldErrors["campaign"]}
               </span>
             ) : null}
+            <span className="text-xs">
+              This groups the outreach batch. Each CSV row’s industry sets that
+              company’s type, so one list can contain many industries.
+            </span>
           </label>
           <label className="flex flex-col gap-1 text-sm text-[color:var(--team-text-muted)]">
             <span className="font-medium text-[color:var(--team-text)]">

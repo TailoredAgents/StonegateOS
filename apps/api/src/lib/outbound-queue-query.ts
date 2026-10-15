@@ -152,6 +152,7 @@ export type OutboundQueueQueryResult = {
   };
   facets: {
     campaigns: string[];
+    segments: string[];
     dispositions: string[];
     attempts: string[];
   };
@@ -475,6 +476,11 @@ function matchingConditions(query: OutboundQueueRequest): SQL[] {
       )
     )`);
   }
+  if (filters.segment) {
+    conditions.push(
+      sql`lower(coalesce("accountSegment", '')) = ${filters.segment}`,
+    );
+  }
   if (filters.attempt !== null) {
     conditions.push(sql`(
       "attemptProjection" = ${filters.attempt}
@@ -711,6 +717,16 @@ export async function loadOutboundQueuePage(
         ) AS facet
       ), ARRAY[]::text[]) AS "campaigns",
       coalesce((
+        SELECT array_agg(facet."value" ORDER BY lower(facet."value"))
+        FROM (
+          SELECT min("accountSegment") AS "value"
+          FROM "base_tasks"
+          WHERE nullif(btrim("accountSegment"), '') IS NOT NULL
+          GROUP BY lower("accountSegment")
+          LIMIT ${MAX_FACET_VALUES + 1}
+        ) AS facet
+      ), ARRAY[]::text[]) AS "segments",
+      coalesce((
         SELECT array_agg(facet."value" ORDER BY facet."value")
         FROM (
           SELECT DISTINCT lower("lastDisposition") AS "value"
@@ -749,6 +765,9 @@ export async function loadOutboundQueuePage(
   const campaignScoreCondition = query.filters.campaign
     ? sql`AND lower(coalesce("source_campaign", '')) = ${query.filters.campaign}`
     : sql``;
+  const segmentScoreCondition = query.filters.segment
+    ? sql`AND lower(coalesce("segment", '')) = ${query.filters.segment}`
+    : sql``;
   const scoreboardSql = sql`
     SELECT
       count(*) FILTER (WHERE "last_touch_at" IS NOT NULL)::integer AS "accountsTouched",
@@ -776,6 +795,7 @@ export async function loadOutboundQueuePage(
         OR "source_campaign" IS NOT NULL
       )
       ${campaignScoreCondition}
+      ${segmentScoreCondition}
   `;
 
   const [metadataResult, pageResult, scoreboardResult] = await Promise.all([
@@ -789,10 +809,12 @@ export async function loadOutboundQueuePage(
     throw new Error("Outbound queue metadata query returned no row.");
   }
   const campaigns = asStringArray(metadata["campaigns"], "campaigns");
+  const segments = asStringArray(metadata["segments"], "segments");
   const dispositions = asStringArray(metadata["dispositions"], "dispositions");
   const attempts = asStringArray(metadata["attempts"], "attempts");
   if (
     campaigns.length > MAX_FACET_VALUES ||
+    segments.length > MAX_FACET_VALUES ||
     dispositions.length > MAX_FACET_VALUES ||
     attempts.length > MAX_FACET_VALUES
   ) {
@@ -988,7 +1010,7 @@ export async function loadOutboundQueuePage(
         },
       },
     },
-    facets: { campaigns, dispositions, attempts },
+    facets: { campaigns, segments, dispositions, attempts },
     items,
   };
 }

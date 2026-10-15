@@ -119,6 +119,7 @@ export type OutboundQueueSummary = {
 
 export type OutboundQueueFacets = {
   campaigns: string[];
+  segments: string[];
   dispositions: string[];
   attempts: string[];
 };
@@ -132,7 +133,7 @@ export type OutboundQueueResponse = {
   scope: {
     facets: "assignee_snapshot";
     summary: "filtered_account_snapshot";
-    scoreboard: "assignee_campaign_snapshot";
+    scoreboard: "assignee_campaign_segment_snapshot";
   };
   total: number;
   truncated: false;
@@ -383,6 +384,7 @@ function isFacets(value: unknown): value is OutboundQueueFacets {
   if (!isRecord(value)) return false;
   return (
     isStringArray(value["campaigns"]) &&
+    isStringArray(value["segments"]) &&
     isStringArray(value["dispositions"]) &&
     isStringArray(value["attempts"])
   );
@@ -393,7 +395,7 @@ function isQueueScope(value: unknown): value is OutboundQueueResponse["scope"] {
     isRecord(value) &&
     value["facets"] === "assignee_snapshot" &&
     value["summary"] === "filtered_account_snapshot" &&
-    value["scoreboard"] === "assignee_campaign_snapshot"
+    value["scoreboard"] === "assignee_campaign_segment_snapshot"
   );
 }
 

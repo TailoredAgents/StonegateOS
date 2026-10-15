@@ -6,6 +6,7 @@ export type OutboundView = "queue" | "inbox" | "import";
 export type OutboundFilters = {
   q?: string;
   campaign?: string;
+  segment?: string;
   attempt?: string;
   due?: string;
   has?: string;
@@ -25,6 +26,7 @@ export type OutboundLocation = {
 const OUTBOUND_FILTER_QUERY_KEYS = {
   q: "out_q",
   campaign: "out_campaign",
+  segment: "out_segment",
   attempt: "out_attempt",
   due: "out_due",
   has: "out_has",

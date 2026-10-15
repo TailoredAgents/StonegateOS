@@ -101,6 +101,7 @@ export default async function TeamPage({
     salesActions?: string | string[];
     out_q?: string;
     out_campaign?: string;
+    out_segment?: string;
     out_attempt?: string;
     out_due?: string;
     out_has?: string;
@@ -446,6 +447,8 @@ export default async function TeamPage({
       typeof params?.out_campaign === "string"
         ? params.out_campaign
         : undefined,
+    segment:
+      typeof params?.out_segment === "string" ? params.out_segment : undefined,
     attempt:
       typeof params?.out_attempt === "string" ? params.out_attempt : undefined,
     due: typeof params?.out_due === "string" ? params.out_due : undefined,

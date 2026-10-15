@@ -168,6 +168,7 @@ export type InboxInput = {
   messageLimit?: string | readonly string[];
   scope?: "outbound";
   outboundCampaign?: string;
+  outboundSegment?: string;
   outboundMemberId?: string;
 };
 
@@ -278,6 +279,8 @@ export async function loadInboxConversation(
     if (input.scope) timelineParams.set("scope", input.scope);
     if (input.outboundCampaign?.trim())
       timelineParams.set("campaign", input.outboundCampaign.trim());
+    if (input.outboundSegment?.trim())
+      timelineParams.set("segment", input.outboundSegment.trim());
     if (input.outboundMemberId?.trim())
       timelineParams.set("memberId", input.outboundMemberId.trim());
     const response = await read(
@@ -337,6 +340,8 @@ export async function loadInboxConversation(
     if (input.scope) params.set("scope", input.scope);
     if (input.outboundCampaign?.trim())
       params.set("campaign", input.outboundCampaign.trim());
+    if (input.outboundSegment?.trim())
+      params.set("segment", input.outboundSegment.trim());
     if (input.outboundMemberId?.trim())
       params.set("memberId", input.outboundMemberId.trim());
     const response = await read(
@@ -412,6 +417,8 @@ export async function loadInboxList(input: InboxInput, read: ReadInbox) {
   if (input.scope) params.set("scope", input.scope);
   if (input.outboundCampaign?.trim())
     params.set("campaign", input.outboundCampaign.trim());
+  if (input.outboundSegment?.trim())
+    params.set("segment", input.outboundSegment.trim());
   if (input.outboundMemberId?.trim())
     params.set("memberId", input.outboundMemberId.trim());
   for (const [key, value] of Object.entries(filters))

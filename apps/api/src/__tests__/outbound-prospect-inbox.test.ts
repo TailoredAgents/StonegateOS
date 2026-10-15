@@ -28,12 +28,14 @@ describe("outbound prospect inbox contract", () => {
     expect(scope).not.toContain('"active_partner"');
     expect(scope).not.toContain('"not_a_fit"');
     expect(scope).toContain("partnerAccounts.sourceCampaign");
+    expect(scope).toContain("partnerAccounts.segment");
     expect(scope).toContain("partnerAccounts.ownerMemberId");
 
     for (const route of [list, detail, timeline]) {
       expect(route).toContain("parseInboxThreadScope");
       expect(route).toContain("activeOutboundProspectCondition");
       expect(route).toContain("campaign");
+      expect(route).toContain("segment");
       expect(route).toContain("outboundMemberId");
     }
     expect(list).toContain('scope === "outbound"');
@@ -41,7 +43,7 @@ describe("outbound prospect inbox contract", () => {
     expect(timeline).toContain('parsedScope.scope === "outbound"');
   });
 
-  it("keeps the new inbox inside Partner Outreach and preserves campaign and owner scope", () => {
+  it("keeps the new inbox inside Partner Outreach and preserves campaign, company type, and owner scope", () => {
     const outbound = source(
       "apps/site/src/app/team/components/OutboundSection.tsx",
     );
@@ -51,11 +53,13 @@ describe("outbound prospect inbox contract", () => {
     expect(outbound).toContain('label: "Prospect Inbox"');
     expect(outbound).toContain('scope: "outbound"');
     expect(outbound).toContain("outboundCampaign: filters.campaign");
+    expect(outbound).toContain("outboundSegment: filters.segment");
     expect(outbound).toContain("outboundMemberId: memberId");
     expect(outbound).toContain('mode="outbound"');
     expect(outbound).toContain("outboundNavigation={{ memberId, filters }}");
     expect(navigation).toContain('"queue" | "inbox" | "import"');
     expect(loader).toContain('params.set("campaign"');
+    expect(loader).toContain('params.set("segment"');
     expect(loader).toContain('params.set("memberId"');
   });
 

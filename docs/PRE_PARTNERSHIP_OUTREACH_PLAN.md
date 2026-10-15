@@ -12,7 +12,7 @@
 | Team navigation          | Restored as the only visible Sales workspace; still gated by `outbound.read`        |
 | Phase 1                  | Complete locally: guided queue, continue-to-next outcomes, and full CSV guidance    |
 | Phase 2                  | Complete locally: active-prospect Inbox and recorded call/SMS/email/reply counts    |
-| Focused verification     | 16 outbound suites/163 tests, 44 Inbox tests, and 22 browser checks passing locally |
+| Focused verification     | 16 outbound suites/164 tests, 44 Inbox tests, and 22 browser checks passing locally |
 | Production certification | Controlled smoke test still required                                                |
 | Recommended next step    | Verify the complete flow with controlled identities, then refine conversion handoff |
 
@@ -42,33 +42,33 @@ Imported records remain isolated operationally by their outbound campaign/source
 
 ## What already exists on `main`
 
-| Capability          | Current implementation                                                                                                          | Status                                 |
-| ------------------- | ------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------- |
-| Dedicated workspace | Sales -> Outbound at `/team/sales/outbound`                                                                                     | Implemented and restored to navigation |
-| CSV upload or paste | Upload-first Import contacts view                                                                                               | Implemented                            |
-| Import size         | Up to 2 MiB and 2,000 data rows                                                                                                 | Implemented                            |
-| Supported data      | Company, contact, phone, email, website/domain, title, industry, company size, LinkedIn, city/state/ZIP, source list, and notes | Implemented                            |
-| Safe preview        | Preview -> Review -> explicit `IMPORT N` confirmation                                                                           | Implemented                            |
-| Deduplication       | Normalized email/phone matching, within-file duplicate clusters, archived/DNC/conflict handling                                 | Implemented                            |
-| Import safety       | Exact preview hash, idempotency, transaction, advisory/row locks, complete exclusion CSV                                        | Implemented                            |
-| Automatic setup     | Creates or updates contact, prospect status, partner account link, pipeline row, note, assignment, and outbound task            | Implemented                            |
-| Inbound separation  | `outbound:` sources are excluded from normal inbound Sales HQ/new-lead handling                                                 | Implemented                            |
-| Work queue          | Search, campaign, owner, due state, attempt, channel, outcome, and company grouping                                             | Implemented                            |
-| One-record detail   | Company/contact details, next step, history, tasks, conversation ideas, and actions                                             | Implemented                            |
-| Calling             | Uses the existing authenticated Twilio call workflow                                                                            | Implemented                            |
-| SMS and email       | Opens or creates the contact's existing shared Inbox thread                                                                     | Implemented                            |
-| Incoming replies    | Stored in the shared Inbox; an inbound reply stops open outbound cadence tasks                                                  | Implemented                            |
-| Prospect Inbox      | Reuses the shared Inbox inside Partner Outreach and limits it to active prospects, campaign, and selected owner                 | Implemented locally                    |
-| Outreach checks     | Counts recorded outbound calls, sent/delivered SMS and email, and received replies per company                                  | Implemented locally                    |
-| Call outcomes       | A sufficiently long completed customer call can stop the cadence                                                                | Implemented                            |
-| Follow-up outcomes  | Connected, partner, no answer, voicemail, email sent, callback, not interested, and DNC                                         | Implemented                            |
-| Partner conversion  | Confirmed partner relationship stops cadence, updates partner/contact state, schedules follow-up, and retains history           | Implemented                            |
-| Portal invitation   | Kept separate from relationship confirmation in Partner administration                                                          | Implemented and intentionally separate |
+| Capability          | Current implementation                                                                                                                  | Status                                 |
+| ------------------- | --------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------- |
+| Dedicated workspace | Sales -> Outbound at `/team/sales/outbound`                                                                                             | Implemented and restored to navigation |
+| CSV upload or paste | Upload-first Import contacts view                                                                                                       | Implemented                            |
+| Import size         | Up to 2 MiB and 2,000 data rows                                                                                                         | Implemented                            |
+| Supported data      | Company, contact, phone, email, website/domain, title, per-row industry, company size, LinkedIn, city/state/ZIP, source list, and notes | Implemented                            |
+| Safe preview        | Preview -> Review -> explicit `IMPORT N` confirmation                                                                                   | Implemented                            |
+| Deduplication       | Normalized email/phone matching, within-file duplicate clusters, archived/DNC/conflict handling                                         | Implemented                            |
+| Import safety       | Exact preview hash, idempotency, transaction, advisory/row locks, complete exclusion CSV                                                | Implemented                            |
+| Automatic setup     | Creates or updates contact, prospect status, partner account link, pipeline row, note, assignment, and outbound task                    | Implemented                            |
+| Inbound separation  | `outbound:` sources are excluded from normal inbound Sales HQ/new-lead handling                                                         | Implemented                            |
+| Work queue          | Search, campaign/list, company type, owner, due state, attempt, channel, outcome, and company grouping                                  | Implemented                            |
+| One-record detail   | Company/contact details, next step, history, tasks, conversation ideas, and actions                                                     | Implemented                            |
+| Calling             | Uses the existing authenticated Twilio call workflow                                                                                    | Implemented                            |
+| SMS and email       | Opens or creates the contact's existing shared Inbox thread                                                                             | Implemented                            |
+| Incoming replies    | Stored in the shared Inbox; an inbound reply stops open outbound cadence tasks                                                          | Implemented                            |
+| Prospect Inbox      | Reuses the shared Inbox inside Partner Outreach and limits it to active prospects, campaign/list, company type, and owner               | Implemented locally                    |
+| Outreach checks     | Counts recorded outbound calls, sent/delivered SMS and email, and received replies per company                                          | Implemented locally                    |
+| Call outcomes       | A sufficiently long completed customer call can stop the cadence                                                                        | Implemented                            |
+| Follow-up outcomes  | Connected, partner, no answer, voicemail, email sent, callback, not interested, and DNC                                                 | Implemented                            |
+| Partner conversion  | Confirmed partner relationship stops cadence, updates partner/contact state, schedules follow-up, and retains history                   | Implemented                            |
+| Portal invitation   | Kept separate from relationship confirmation in Partner administration                                                                  | Implemented and intentionally separate |
 
 ## Gaps relative to the desired experience
 
 1. **Campaign and company-type reporting is operational rather than managerial.** It needs simple totals for imported, attempted, replied, callback, interested, converted, DNC, and not interested.
-2. **The dedicated Inbox currently narrows by campaign and owner; company-type and channel-wide filters remain a polish/reporting item.** Individual conversations still retain their real channel and complete shared history.
+2. **Channel-wide filtering remains a polish/reporting item.** The dedicated Inbox can already narrow by campaign/list, company type, and owner, while each conversation retains its real channel and complete shared history.
 3. **Current production behavior has not been smoke-tested and signed off against controlled call, SMS, email, reply, and conversion identities.** Source and local tests are not enough to claim production readiness.
 
 ## Target desktop experience
@@ -121,12 +121,12 @@ Acceptance gate: an authorized staff member can preview the actual 80-row file, 
 
 ### Phase 2 — Prospect-scoped Inbox
 
-Status: **Complete locally on 2026-10-15.** Production deploy and controlled smoke verification remain separate gates. Company-type and channel-wide filtering can be added with Phase 4 reporting polish without changing the communications path.
+Status: **Complete locally on 2026-10-15.** Production deploy and controlled smoke verification remain separate gates. Company-type filtering is included; channel-wide filtering can be added with Phase 4 reporting polish without changing the communications path.
 
 - Add an explicit outbound/prospect scope to the existing Inbox read path; do not build a second messaging system.
 - Reuse the current Inbox composer, delivery states, media handling, retries, and provider threads.
 - Add Needs Reply, Waiting, Failed, and All counts for active prospects.
-- Preserve campaign, owner, queue filters, selected prospect, and pagination while moving between the Work Queue and Prospect Inbox.
+- Preserve campaign/list, company type, owner, queue filters, selected prospect, and pagination while moving between the Work Queue and Prospect Inbox.
 - Show recorded call, SMS, email, and reply counts from the existing communication records; a button click alone never earns a check.
 - Embed or closely integrate the selected conversation with the Work Queue.
 - Preserve a safe return to the same prospect and queue position.
@@ -169,7 +169,8 @@ Acceptance gate: the owner can understand the status of the 80-lead effort witho
 
 ## Recommended defaults for the 80-lead list
 
-- Import campaign: a short stable label describing the VA list and date.
+- Import campaign/list: a short stable label describing the outreach batch and date. It groups the upload but never determines a company's industry.
+- Company type: use the `industry` column on each CSV row (aliases `vertical` and `segment` are also accepted). One file can freely mix contractors, property managers, storage facilities, and other industries.
 - Assignment: choose one accountable owner during preview; reassign through supported bulk controls if needed.
 - Initial state: imported prospect with an unstarted outbound task.
 - Cadence: start only after the first real contact attempt.

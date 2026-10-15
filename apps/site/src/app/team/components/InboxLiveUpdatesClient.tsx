@@ -72,6 +72,7 @@ export function InboxLiveUpdatesClient(props: {
   isViewingNewest: boolean;
   scope?: "outbound";
   outboundCampaign?: string | null;
+  outboundSegment?: string | null;
   outboundMemberId?: string | null;
 }): React.ReactElement | null {
   const router = useRouter();
@@ -136,6 +137,8 @@ export function InboxLiveUpdatesClient(props: {
               if (props.scope) url.searchParams.set("scope", props.scope);
               if (props.outboundCampaign)
                 url.searchParams.set("campaign", props.outboundCampaign);
+              if (props.outboundSegment)
+                url.searchParams.set("segment", props.outboundSegment);
               if (props.outboundMemberId)
                 url.searchParams.set("memberId", props.outboundMemberId);
               return fetchSnapshotSignature(url, controller.signal);
@@ -152,6 +155,8 @@ export function InboxLiveUpdatesClient(props: {
         if (props.scope) threadsUrl.searchParams.set("scope", props.scope);
         if (props.outboundCampaign)
           threadsUrl.searchParams.set("campaign", props.outboundCampaign);
+        if (props.outboundSegment)
+          threadsUrl.searchParams.set("segment", props.outboundSegment);
         if (props.outboundMemberId)
           threadsUrl.searchParams.set("memberId", props.outboundMemberId);
         if (props.view && props.view !== "all") {
@@ -266,6 +271,7 @@ export function InboxLiveUpdatesClient(props: {
     props.isViewingNewest,
     props.offset,
     props.outboundCampaign,
+    props.outboundSegment,
     props.outboundMemberId,
     props.q,
     props.queue,

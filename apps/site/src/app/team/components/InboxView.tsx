@@ -274,6 +274,7 @@ export function InboxView({
         isViewingNewest={input.messageCursor === undefined}
         scope={input.scope}
         outboundCampaign={input.outboundCampaign ?? null}
+        outboundSegment={input.outboundSegment ?? null}
         outboundMemberId={input.outboundMemberId ?? null}
       />
       <nav

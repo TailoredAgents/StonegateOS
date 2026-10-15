@@ -1,6 +1,6 @@
 # Outbox Event Index
 
-Generated from production TypeScript sources. Fingerprint: `0c07872458dcc86e`.
+Generated from production TypeScript sources. Fingerprint: `10ae35c27306d493`.
 
 Literal event types discovered: 80
 

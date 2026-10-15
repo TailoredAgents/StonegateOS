@@ -10,6 +10,7 @@ import {
   type OutboundImportPublicRow,
 } from "@/lib/outbound-import";
 import { runOutboundImportAtomic } from "@/lib/outbound-import-transaction";
+import { classifyOutboundSegment } from "@/lib/outbound-import-service";
 import {
   readBoundedRequestBytes,
   type BoundedRequestBodyError,
@@ -29,6 +30,24 @@ function payload(csv: string, extra: Record<string, unknown> = {}): unknown {
 }
 
 describe("Outbound import CSV normalization", () => {
+  it("classifies every company from its own row instead of the shared campaign", () => {
+    const parsed = parseOutboundImportPayload(
+      payload(
+        [
+          "company,contact_name,email,industry",
+          "Alpha Co,Ada Alpha,ada@alpha.test,General Construction",
+          "Bravo Co,Ben Bravo,ben@bravo.test,Self Storage",
+          "Charlie Construction,Cam Charlie,cam@charlie.test,Logistics",
+        ].join("\r\n"),
+        { campaign: "property_management" },
+      ),
+    );
+
+    expect(
+      parsed.rows.map((row) => classifyOutboundSegment({ row }).segment),
+    ).toEqual(["contractor", "storage_facility", "logistics"]);
+  });
+
   it("accepts UTF-8 BOM, supported aliases, and quoted commas", () => {
     const parsed = parseOutboundImportPayload(
       payload(

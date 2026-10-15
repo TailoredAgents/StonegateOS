@@ -190,6 +190,10 @@ export async function GET(request: NextRequest): Promise<Response> {
   if (campaign && (scope !== "outbound" || campaign.length > 160)) {
     return NextResponse.json({ error: "invalid_campaign" }, { status: 422 });
   }
+  const segment = searchParams.get("segment")?.trim() || null;
+  if (segment && (scope !== "outbound" || segment.length > 160)) {
+    return NextResponse.json({ error: "invalid_segment" }, { status: 422 });
+  }
   const outboundMemberId = searchParams.get("memberId")?.trim() || null;
   if (
     outboundMemberId &&
@@ -345,6 +349,7 @@ export async function GET(request: NextRequest): Promise<Response> {
     scope === "outbound"
       ? activeOutboundProspectCondition({
           campaign,
+          segment,
           memberId: outboundMemberId,
         })
       : undefined;

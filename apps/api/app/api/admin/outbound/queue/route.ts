@@ -87,7 +87,7 @@ export async function GET(request: NextRequest): Promise<Response> {
       scope: {
         facets: "assignee_snapshot",
         summary: "filtered_account_snapshot",
-        scoreboard: "assignee_campaign_snapshot",
+        scoreboard: "assignee_campaign_segment_snapshot",
       },
       total: queue.total,
       // Retained for rolling Site compatibility. The new query is exact and
