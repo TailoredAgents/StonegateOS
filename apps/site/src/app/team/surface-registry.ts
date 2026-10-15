@@ -279,9 +279,11 @@ export function isTeamSurfaceId(value: string): value is TeamSurfaceId {
 }
 
 // Keep historical Sales routes resolvable without presenting them as daily work.
-// This is navigation policy only: permissions, records and automation are unchanged.
+// Outbound remains a supported workspace and must stay discoverable for users
+// with outbound access. This is navigation policy only: permissions, records
+// and automation are unchanged.
 export const TEAM_NAVIGATION_SURFACES = TEAM_SURFACES.filter(
-  (surface) => surface.group !== "sales",
+  (surface) => surface.group !== "sales" || surface.id === "outbound",
 );
 
 export const TEAM_PRIMARY_NAVIGATION_IDS: readonly TeamSurfaceId[] = [
@@ -386,6 +388,7 @@ export const TEAM_SURFACE_GROUP_LABELS: Readonly<
 
 export const TEAM_SURFACE_GROUP_ORDER: readonly TeamSurfaceGroup[] = [
   "daily",
+  "sales",
   "marketing",
   "owner",
   "admin",

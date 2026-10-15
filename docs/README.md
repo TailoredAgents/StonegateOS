@@ -9,6 +9,7 @@ This folder contains operational, planning, audit, and historical documentation 
 - Desktop/mobile ownership: [StonegateOS Capability Matrix](CAPABILITY_MATRIX.md)
 - Read-only/live evidence ledger: [StonegateOS Production Baseline](PRODUCTION_BASELINE.md)
 - Active operational risks: [StonegateOS Operational Risk Register](OPERATIONAL_RISK_REGISTER.md)
+- Pre-partnership business development: [Pre-Partnership Outreach Plan](PRE_PARTNERSHIP_OUTREACH_PLAN.md)
 - Latest local readiness evidence: [Phase 1 audit — 2026-10-10](audits/system-alignment-phase-1-2026-10-10.md)
 - Current desktop foundation evidence: [Phase 2 desktop audit — 2026-10-10](audits/system-alignment-phase-2-desktop-foundation-2026-10-10.md)
 
