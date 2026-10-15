@@ -65,6 +65,12 @@ export type OutboundQueueItem = {
   contactCount: number;
   dncContactCount: number;
   openTaskCount: number;
+  outreach: {
+    callAttempts: number;
+    smsSent: number;
+    emailsSent: number;
+    repliesReceived: number;
+  };
   account: {
     id: string;
     name: string;
@@ -318,6 +324,11 @@ function isOutboundQueueItem(
     value["contactCount"] === contacts.length &&
     value["dncContactCount"] === dncContactCount &&
     value["openTaskCount"] === tasks.length &&
+    isRecord(value["outreach"]) &&
+    isNonNegativeInteger(value["outreach"]["callAttempts"]) &&
+    isNonNegativeInteger(value["outreach"]["smsSent"]) &&
+    isNonNegativeInteger(value["outreach"]["emailsSent"]) &&
+    isNonNegativeInteger(value["outreach"]["repliesReceived"]) &&
     account["id"] === value["id"] &&
     isString(account["name"]) &&
     isStringOrNull(account["status"]) &&

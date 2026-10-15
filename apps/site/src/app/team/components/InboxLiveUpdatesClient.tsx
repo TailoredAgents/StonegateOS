@@ -70,6 +70,9 @@ export function InboxLiveUpdatesClient(props: {
   lastMessageTo: string | null;
   offset: string | null;
   isViewingNewest: boolean;
+  scope?: "outbound";
+  outboundCampaign?: string | null;
+  outboundMemberId?: string | null;
 }): React.ReactElement | null {
   const router = useRouter();
   const [hasUpdate, setHasUpdate] = React.useState(false);
@@ -130,6 +133,11 @@ export function InboxLiveUpdatesClient(props: {
               );
               url.searchParams.set("contactId", props.contactId);
               url.searchParams.set("snapshot", "1");
+              if (props.scope) url.searchParams.set("scope", props.scope);
+              if (props.outboundCampaign)
+                url.searchParams.set("campaign", props.outboundCampaign);
+              if (props.outboundMemberId)
+                url.searchParams.set("memberId", props.outboundMemberId);
               return fetchSnapshotSignature(url, controller.signal);
             })()
           : Promise.resolve(null);
@@ -141,6 +149,11 @@ export function InboxLiveUpdatesClient(props: {
         threadsUrl.searchParams.set("limit", "50");
         threadsUrl.searchParams.set("snapshot", "1");
         threadsUrl.searchParams.set("queue", props.queue);
+        if (props.scope) threadsUrl.searchParams.set("scope", props.scope);
+        if (props.outboundCampaign)
+          threadsUrl.searchParams.set("campaign", props.outboundCampaign);
+        if (props.outboundMemberId)
+          threadsUrl.searchParams.set("memberId", props.outboundMemberId);
         if (props.view && props.view !== "all") {
           threadsUrl.searchParams.set("view", props.view);
         }
@@ -252,9 +265,12 @@ export function InboxLiveUpdatesClient(props: {
     props.lastMessageTo,
     props.isViewingNewest,
     props.offset,
+    props.outboundCampaign,
+    props.outboundMemberId,
     props.q,
     props.queue,
     props.status,
+    props.scope,
     props.view,
     doRefresh,
   ]);

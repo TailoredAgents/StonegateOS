@@ -23,6 +23,12 @@ export async function GET(request: NextRequest): Promise<Response> {
   if (request.nextUrl.searchParams.get("snapshot") === "1") {
     params.set("snapshot", "1");
   }
+  const scope = (request.nextUrl.searchParams.get("scope") ?? "").trim();
+  if (scope) params.set("scope", scope);
+  const campaign = (request.nextUrl.searchParams.get("campaign") ?? "").trim();
+  if (campaign) params.set("campaign", campaign);
+  const memberId = (request.nextUrl.searchParams.get("memberId") ?? "").trim();
+  if (memberId) params.set("memberId", memberId);
 
   const res = await callAdminApiAs(
     auth.principal,

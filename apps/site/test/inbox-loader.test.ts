@@ -328,6 +328,59 @@ void test("conversation and list loads only depend on their core endpoints", asy
   assert.equal(unselected.hasSelection, false);
 });
 
+void test("outbound prospect scope stays attached to list, timeline, and detail reads", async () => {
+  const requests: string[] = [];
+  const input = {
+    scope: "outbound" as const,
+    outboundCampaign: "property managers",
+    outboundMemberId: "11111111-1111-4111-8111-111111111111",
+    contactId,
+    channel: "sms",
+  };
+  const prospect = {
+    accountId: "22222222-2222-4222-8222-222222222222",
+    company: "Prospect Property Management",
+    campaign: "property managers",
+    segment: "property_manager",
+  };
+  const prospectSummary = { ...summary(), prospect };
+  const baseDetail = detail();
+  const prospectDetail = {
+    ...baseDetail,
+    thread: { ...baseDetail.thread, prospect },
+  };
+  const read = (path: string) => {
+    requests.push(path);
+    if (path.startsWith("/api/admin/inbox/timeline?")) {
+      return json({
+        contact,
+        threads: [prospectSummary],
+        messages: [],
+      });
+    }
+    if (path.startsWith(`/api/admin/inbox/threads/${smsId}?`)) {
+      return json(prospectDetail);
+    }
+    return json(list([prospectSummary]));
+  };
+
+  await Promise.all([
+    loadInboxList(input, read),
+    loadInboxConversation(input, read),
+  ]);
+
+  assert.equal(requests.length, 3);
+  for (const path of requests) {
+    const params = new URL(path, "http://example.test").searchParams;
+    assert.equal(params.get("scope"), "outbound");
+    assert.equal(params.get("campaign"), "property managers");
+    assert.equal(
+      params.get("memberId"),
+      "11111111-1111-4111-8111-111111111111",
+    );
+  }
+});
+
 void test("filter normalization and paging preserve the user's selected queue and search", async () => {
   assert.deepEqual(
     inboxFilters({

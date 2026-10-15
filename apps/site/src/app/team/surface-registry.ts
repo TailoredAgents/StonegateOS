@@ -82,7 +82,7 @@ export const TEAM_SURFACES = [
     group: "sales",
     label: "Partner Outreach",
     requiredPermissions: ["outbound.read"],
-    subviews: ["queue", "import", "partners"],
+    subviews: ["queue", "inbox", "import", "partners"],
   },
   {
     id: "partners",

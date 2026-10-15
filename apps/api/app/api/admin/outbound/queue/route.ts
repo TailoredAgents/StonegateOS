@@ -123,6 +123,7 @@ export async function GET(request: NextRequest): Promise<Response> {
         dncContactCount: item.contacts.filter((contact) => contact.doNotContact)
           .length,
         openTaskCount: item.tasks.length,
+        outreach: item.outreach,
         contacts: item.contacts,
         tasks: item.tasks,
         account: {

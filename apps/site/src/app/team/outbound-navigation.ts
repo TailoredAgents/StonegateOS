@@ -1,7 +1,7 @@
 import type { Route } from "next";
 import { teamSurfaceHref } from "./surface-registry";
 
-export type OutboundView = "queue" | "import";
+export type OutboundView = "queue" | "inbox" | "import";
 
 export type OutboundFilters = {
   q?: string;
@@ -51,7 +51,7 @@ function normalizedValue(
 }
 
 export function normalizeOutboundView(value: unknown): OutboundView {
-  return value === "import" ? "import" : "queue";
+  return value === "import" || value === "inbox" ? value : "queue";
 }
 
 export function buildOutboundHref(args: {
@@ -65,7 +65,7 @@ export function buildOutboundHref(args: {
   if (memberId) query.set("memberId", memberId);
 
   const view = normalizeOutboundView(args.view);
-  if (view === "import") query.set("view", view);
+  if (view !== "queue") query.set("view", view);
 
   const merged: OutboundFilters = { ...args.filters, ...(args.patch ?? {}) };
   for (const [filterKey, queryKey] of Object.entries(

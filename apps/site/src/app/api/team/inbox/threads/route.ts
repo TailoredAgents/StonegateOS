@@ -27,6 +27,9 @@ export async function GET(request: NextRequest): Promise<Response> {
     "lastMessageFrom",
     "lastMessageTo",
     "snapshot",
+    "scope",
+    "campaign",
+    "memberId",
   ] as const;
   for (const key of passthroughKeys) {
     const value = input.get(key);

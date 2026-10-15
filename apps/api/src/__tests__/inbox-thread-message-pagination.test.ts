@@ -467,7 +467,9 @@ describe("selected Inbox thread Site contract", () => {
     expect(route.indexOf("parseInboxThreadId(rawThreadId)")).toBeLessThan(
       route.indexOf("const db = getDb()"),
     );
-    expect(proxy).toContain('const QUERY_KEYS = new Set(["cursor", "limit"])');
+    for (const key of ["cursor", "limit", "scope", "campaign", "memberId"]) {
+      expect(proxy).toContain(`"${key}"`);
+    }
     expect(proxy).toContain("for (const value of input.getAll(key))");
     expect(proxy.indexOf("parseInboxThreadRouteId(threadId)")).toBeLessThan(
       proxy.indexOf("await callAdminApiAs("),

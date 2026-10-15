@@ -9,6 +9,7 @@ import {
   type TeamMember,
 } from "../outbound-queue";
 import { OutboundContactActions } from "./OutboundContactActions";
+import { OutboundOutreachProgress } from "./OutboundOutreachProgress";
 import { TEAM_FOCUS_RING, teamButtonClass } from "./team-ui";
 
 const SUMMARY = `min-h-11 cursor-pointer py-3 font-semibold ${TEAM_FOCUS_RING}`;
@@ -75,6 +76,11 @@ export function OutboundAccountDetail({
           Close
         </a>
       </header>
+
+      <div className="mt-4">
+        <p className="mb-2 text-sm font-semibold">Outreach recorded</p>
+        <OutboundOutreachProgress outreach={item.outreach} />
+      </div>
 
       <div className="mt-5 border-t border-[color:var(--team-border)] pt-4">
         <OutboundContactActions

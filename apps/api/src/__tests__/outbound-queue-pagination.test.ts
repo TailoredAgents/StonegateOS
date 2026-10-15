@@ -295,6 +295,15 @@ describe("outbound queue account-level keyset pagination", () => {
         },
       ],
       details,
+      [
+        {
+          accountId: uuid(1),
+          callAttempts: 2,
+          smsSent: 1,
+          emailsSent: 1,
+          repliesReceived: 1,
+        },
+      ],
     ]);
 
     const result = await loadOutboundQueuePage(db, {
@@ -307,13 +316,25 @@ describe("outbound queue account-level keyset pagination", () => {
       filters: FILTERS,
     });
 
-    expect(calls()).toBe(4);
+    expect(calls()).toBe(5);
     expect(result.total).toBe(650);
     expect(result.items).toHaveLength(50);
     expect(result.nextOffset).toBe(50);
     expect(result.nextCursor).not.toBeNull();
     expect(result.previousCursor).toBeNull();
     expect(result.items[0]?.tasks).toHaveLength(2);
+    expect(result.items[0]?.outreach).toEqual({
+      callAttempts: 2,
+      smsSent: 1,
+      emailsSent: 1,
+      repliesReceived: 1,
+    });
+    expect(result.items[1]?.outreach).toEqual({
+      callAttempts: 0,
+      smsSent: 0,
+      emailsSent: 0,
+      repliesReceived: 0,
+    });
     expect(result.items[0]?.taskIds).toEqual([
       pageAccount(1).primaryTaskId,
       detailRow(1, 1).taskId,

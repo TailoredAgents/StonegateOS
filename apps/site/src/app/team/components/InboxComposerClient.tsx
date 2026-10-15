@@ -215,7 +215,9 @@ function ComposerEditor(
         const nextUrl = new URL(href, window.location.origin);
         if (
           nextUrl.origin === window.location.origin &&
-          (nextUrl.pathname === "/team" || nextUrl.pathname === "/team/inbox")
+          (nextUrl.pathname === "/team" ||
+            nextUrl.pathname === "/team/inbox" ||
+            nextUrl.pathname === "/team/sales/outbound")
         ) {
           nextUrl.searchParams.set("threadId", result.threadId);
           if (

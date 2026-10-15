@@ -1,6 +1,7 @@
 import type { ReactElement } from "react";
 import type { PersonalSessionInventory } from "./settings-sessions";
 import type { TeamSurfaceId } from "./surface-registry";
+import type { InboxInput } from "./inbox-loader";
 
 export type TeamSurfaceLoaderContext = {
   calendarSearchParams: {
@@ -13,22 +14,7 @@ export type TeamSurfaceLoaderContext = {
     contactId?: string;
     propertyId?: string;
   };
-  inbox: {
-    queue?: string;
-    threadId?: string;
-    status?: string;
-    contactId?: string;
-    channel?: string;
-    q?: string;
-    view?: string;
-    firstMessageFrom?: string;
-    firstMessageTo?: string;
-    lastMessageFrom?: string;
-    lastMessageTo?: string;
-    offset?: string;
-    messageCursor?: string | readonly string[];
-    messageLimit?: string | readonly string[];
-  };
+  inbox: InboxInput;
   quotes: {
     quoteMode?: string | null;
     contactId?: string;
@@ -66,6 +52,7 @@ export type TeamSurfaceLoaderContext = {
   outbound: {
     memberId?: string;
     view?: string;
+    inbox: InboxInput;
     filters: {
       q?: string;
       campaign?: string;

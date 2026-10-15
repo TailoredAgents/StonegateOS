@@ -89,6 +89,12 @@ function validQueuePayload(): Record<string, unknown> {
         contactCount: 1,
         dncContactCount: 1,
         openTaskCount: 1,
+        outreach: {
+          callAttempts: 1,
+          smsSent: 1,
+          emailsSent: 0,
+          repliesReceived: 0,
+        },
         contacts: [
           {
             id: CONTACT_ID,

@@ -45,6 +45,12 @@ const item = {
   contactCount: 1,
   dncContactCount: 0,
   openTaskCount: 1,
+  outreach: {
+    callAttempts: 1,
+    smsSent: 1,
+    emailsSent: 0,
+    repliesReceived: 0,
+  },
   contacts: [
     {
       id: contactId,
@@ -144,9 +150,9 @@ async function harness() {
     stdin: {
       contents: `import React from'react';import{createRoot}from'react-dom/client';import{OutboundSection}from'./src/app/team/components/OutboundSection';import{PartnerRelationshipSetup}from'./src/app/team/components/PartnerRelationshipSetup';
         const p=new URLSearchParams(location.search);window.__calls=[];
-        const filters={due:p.get('out_due')||'',disposition:p.get('out_disposition')||'',accountId:p.get('out_account')||'',taskId:p.get('out_taskId')||'',cursor:p.get('out_cursor')||'',q:p.get('out_q')||''};
+        const filters={due:p.get('out_due')||'',disposition:p.get('out_disposition')||'',accountId:p.get('out_account')||'',taskId:p.get('out_taskId')||'',cursor:p.get('out_cursor')||'',q:p.get('out_q')||'',campaign:p.get('out_campaign')||''};
         const render=element=>createRoot(document.getElementById('root')).render(<main style={{padding:16,maxWidth:1280,margin:'auto'}}><h1 className='sr-only'>Stonegate CRM</h1>{element}</main>);
-        if(location.pathname==='/team/partners'){render(<PartnerRelationshipSetup canCreate canInvite canConfigure openCreate={p.get('p_setup')==='create'}/>)}else{OutboundSection({filters,view:p.get('view')||'queue'}).then(render)}`,
+        if(location.pathname==='/team/partners'){render(<PartnerRelationshipSetup canCreate canInvite canConfigure openCreate={p.get('p_setup')==='create'}/>)}else{OutboundSection({memberId:p.get('memberId')||undefined,filters,view:p.get('view')||'queue'}).then(render)}`,
       resolveDir: `${repo}/apps/site`,
       loader: "tsx",
     },
@@ -184,12 +190,12 @@ async function harness() {
                   : args.path === "../actions/partner-relationships"
                     ? `export const searchPartnerRelationshipCompanies=async()=>({ok:true,choices:[],nextCursor:null});export const loadPartnerRelationshipContext=async()=>({ok:false});export const savePartnerRelationship=async()=>{throw Error('No invitations may be sent from this harness')};`
                     : args.path === "next/navigation"
-                      ? `export const useRouter=()=>({refresh(){},push(){}});export const usePathname=()=>location.pathname;`
+                      ? `export const useRouter=()=>({refresh(){},push(){}});export const usePathname=()=>location.pathname;export const useSearchParams=()=>new URLSearchParams(location.search);`
                       : args.path === "@/lib/team-principal"
-                        ? `export const requireCurrentTeamPrincipal=async()=>({memberId:'${memberId}'});export const hasTeamPermission=(_p,key)=>{const role=new URLSearchParams(location.search).get('role');return role==='viewer'?key==='outbound.read':true};`
+                        ? `export const requireCurrentTeamPrincipal=async()=>({memberId:'${memberId}'});export const hasTeamPermission=(_p,key)=>{const role=new URLSearchParams(location.search).get('role');return role==='viewer'?key==='outbound.read':true};export const resolveTeamPrincipalFromCookies=async()=>({memberId:'${memberId}'});export const toTeamMemberIdentity=(principal)=>({id:principal.memberId,name:'Test operator'});`
                         : args.path === "../lib/api"
-                          ? `export const callAdminApiAs=async(_principal,path)=>{const p=new URLSearchParams(location.search);window.__calls.push(path);if(path.includes('/directory'))return Response.json({members:[{id:'${memberId}',name:'Alex Owner',active:true}]});if(p.has('unavailable'))return Response.json({error:'outbound_assignee_required'},{status:422});const data=${JSON.stringify(payload)};if(p.has('empty')){data.items=[];data.total=0;data.scanLimit=0;}if(p.has('blocked')){data.items[0].contacts[0].doNotContact=true;data.items[0].tasks[0].doNotContact=true;data.items[0].dncContactCount=1;}return Response.json(data);};`
-                          : `export const bulkOutboundAction=async(data)=>{window.__bulk=Object.fromEntries(data);window.__bulk.taskRefs=data.getAll('taskRefs');};export const setOutboundDispositionAction=async()=>{};export const draftOutboundFirstTouchAction=async()=>{};export const draftOutboundFollowupAction=async()=>{};export const openContactThreadAction=async()=>{};export const startContactCallAction=async()=>{};`,
+                          ? `export const callAdminApiAs=async(_principal,path)=>{const p=new URLSearchParams(location.search);window.__calls.push(path);if(path.includes('/directory'))return Response.json({members:[{id:'${memberId}',name:'Alex Owner',active:true}]});if(path.startsWith('/api/admin/inbox/threads?'))return Response.json({threads:[],queue:'all',scope:'outbound',queueCounts:{needsReply:0,waiting:0,failed:0,all:0},snapshot:{signature:'outbound-inbox-empty'},pagination:{limit:50,offset:0,total:0,nextOffset:null}});if(p.has('unavailable'))return Response.json({error:'outbound_assignee_required'},{status:422});const data=${JSON.stringify(payload)};if(p.has('empty')){data.items=[];data.total=0;data.scanLimit=0;}if(p.has('blocked')){data.items[0].contacts[0].doNotContact=true;data.items[0].tasks[0].doNotContact=true;data.items[0].dncContactCount=1;}return Response.json(data);};`
+                          : `export const bulkOutboundAction=async(data)=>{window.__bulk=Object.fromEntries(data);window.__bulk.taskRefs=data.getAll('taskRefs');};export const setOutboundDispositionAction=async()=>{};export const draftOutboundFirstTouchAction=async()=>{};export const draftOutboundFollowupAction=async()=>{};export const openContactThreadAction=async()=>{};export const startContactCallAction=async()=>{};export const prepareInboxMessageAction=async()=>({ok:false});export const sendPreparedInboxMessageAction=async()=>({ok:false});export const addPropertyAction=async()=>({ok:false});export const bookInboxAppointmentAction=async()=>({ok:false});export const createInboxQuoteAction=async()=>({ok:false});export const rescheduleInboxAppointmentAction=async()=>({ok:false});export const retryFailedMessageAction=async()=>({ok:false});`,
             }),
           );
         },
@@ -374,6 +380,30 @@ for (const engine of [chromium, webkit]) {
         .filter({ hasText: "Update several accounts" })
         .click();
       await expect(page.getByRole("checkbox")).toBeDisabled();
+      await page.goto(
+        `${app.url}/?view=inbox&memberId=${memberId}&out_campaign=property_management&out_account=${accountId}`,
+      );
+      await expect(
+        page.getByRole("link", { name: "Prospect Inbox", exact: true }),
+      ).toHaveAttribute("aria-current", "page");
+      await expect(
+        page.getByRole("navigation", { name: "Prospect Inbox queues" }),
+      ).toBeVisible();
+      await expect(
+        page.getByRole("link", { name: "Open Work Queue", exact: true }),
+      ).toHaveAttribute("href", /out_campaign=property_management/);
+      const prospectInboxRead = await page.evaluate(() =>
+        (window as any).__calls.find((path: string) =>
+          path.startsWith("/api/admin/inbox/threads?"),
+        ),
+      );
+      const prospectInboxParams = new URL(
+        prospectInboxRead,
+        "https://example.test",
+      ).searchParams;
+      assert.equal(prospectInboxParams.get("scope"), "outbound");
+      assert.equal(prospectInboxParams.get("campaign"), "property_management");
+      assert.equal(prospectInboxParams.get("memberId"), memberId);
       // Real Axe, using generated current Tailwind styles; no live service calls.
       for (const variant of [
         "light",

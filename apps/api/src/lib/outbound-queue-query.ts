@@ -93,6 +93,12 @@ export type OutboundQueueAccount = {
   assignedToMemberId: string;
   lastTouchAt: string | null;
   nextTouchAt: string | null;
+  outreach: {
+    callAttempts: number;
+    smsSent: number;
+    emailsSent: number;
+    repliesReceived: number;
+  };
   contacts: Array<{
     id: string;
     name: string;
@@ -660,6 +666,12 @@ function accountFromRows(input: {
     assignedToMemberId: primary.assignedTo,
     lastTouchAt: primary.accountLastTouchAt?.toISOString() ?? null,
     nextTouchAt: primary.accountNextTouchAt?.toISOString() ?? null,
+    outreach: {
+      callAttempts: 0,
+      smsSent: 0,
+      emailsSent: 0,
+      repliesReceived: 0,
+    },
     contacts: Array.from(contacts.values()),
     tasks: input.rows.map((row) => ({
       id: row.taskId,
@@ -833,6 +845,70 @@ export async function loadOutboundQueuePage(
       snapshotAt: query.snapshotAt,
     }),
   );
+  if (items.length > 0) {
+    const prospectContacts = items.flatMap((item) =>
+      item.contacts.map((contact) => ({
+        accountId: item.id,
+        contactId: contact.id,
+      })),
+    );
+    const values = sql.join(
+      prospectContacts.map(
+        ({ accountId, contactId }) =>
+          sql`(${accountId}::text, ${contactId}::uuid)`,
+      ),
+      sql`, `,
+    );
+    const activityResult = await db.execute(sql`
+      WITH "prospect_contacts"("accountId", "contactId") AS (
+        VALUES ${values}
+      )
+      SELECT
+        scope."accountId",
+        count(DISTINCT calls."id") FILTER (
+          WHERE calls."direction" = 'outbound'
+        )::integer AS "callAttempts",
+        count(DISTINCT messages."id") FILTER (
+          WHERE messages."direction" = 'outbound'
+            AND messages."channel" = 'sms'
+            AND messages."delivery_status" IN ('sent', 'delivered')
+            AND coalesce(messages."metadata" ->> 'draft', 'false') <> 'true'
+        )::integer AS "smsSent",
+        count(DISTINCT messages."id") FILTER (
+          WHERE messages."direction" = 'outbound'
+            AND messages."channel" = 'email'
+            AND messages."delivery_status" IN ('sent', 'delivered')
+            AND coalesce(messages."metadata" ->> 'draft', 'false') <> 'true'
+        )::integer AS "emailsSent",
+        count(DISTINCT messages."id") FILTER (
+          WHERE messages."direction" = 'inbound'
+            AND coalesce(messages."metadata" ->> 'draft', 'false') <> 'true'
+        )::integer AS "repliesReceived"
+      FROM "prospect_contacts" AS scope
+      LEFT JOIN "call_records" AS calls
+        ON calls."contact_id" = scope."contactId"
+      LEFT JOIN "conversation_threads" AS threads
+        ON threads."contact_id" = scope."contactId"
+       AND threads."staff_scope" = 'general'
+      LEFT JOIN "conversation_messages" AS messages
+        ON messages."thread_id" = threads."id"
+      GROUP BY scope."accountId"
+    `);
+    const activityByAccount = new Map(
+      asRecordArray(activityResult).map((row) => [
+        asString(row["accountId"], "accountId"),
+        {
+          callAttempts: asInteger(row["callAttempts"], "callAttempts"),
+          smsSent: asInteger(row["smsSent"], "smsSent"),
+          emailsSent: asInteger(row["emailsSent"], "emailsSent"),
+          repliesReceived: asInteger(row["repliesReceived"], "repliesReceived"),
+        },
+      ]),
+    );
+    for (const item of items) {
+      item.outreach = activityByAccount.get(item.id) ?? item.outreach;
+    }
+  }
 
   const total = asInteger(metadata["total"], "total");
   const nextOffset =

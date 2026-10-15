@@ -4,16 +4,17 @@
 
 ## Status
 
-| Field                    | Current value                                                                           |
-| ------------------------ | --------------------------------------------------------------------------------------- |
-| Discovery                | Complete from current `main` on 2026-10-15                                              |
-| Existing implementation  | Substantial and already merged into `main`                                              |
-| Current route            | `/team/sales/outbound`                                                                  |
-| Team navigation          | Restored as the only visible Sales workspace; still gated by `outbound.read`            |
-| Phase 1                  | Complete locally: guided queue, continue-to-next outcomes, and full CSV guidance        |
-| Focused API verification | 15 suites and 160 tests passing locally                                                 |
-| Production certification | Controlled smoke test still required                                                    |
-| Recommended next step    | Add the prospect-scoped Inbox, then verify the complete flow with controlled identities |
+| Field                    | Current value                                                                       |
+| ------------------------ | ----------------------------------------------------------------------------------- |
+| Discovery                | Complete from current `main` on 2026-10-15                                          |
+| Existing implementation  | Substantial and already merged into `main`                                          |
+| Current route            | `/team/sales/outbound`                                                              |
+| Team navigation          | Restored as the only visible Sales workspace; still gated by `outbound.read`        |
+| Phase 1                  | Complete locally: guided queue, continue-to-next outcomes, and full CSV guidance    |
+| Phase 2                  | Complete locally: active-prospect Inbox and recorded call/SMS/email/reply counts    |
+| Focused verification     | 16 outbound suites/163 tests, 44 Inbox tests, and 22 browser checks passing locally |
+| Production certification | Controlled smoke test still required                                                |
+| Recommended next step    | Verify the complete flow with controlled identities, then refine conversion handoff |
 
 ## Business problem
 
@@ -55,8 +56,10 @@ Imported records remain isolated operationally by their outbound campaign/source
 | Work queue          | Search, campaign, owner, due state, attempt, channel, outcome, and company grouping                                             | Implemented                            |
 | One-record detail   | Company/contact details, next step, history, tasks, conversation ideas, and actions                                             | Implemented                            |
 | Calling             | Uses the existing authenticated Twilio call workflow                                                                            | Implemented                            |
-| SMS and email       | Opens or creates the contact's existing shared Inbox thread                                                                     | Implemented, but leaves Outbound       |
+| SMS and email       | Opens or creates the contact's existing shared Inbox thread                                                                     | Implemented                            |
 | Incoming replies    | Stored in the shared Inbox; an inbound reply stops open outbound cadence tasks                                                  | Implemented                            |
+| Prospect Inbox      | Reuses the shared Inbox inside Partner Outreach and limits it to active prospects, campaign, and selected owner                 | Implemented locally                    |
+| Outreach checks     | Counts recorded outbound calls, sent/delivered SMS and email, and received replies per company                                  | Implemented locally                    |
 | Call outcomes       | A sufficiently long completed customer call can stop the cadence                                                                | Implemented                            |
 | Follow-up outcomes  | Connected, partner, no answer, voicemail, email sent, callback, not interested, and DNC                                         | Implemented                            |
 | Partner conversion  | Confirmed partner relationship stops cadence, updates partner/contact state, schedules follow-up, and retains history           | Implemented                            |
@@ -64,8 +67,8 @@ Imported records remain isolated operationally by their outbound campaign/source
 
 ## Gaps relative to the desired experience
 
-1. **No prospect-scoped Inbox inside Outbound.** Staff leave the queue and enter the general Inbox to compose or reply. Replies are retained correctly, but the experience does not feel like one dedicated pre-partnership area.
-2. **Campaign and company-type reporting is operational rather than managerial.** It needs simple totals for imported, attempted, replied, callback, interested, converted, DNC, and not interested.
+1. **Campaign and company-type reporting is operational rather than managerial.** It needs simple totals for imported, attempted, replied, callback, interested, converted, DNC, and not interested.
+2. **The dedicated Inbox currently narrows by campaign and owner; company-type and channel-wide filters remain a polish/reporting item.** Individual conversations still retain their real channel and complete shared history.
 3. **Current production behavior has not been smoke-tested and signed off against controlled call, SMS, email, reply, and conversion identities.** Source and local tests are not enough to claim production readiness.
 
 ## Target desktop experience
@@ -118,10 +121,13 @@ Acceptance gate: an authorized staff member can preview the actual 80-row file, 
 
 ### Phase 2 — Prospect-scoped Inbox
 
+Status: **Complete locally on 2026-10-15.** Production deploy and controlled smoke verification remain separate gates. Company-type and channel-wide filtering can be added with Phase 4 reporting polish without changing the communications path.
+
 - Add an explicit outbound/prospect scope to the existing Inbox read path; do not build a second messaging system.
 - Reuse the current Inbox composer, delivery states, media handling, retries, and provider threads.
 - Add Needs Reply, Waiting, Failed, and All counts for active prospects.
-- Support campaign, owner, company type, and channel filters.
+- Preserve campaign, owner, queue filters, selected prospect, and pagination while moving between the Work Queue and Prospect Inbox.
+- Show recorded call, SMS, email, and reply counts from the existing communication records; a button click alone never earns a check.
 - Embed or closely integrate the selected conversation with the Work Queue.
 - Preserve a safe return to the same prospect and queue position.
 - Move a confirmed partner out of the active Prospect Inbox while retaining the same underlying conversation history.

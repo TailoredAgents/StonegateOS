@@ -4,7 +4,13 @@ import { parseInboxThreadRouteId } from "@/app/team/inbox-thread-page";
 import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
 
-const QUERY_KEYS = new Set(["cursor", "limit"]);
+const QUERY_KEYS = new Set([
+  "cursor",
+  "limit",
+  "scope",
+  "campaign",
+  "memberId",
+]);
 
 type RouteContext = {
   params: Promise<{ threadId?: string }>;

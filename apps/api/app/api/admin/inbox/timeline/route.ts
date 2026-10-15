@@ -7,12 +7,20 @@ import {
   conversationParticipants,
   conversationThreads,
   getDb,
+  partnerAccounts,
 } from "@/db";
 import { buildInboxSnapshotSignature } from "@/lib/inbox-snapshot";
 import { genericInboxThreadScopeCondition } from "@/lib/inbox-staff-scope";
 import { toInboxIso } from "@/lib/inbox-timestamp";
 import { requirePermission } from "@/lib/permissions";
 import { isAdminRequest } from "../../../web/admin";
+import {
+  activeOutboundProspectCondition,
+  parseInboxThreadScope,
+} from "@/lib/inbox-outbound-scope";
+
+const UUID_RE =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
 
 export async function GET(request: NextRequest): Promise<Response> {
   if (!isAdminRequest(request)) {
@@ -22,6 +30,21 @@ export async function GET(request: NextRequest): Promise<Response> {
   if (permissionError) return permissionError;
 
   const { searchParams } = request.nextUrl;
+  const parsedScope = parseInboxThreadScope(searchParams.get("scope"));
+  if (!parsedScope.ok) {
+    return NextResponse.json({ error: "invalid_scope" }, { status: 422 });
+  }
+  const campaign = searchParams.get("campaign")?.trim() || null;
+  if (campaign && (parsedScope.scope !== "outbound" || campaign.length > 160)) {
+    return NextResponse.json({ error: "invalid_campaign" }, { status: 422 });
+  }
+  const outboundMemberId = searchParams.get("memberId")?.trim() || null;
+  if (
+    outboundMemberId &&
+    (parsedScope.scope !== "outbound" || !UUID_RE.test(outboundMemberId))
+  ) {
+    return NextResponse.json({ error: "invalid_member_id" }, { status: 422 });
+  }
   const contactId = (searchParams.get("contactId") ?? "").trim();
   if (!contactId) {
     return NextResponse.json({ error: "contact_id_required" }, { status: 400 });
@@ -44,7 +67,21 @@ export async function GET(request: NextRequest): Promise<Response> {
       phoneE164: contacts.phoneE164,
     })
     .from(contacts)
-    .where(eq(contacts.id, contactId))
+    .leftJoin(
+      partnerAccounts,
+      eq(contacts.partnerAccountId, partnerAccounts.id),
+    )
+    .where(
+      and(
+        eq(contacts.id, contactId),
+        parsedScope.scope === "outbound"
+          ? activeOutboundProspectCondition({
+              campaign,
+              memberId: outboundMemberId,
+            })
+          : undefined,
+      ),
+    )
     .limit(1);
 
   if (!contactRow?.id) {

@@ -90,7 +90,7 @@ describe("Inbox first-class queue contract", () => {
     expect(section).toContain("buildInboxConversationQuery(");
     expect(section).toContain("offset: list.pagination.offset");
     expect(page).toContain("params?.inbox_queue");
-    expect(loaders).toContain("queue?: string;");
+    expect(loaders).toContain("inbox: InboxInput;");
     expect(proxy).toContain('"queue",');
     expect(liveUpdates).toContain(
       'threadsUrl.searchParams.set("queue", props.queue)',

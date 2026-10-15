@@ -4,7 +4,7 @@ import { createServer } from "node:http";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
-import { chromium, webkit, type BrowserType } from "@playwright/test";
+import { chromium, expect, webkit, type BrowserType } from "@playwright/test";
 import { resolveOutboundContactContext } from "../apps/site/src/app/team/outbound-detail";
 
 const repo = fileURLToPath(new URL("../", import.meta.url)).replace(/\/$/u, "");
@@ -157,6 +157,12 @@ const item = {
   contactCount: 4,
   dncContactCount: 1,
   openTaskCount: 5,
+  outreach: {
+    callAttempts: 1,
+    smsSent: 1,
+    emailsSent: 1,
+    repliesReceived: 1,
+  },
   contacts,
   tasks,
   account: {
@@ -290,6 +296,11 @@ for (const engine of [chromium, webkit]) {
       const { page, close } = await harness(engine, width);
       try {
         assert.equal(await page.locator("#outbound-account").count(), 1);
+        const outreach = page.getByLabel("Recorded outreach activity");
+        await expect(outreach).toContainText("✓ 1 Call");
+        await expect(outreach).toContainText("✓ 1 SMS");
+        await expect(outreach).toContainText("✓ 1 Email");
+        await expect(outreach).toContainText("✓ 1 Reply");
         await page.addScriptTag({
           path: require.resolve("axe-core/axe.min.js"),
         });

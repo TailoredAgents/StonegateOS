@@ -3,6 +3,7 @@ import {
   isInboxQueueCounts,
   isInboxSnapshotSignature,
   type InboxPagination,
+  type InboxQueueCounts,
 } from "./inbox-state";
 import {
   parseInboxThreadPagePayload,
@@ -29,6 +30,12 @@ export type ThreadSummary = {
   priorityScore?: number;
   mediaCount?: number;
   assignedTo?: { id: string; name: string } | null;
+  prospect?: {
+    accountId: string;
+    company: string;
+    campaign: string | null;
+    segment: string | null;
+  } | null;
   contact: {
     id: string;
     name: string;
@@ -73,6 +80,7 @@ export type ThreadDetail = {
   lastMessageAt: string | null;
   lastInboundAt?: string | null;
   assignedTo?: { id: string; name: string } | null;
+  prospect?: ThreadSummary["prospect"];
   contact: {
     id: string;
     name: string;
@@ -158,11 +166,16 @@ export type InboxInput = {
   offset?: string;
   messageCursor?: string | readonly string[];
   messageLimit?: string | readonly string[];
+  scope?: "outbound";
+  outboundCampaign?: string;
+  outboundMemberId?: string;
 };
 
 export function inboxFilters(input: InboxInput) {
   const queue =
-    input.queue === "failed" || input.queue === "needs_reply"
+    input.queue === "failed" ||
+    input.queue === "needs_reply" ||
+    input.queue === "waiting"
       ? input.queue
       : !input.queue && input.view === "attention" && input.status !== "closed"
         ? "needs_reply"
@@ -189,6 +202,19 @@ function isContact(
     typeof contact["name"] === "string" &&
     (contact["email"] === null || typeof contact["email"] === "string") &&
     (contact["phone"] === null || typeof contact["phone"] === "string")
+  );
+}
+function isProspect(
+  value: unknown,
+): value is NonNullable<ThreadSummary["prospect"]> {
+  if (!value || typeof value !== "object") return false;
+  const prospect = value as Record<string, unknown>;
+  return (
+    typeof prospect["accountId"] === "string" &&
+    typeof prospect["company"] === "string" &&
+    (prospect["campaign"] === null ||
+      typeof prospect["campaign"] === "string") &&
+    (prospect["segment"] === null || typeof prospect["segment"] === "string")
   );
 }
 function isListThread(value: unknown): value is ThreadSummary {
@@ -248,8 +274,14 @@ export async function loadInboxConversation(
   // Explicit thread links are authoritative, even when an old contact/channel remains in the URL.
   // Customer/channel links must resolve an existing thread before requesting its strict message page.
   if (!selectedThreadId && contactId) {
+    const timelineParams = new URLSearchParams({ contactId, limit: "50" });
+    if (input.scope) timelineParams.set("scope", input.scope);
+    if (input.outboundCampaign?.trim())
+      timelineParams.set("campaign", input.outboundCampaign.trim());
+    if (input.outboundMemberId?.trim())
+      timelineParams.set("memberId", input.outboundMemberId.trim());
     const response = await read(
-      `/api/admin/inbox/timeline?contactId=${encodeURIComponent(contactId)}&limit=50`,
+      `/api/admin/inbox/timeline?${timelineParams}`,
     ).catch(() => null);
     if (!response?.ok) error = loadError(response?.status);
     else {
@@ -302,6 +334,11 @@ export async function loadInboxConversation(
           : input.messageCursor;
       cursors.forEach((value) => params.append("cursor", value));
     }
+    if (input.scope) params.set("scope", input.scope);
+    if (input.outboundCampaign?.trim())
+      params.set("campaign", input.outboundCampaign.trim());
+    if (input.outboundMemberId?.trim())
+      params.set("memberId", input.outboundMemberId.trim());
     const response = await read(
       `/api/admin/inbox/threads/${encodeURIComponent(selectedThreadId)}?${params}`,
     ).catch(() => null);
@@ -317,6 +354,14 @@ export async function loadInboxConversation(
       if (!parsed)
         error = {
           message: "The message page did not load completely. Please retry.",
+        };
+      else if (
+        input.scope === "outbound" &&
+        !isProspect(parsed.thread["prospect"])
+      )
+        error = {
+          message:
+            "The prospect conversation did not load completely. Please retry.",
         };
       else {
         detail = parsed as unknown as ThreadResponse;
@@ -364,17 +409,24 @@ export async function loadInboxList(input: InboxInput, read: ReadInbox) {
   const offset =
     Number.isSafeInteger(parsedOffset) && parsedOffset > 0 ? parsedOffset : 0;
   const params = new URLSearchParams({ limit: "50", queue: filters.queue });
+  if (input.scope) params.set("scope", input.scope);
+  if (input.outboundCampaign?.trim())
+    params.set("campaign", input.outboundCampaign.trim());
+  if (input.outboundMemberId?.trim())
+    params.set("memberId", input.outboundMemberId.trim());
   for (const [key, value] of Object.entries(filters))
     if (value && value !== "all") params.set(key, value);
   if (offset) params.set("offset", String(offset));
   const result: {
     threads: ThreadSummary[];
     pagination: InboxPagination;
+    queueCounts: InboxQueueCounts;
     signature: string | null;
     error: InboxLoadError | null;
   } = {
     threads: [],
     pagination: { limit: 50, offset, total: 0, nextOffset: null },
+    queueCounts: { needsReply: 0, waiting: 0, failed: 0, all: 0 },
     signature: null,
     error: null,
   };
@@ -401,6 +453,10 @@ export async function loadInboxList(input: InboxInput, read: ReadInbox) {
     !payload ||
     !Array.isArray(payload.threads) ||
     !payload.threads.every(isListThread) ||
+    (input.scope === "outbound" &&
+      !payload.threads.every((thread) =>
+        isProspect((thread as Record<string, unknown>)["prospect"]),
+      )) ||
     !isInboxQueueCounts(payload.queueCounts) ||
     !isInboxSnapshotSignature(payload.snapshot?.signature) ||
     !isInboxPagination(payload.pagination, payload.threads.length, 50, offset)
@@ -412,6 +468,7 @@ export async function loadInboxList(input: InboxInput, read: ReadInbox) {
   }
   result.threads = payload.threads;
   result.pagination = payload.pagination;
+  result.queueCounts = payload.queueCounts;
   result.signature = payload.snapshot.signature;
   return result;
 }

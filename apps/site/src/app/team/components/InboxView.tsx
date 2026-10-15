@@ -6,6 +6,10 @@ import { SubmitButton } from "@/components/SubmitButton";
 import { TEAM_TIME_ZONE } from "../lib/timezone";
 import { teamSurfaceHref } from "../surface-registry";
 import {
+  buildOutboundHref,
+  type OutboundFilters,
+} from "../outbound-navigation";
+import {
   buildInboxConversationQuery,
   type InboxConversationHrefInput,
 } from "../inbox-thread-page";
@@ -81,6 +85,8 @@ export function InboxView({
   access,
   list,
   conversation,
+  mode = "general",
+  outboundNavigation,
 }: {
   input: InboxInput;
   access: {
@@ -93,7 +99,13 @@ export function InboxView({
   };
   list: Awaited<ReturnType<typeof loadInboxList>>;
   conversation: Awaited<ReturnType<typeof loadInboxConversation>>;
+  mode?: "general" | "outbound";
+  outboundNavigation?: {
+    memberId?: string;
+    filters: OutboundFilters;
+  };
 }): React.ReactElement {
+  const outboundMode = mode === "outbound";
   const { employeeId, canSend, canDraft, canEditContact } = access;
   const filters = inboxFilters(input);
   const {
@@ -125,14 +137,34 @@ export function InboxView({
   const page = detail?.messagePage ?? null;
   const filterQuery = { ...filters, offset: list.pagination.offset };
   const context = { threadId: selectedThreadId, contactId, channel };
-  const href = (override: InboxConversationHrefInput = {}) =>
-    teamSurfaceHref("inbox", {
-      query: buildInboxConversationQuery({
-        ...filterQuery,
-        ...context,
-        ...override,
-      }),
+  const href = (override: InboxConversationHrefInput = {}) => {
+    const query = buildInboxConversationQuery({
+      ...filterQuery,
+      ...context,
+      ...override,
     });
+    if (outboundMode) {
+      const base = new URL(
+        String(
+          buildOutboundHref({
+            memberId: outboundNavigation?.memberId ?? input.outboundMemberId,
+            filters: outboundNavigation?.filters ?? {
+              campaign: input.outboundCampaign,
+            },
+            view: "inbox",
+          }),
+        ),
+        "https://team.invalid",
+      );
+      const merged = new URLSearchParams(base.search);
+      for (const key of new Set(query.keys())) {
+        merged.delete(key);
+        for (const value of query.getAll(key)) merged.append(key, value);
+      }
+      return teamSurfaceHref("outbound", { query: merged });
+    }
+    return teamSurfaceHref("inbox", { query });
+  };
   const refreshHref = href({
     messageCursor: input.messageCursor,
     messageLimit: input.messageLimit,
@@ -205,10 +237,18 @@ export function InboxView({
     (channel === "dm" && !selectedThreadId) ||
     (channel === "web" && !isPartnerConversation);
   const storageKey = `stonegate:inbox-list:${employeeId}:${JSON.stringify(filterQuery)}`;
+  const queueLinks = [
+    ["needs_reply", "Needs Reply", list.queueCounts.needsReply],
+    ["waiting", "Waiting", list.queueCounts.waiting],
+    ["failed", "Failed", list.queueCounts.failed],
+    ["all", "All", list.queueCounts.all],
+  ] as const;
 
   return (
     <section
-      aria-label="Customer conversations"
+      aria-label={
+        outboundMode ? "Prospect conversations" : "Customer conversations"
+      }
       className="flex min-h-0 min-w-0 flex-1 flex-col gap-2 overflow-hidden text-[color:var(--team-text)]"
     >
       <React.Suspense fallback={null}>
@@ -232,16 +272,45 @@ export function InboxView({
         lastMessageTo={filters.lastMessageTo || null}
         offset={list.pagination.offset ? String(list.pagination.offset) : null}
         isViewingNewest={input.messageCursor === undefined}
+        scope={input.scope}
+        outboundCampaign={input.outboundCampaign ?? null}
+        outboundMemberId={input.outboundMemberId ?? null}
       />
+      <nav
+        aria-label={outboundMode ? "Prospect Inbox queues" : "Inbox queues"}
+        className="flex shrink-0 gap-1 overflow-x-auto border-b border-[color:var(--team-border)] pb-2"
+      >
+        {queueLinks.map(([queue, label, count]) => (
+          <Link
+            key={queue}
+            href={href({
+              queue,
+              offset: null,
+              threadId: null,
+              contactId: null,
+              channel: null,
+              messageCursor: null,
+              messageLimit: null,
+            })}
+            scroll={false}
+            aria-current={filters.queue === queue ? "page" : undefined}
+            className={`${teamButtonClass(filters.queue === queue ? "primary" : "secondary", "sm")} whitespace-nowrap`}
+          >
+            {label} <span aria-label={`${count} conversations`}>{count}</span>
+          </Link>
+        ))}
+      </nav>
       <div className="grid min-h-0 min-w-0 flex-1 grid-cols-1 gap-3 overflow-hidden lg:grid-cols-[300px_minmax(0,1fr)]">
         <aside
-          aria-label="Conversations"
+          aria-label={outboundMode ? "Prospect conversations" : "Conversations"}
           className={`${hasSelection ? "hidden lg:flex" : "flex"} min-h-0 min-w-0 flex-col overflow-hidden rounded-2xl border border-[color:var(--team-border)] bg-[color:var(--team-card)]`}
         >
           <InboxSearchFiltersClient
             input={filters}
             href={refreshHref}
             canSend={canSend}
+            canStartNewMessage={!outboundMode}
+            showSourceFilter={!outboundMode}
           />
           <InboxListScroll storageKey={storageKey}>
             {list.error ? (
@@ -314,6 +383,14 @@ export function InboxView({
                                 : "Customer"),
                           )}
                         </div>
+                        {outboundMode && latest.prospect ? (
+                          <p className="mt-0.5 truncate text-xs font-medium text-[color:var(--team-text-muted)]">
+                            {latest.prospect.company}
+                            {latest.prospect.campaign
+                              ? ` · ${latest.prospect.campaign}`
+                              : ""}
+                          </p>
+                        ) : null}
                         <p className="mt-1 line-clamp-2 break-words text-xs text-[color:var(--team-text-muted)]">
                           {latest.lastMessagePreview || "No messages yet"}
                         </p>
@@ -418,6 +495,14 @@ export function InboxView({
                         {name}
                       </h2>
                     </div>
+                    {outboundMode && detail?.thread.prospect ? (
+                      <p className="mt-1 text-xs font-medium text-[color:var(--team-text-muted)]">
+                        {detail.thread.prospect.company}
+                        {detail.thread.prospect.campaign
+                          ? ` · ${detail.thread.prospect.campaign}`
+                          : ""}
+                      </p>
+                    ) : null}
                     {detail?.thread.property?.outOfArea ? (
                       <p className="mt-1 text-xs text-amber-800">
                         Outside the service area. Check the address before

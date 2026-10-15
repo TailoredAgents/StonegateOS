@@ -5,6 +5,11 @@ import {
 } from "@/lib/team-principal";
 import { callAdminApiAs } from "../lib/api";
 import {
+  loadInboxConversation,
+  loadInboxList,
+  type InboxInput,
+} from "../inbox-loader";
+import {
   buildOutboundHref,
   buildOutboundFilterHref,
   buildOutboundPartnersHref,
@@ -28,6 +33,8 @@ import {
 import { OutboundAccountDetail } from "./OutboundAccountDetail";
 import { OutboundBulkActions } from "./OutboundBulkActions";
 import { OutboundImportClient } from "./OutboundImportClient";
+import { OutboundOutreachProgress } from "./OutboundOutreachProgress";
+import { InboxView } from "./InboxView";
 
 const PANEL =
   "min-w-0 rounded-2xl border border-[color:var(--team-border)] bg-[color:var(--team-surface)]";
@@ -46,13 +53,15 @@ function OutboundHeader({
   memberId,
   filters,
   view,
+  canInbox,
   canImport,
   canPartners,
   canCreatePartner,
 }: {
   memberId?: string;
   filters: OutboundFilters;
-  view: "queue" | "import";
+  view: "queue" | "inbox" | "import";
+  canInbox: boolean;
   canImport: boolean;
   canPartners: boolean;
   canCreatePartner: boolean;
@@ -90,6 +99,12 @@ function OutboundHeader({
             show: true,
           },
           {
+            label: "Prospect Inbox",
+            href: buildOutboundHref({ memberId, filters, view: "inbox" }),
+            active: view === "inbox",
+            show: canInbox,
+          },
+          {
             label: "Import",
             href: buildOutboundHref({ memberId, filters, view: "import" }),
             active: view === "import",
@@ -122,10 +137,12 @@ export async function OutboundSection({
   memberId,
   filters = {},
   view,
+  inbox = {},
 }: {
   memberId?: string;
   filters?: OutboundFilters;
   view?: string;
+  inbox?: InboxInput;
 }): Promise<React.ReactElement> {
   const principal = await requireCurrentTeamPrincipal();
   const permissions = {
@@ -139,6 +156,7 @@ export async function OutboundSection({
     canManage: hasTeamPermission(principal, "outbound.write"),
   };
   const canImport = hasTeamPermission(principal, "outbound.import");
+  const canInbox = hasTeamPermission(principal, "messages.read");
   const partnerSurface = TEAM_SURFACES.find(
     (surface) => surface.id === "partners",
   )!;
@@ -149,13 +167,14 @@ export async function OutboundSection({
     hasTeamPermission(principal, "partners.accounts.read") &&
     hasTeamPermission(principal, "partners.accounts.manage") &&
     hasTeamPermission(principal, "partners.invitations.send");
-  const currentView = view === "import" ? "import" : "queue";
+  const currentView = view === "import" || view === "inbox" ? view : "queue";
   const header = (selectedMember = memberId) => (
     <OutboundHeader
       memberId={selectedMember}
       filters={filters}
       view={currentView}
       canImport={canImport}
+      canInbox={canInbox}
       canPartners={canPartners}
       canCreatePartner={canCreatePartner}
     />
@@ -180,6 +199,74 @@ export async function OutboundSection({
         </div>
       </section>
     );
+
+  if (currentView === "inbox" && !canInbox)
+    return (
+      <section className="space-y-5">
+        {header()}
+        <div role="status" className={teamStatePanelClass("warning")}>
+          <h3 className="font-semibold">Inbox access is required</h3>
+          <p className="mt-1">
+            Ask your administrator for conversation access. You can still work
+            prospects from the Work Queue.
+          </p>
+          <a
+            href={buildOutboundHref({ memberId, filters })}
+            className={`${teamButtonClass("secondary")} mt-3`}
+          >
+            Back to Work Queue
+          </a>
+        </div>
+      </section>
+    );
+
+  if (currentView === "inbox") {
+    const scopedInbox: InboxInput = {
+      ...inbox,
+      scope: "outbound",
+      outboundCampaign: filters.campaign,
+      outboundMemberId: memberId,
+    };
+    const read = (path: string) => callAdminApiAs(principal, path);
+    const [list, conversation] = await Promise.all([
+      loadInboxList(scopedInbox, read),
+      loadInboxConversation(scopedInbox, read),
+    ]);
+    return (
+      <section className="min-w-0 space-y-4 text-[color:var(--team-text)]">
+        {header()}
+        <div className="flex flex-wrap items-center justify-between gap-2 text-sm">
+          <p className={MUTED}>
+            Active prospect conversations
+            {filters.campaign ? ` · ${filters.campaign}` : " · all campaigns"}
+          </p>
+          <a
+            href={buildOutboundHref({ memberId, filters })}
+            className={teamButtonClass("secondary", "sm")}
+          >
+            Open Work Queue
+          </a>
+        </div>
+        <div className="flex h-[calc(100dvh-17rem)] min-h-[34rem] min-w-0 flex-col">
+          <InboxView
+            mode="outbound"
+            input={scopedInbox}
+            access={{
+              employeeId: principal.memberId,
+              canSend: hasTeamPermission(principal, "messages.send"),
+              canDraft: hasTeamPermission(principal, "messages.write"),
+              canEditContact: hasTeamPermission(principal, "contacts.write"),
+              canPlaceCalls: hasTeamPermission(principal, "calls.place"),
+              canReadContacts: hasTeamPermission(principal, "contacts.read"),
+            }}
+            list={list}
+            conversation={conversation}
+            outboundNavigation={{ memberId, filters }}
+          />
+        </div>
+      </section>
+    );
+  }
 
   // Independent reads run together; neither is allowed to manufacture an empty success state.
   const directoryPromise = (async () => {
@@ -635,6 +722,12 @@ export async function OutboundSection({
                         {contact.name} ·{" "}
                         {contact.email ?? contact.phone ?? "No contact details"}
                       </p>
+                      <div className="mt-2">
+                        <OutboundOutreachProgress
+                          outreach={item.outreach}
+                          compact
+                        />
+                      </div>
                       <div
                         className={`mt-2 flex flex-wrap gap-x-3 gap-y-1 text-xs ${MUTED}`}
                       >

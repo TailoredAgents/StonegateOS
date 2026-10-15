@@ -1,15 +1,6 @@
 import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
-import {
-  and,
-  desc,
-  eq,
-  ilike,
-  inArray,
-  or,
-  sql,
-  type SQL,
-} from "drizzle-orm";
+import { and, desc, eq, ilike, inArray, or, sql, type SQL } from "drizzle-orm";
 import {
   getDb,
   conversationThreads,
@@ -22,6 +13,7 @@ import {
   leads,
   outboxEvents,
   facebookSalesAutopilotSessions,
+  partnerAccounts,
 } from "@/db";
 import {
   isConversationState,
@@ -37,6 +29,10 @@ import { requireActiveContactForDirectOutbound } from "@/lib/contact-outbound-sa
 import { buildInboxSnapshotSignature } from "@/lib/inbox-snapshot";
 import { genericInboxThreadScopeCondition } from "@/lib/inbox-staff-scope";
 import { parseInboxQueue } from "@/lib/inbox-queue";
+import {
+  activeOutboundProspectCondition,
+  parseInboxThreadScope,
+} from "@/lib/inbox-outbound-scope";
 import {
   TeamMutationFailure,
   teamMutationExceptionResponse,
@@ -63,6 +59,7 @@ type SourceFamily =
   | "Website"
   | "Missed Call"
   | "Partner"
+  | "Outbound"
   | "Other";
 
 function parseLimit(value: string | null): number {
@@ -163,6 +160,7 @@ function classifySourceFamily(input: {
     values.includes("inbound_call")
   )
     return "Missed Call";
+  if (values.includes("outbound")) return "Outbound";
   if (values.includes("partner")) return "Partner";
   if (
     values.includes("website") ||
@@ -183,6 +181,22 @@ export async function GET(request: NextRequest): Promise<Response> {
   if (permissionError) return permissionError;
 
   const { searchParams } = request.nextUrl;
+  const parsedScope = parseInboxThreadScope(searchParams.get("scope"));
+  if (!parsedScope.ok) {
+    return NextResponse.json({ error: "invalid_scope" }, { status: 422 });
+  }
+  const scope = parsedScope.scope;
+  const campaign = searchParams.get("campaign")?.trim() || null;
+  if (campaign && (scope !== "outbound" || campaign.length > 160)) {
+    return NextResponse.json({ error: "invalid_campaign" }, { status: 422 });
+  }
+  const outboundMemberId = searchParams.get("memberId")?.trim() || null;
+  if (
+    outboundMemberId &&
+    (scope !== "outbound" || !UUID_RE.test(outboundMemberId))
+  ) {
+    return NextResponse.json({ error: "invalid_member_id" }, { status: 422 });
+  }
   const rawSearch = searchParams.get("q");
   const searchTerm = rawSearch ? normalizeSearch(rawSearch) : null;
   const status = isStatus(searchParams.get("status"))
@@ -327,9 +341,18 @@ export async function GET(request: NextRequest): Promise<Response> {
   // dates, contact, and source). They intentionally exclude both the selected
   // queue and the transitional legacy status so staff can see the true totals
   // available when switching queues.
-  const baseFilters: Array<SQL | undefined> = [
+  const outboundProspectFilter =
+    scope === "outbound"
+      ? activeOutboundProspectCondition({
+          campaign,
+          memberId: outboundMemberId,
+        })
+      : undefined;
+  const scopeFilters: Array<SQL | undefined> = [
     genericInboxThreadScopeCondition(),
+    outboundProspectFilter,
   ];
+  const baseFilters: Array<SQL | undefined> = [...scopeFilters];
 
   if (channel) {
     baseFilters.push(eq(conversationThreads.channel, channel));
@@ -462,6 +485,10 @@ export async function GET(request: NextRequest): Promise<Response> {
     .select({ count: sql<number>`count(*)` })
     .from(conversationThreads)
     .leftJoin(contacts, eq(conversationThreads.contactId, contacts.id))
+    .leftJoin(
+      partnerAccounts,
+      eq(contacts.partnerAccountId, partnerAccounts.id),
+    )
     .leftJoin(leads, eq(conversationThreads.leadId, leads.id))
     .leftJoin(properties, eq(conversationThreads.propertyId, properties.id))
     .leftJoin(
@@ -483,6 +510,10 @@ export async function GET(request: NextRequest): Promise<Response> {
     })
     .from(conversationThreads)
     .leftJoin(contacts, eq(conversationThreads.contactId, contacts.id))
+    .leftJoin(
+      partnerAccounts,
+      eq(contacts.partnerAccountId, partnerAccounts.id),
+    )
     .leftJoin(leads, eq(conversationThreads.leadId, leads.id))
     .leftJoin(properties, eq(conversationThreads.propertyId, properties.id))
     .leftJoin(
@@ -531,6 +562,10 @@ export async function GET(request: NextRequest): Promise<Response> {
       contactSource: contacts.source,
       doNotContact: contacts.doNotContact,
       contactUpdatedAt: contacts.updatedAt,
+      prospectAccountId: partnerAccounts.id,
+      prospectCompany: partnerAccounts.name,
+      prospectCampaign: partnerAccounts.sourceCampaign,
+      prospectSegment: partnerAccounts.segment,
       propertyAddressLine1: properties.addressLine1,
       propertyAddressLine2: properties.addressLine2,
       propertyCity: properties.city,
@@ -563,6 +598,10 @@ export async function GET(request: NextRequest): Promise<Response> {
     })
     .from(conversationThreads)
     .leftJoin(contacts, eq(conversationThreads.contactId, contacts.id))
+    .leftJoin(
+      partnerAccounts,
+      eq(contacts.partnerAccountId, partnerAccounts.id),
+    )
     .leftJoin(leads, eq(conversationThreads.leadId, leads.id))
     .leftJoin(properties, eq(conversationThreads.propertyId, properties.id))
     .leftJoin(
@@ -639,11 +678,17 @@ export async function GET(request: NextRequest): Promise<Response> {
         conversationThreads,
         eq(conversationMessages.threadId, conversationThreads.id),
       )
+      .leftJoin(contacts, eq(conversationThreads.contactId, contacts.id))
+      .leftJoin(
+        partnerAccounts,
+        eq(contacts.partnerAccountId, partnerAccounts.id),
+      )
       .where(
         and(
           eq(conversationMessages.deliveryStatus, "failed"),
           eq(conversationMessages.direction, "outbound"),
           genericInboxThreadScopeCondition(),
+          outboundProspectFilter,
           sql`coalesce(${conversationMessages.metadata} ->> 'draft', 'false') <> 'true'`,
         ),
       ),
@@ -893,6 +938,15 @@ export async function GET(request: NextRequest): Promise<Response> {
             phone: row.contactPhoneE164 ?? row.contactPhone ?? null,
           }
         : null,
+      prospect:
+        scope === "outbound" && row.prospectAccountId
+          ? {
+              accountId: row.prospectAccountId,
+              company: row.prospectCompany ?? "Prospect company",
+              campaign: row.prospectCampaign ?? null,
+              segment: row.prospectSegment ?? null,
+            }
+          : null,
       property: row.propertyId
         ? {
             id: row.propertyId,
@@ -939,6 +993,7 @@ export async function GET(request: NextRequest): Promise<Response> {
 
   return NextResponse.json({
     threads,
+    scope,
     queue: queue ?? null,
     queueCounts,
     snapshot,

@@ -73,10 +73,14 @@ export function InboxSearchFiltersClient({
   input,
   href,
   canSend,
+  canStartNewMessage = true,
+  showSourceFilter = true,
 }: {
   input: InboxInput;
   href: string;
   canSend: boolean;
+  canStartNewMessage?: boolean;
+  showSourceFilter?: boolean;
 }) {
   const router = useRouter();
   const [open, setOpen] = React.useState(false);
@@ -214,7 +218,7 @@ export function InboxSearchFiltersClient({
             <SlidersHorizontal size={14} />
             {count ? `Filters (${count})` : "Filters"}
           </button>
-          {canSend ? (
+          {canSend && canStartNewMessage ? (
             <button
               type="button"
               onClick={() => setNewMessage(true)}
@@ -245,21 +249,23 @@ export function InboxSearchFiltersClient({
             >
               <option value="all">All conversations</option>
               <option value="needs_reply">Needs a reply</option>
-              <option value="failed">Delivery problems</option>
+                <option value="failed">Delivery problems</option>
             </select>
           </label>
-          <label className="block text-xs">
-            Source
-            <select
-              aria-label="Source"
-              value={source}
-              onChange={(e) => setSource(e.target.value)}
-              className={TEAM_SELECT + " mt-1 w-full"}
-            >
-              <option value="all">All sources</option>
-              <option value="google">Google</option>
-            </select>
-          </label>
+          {showSourceFilter ? (
+            <label className="block text-xs">
+              Source
+              <select
+                aria-label="Source"
+                value={source}
+                onChange={(e) => setSource(e.target.value)}
+                className={TEAM_SELECT + " mt-1 w-full"}
+              >
+                <option value="all">All sources</option>
+                <option value="google">Google</option>
+              </select>
+            </label>
+          ) : null}
           <div className="grid grid-cols-2 gap-2">
             {dateKeys.map((key, i) => (
               <label key={key} className="min-w-0 text-xs">

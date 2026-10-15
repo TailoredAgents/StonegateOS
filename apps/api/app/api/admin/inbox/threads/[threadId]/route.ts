@@ -1,17 +1,6 @@
 import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
-import {
-  and,
-  asc,
-  desc,
-  eq,
-  gt,
-  inArray,
-  lt,
-  lte,
-  or,
-  sql,
-} from "drizzle-orm";
+import { and, asc, desc, eq, gt, inArray, lt, lte, or, sql } from "drizzle-orm";
 import {
   getDb,
   conversationThreads,
@@ -22,14 +11,19 @@ import {
   leadAutomationStates,
   properties,
   teamMembers,
-  messageDeliveryEvents
+  messageDeliveryEvents,
+  partnerAccounts,
 } from "@/db";
 import {
   canTransitionConversationState,
   isConversationState,
-  type ConversationState
+  type ConversationState,
 } from "@/lib/conversation-state";
-import { getServiceAreaPolicy, isPostalCodeAllowed, normalizePostalCode } from "@/lib/policy";
+import {
+  getServiceAreaPolicy,
+  isPostalCodeAllowed,
+  normalizePostalCode,
+} from "@/lib/policy";
 import { requirePermission } from "@/lib/permissions";
 import { isAdminRequest } from "../../../../web/admin";
 import { getAuditActorFromRequest, recordAuditEvent } from "@/lib/audit";
@@ -40,9 +34,15 @@ import {
   type InboxThreadMessageKey,
 } from "@/lib/inbox-thread-message-pagination";
 import { genericInboxThreadScopeCondition } from "@/lib/inbox-staff-scope";
+import {
+  activeOutboundProspectCondition,
+  parseInboxThreadScope,
+} from "@/lib/inbox-outbound-scope";
 
 const THREAD_STATUS = ["open", "pending", "closed"] as const;
 const CLOSE_REASONS = ["lost", "do_not_contact", "closed"] as const;
+const UUID_RE =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
 
 type ThreadStatus = (typeof THREAD_STATUS)[number];
 type ThreadState = ConversationState;
@@ -89,7 +89,7 @@ function messageCreatedAtEquals(timestamp: string) {
 
 export async function GET(
   request: NextRequest,
-  context: { params: Promise<{ threadId: string }> }
+  context: { params: Promise<{ threadId: string }> },
 ): Promise<Response> {
   if (!isAdminRequest(request)) {
     return NextResponse.json({ error: "unauthorized" }, { status: 401 });
@@ -114,8 +114,30 @@ export async function GET(
   }
   const { threadId } = parsedThreadId;
 
+  const parsedScope = parseInboxThreadScope(
+    request.nextUrl.searchParams.get("scope"),
+  );
+  if (!parsedScope.ok) {
+    return NextResponse.json({ error: "invalid_scope" }, { status: 422 });
+  }
+  const campaign = request.nextUrl.searchParams.get("campaign")?.trim() || null;
+  if (campaign && (parsedScope.scope !== "outbound" || campaign.length > 160)) {
+    return NextResponse.json({ error: "invalid_campaign" }, { status: 422 });
+  }
+  const outboundMemberId =
+    request.nextUrl.searchParams.get("memberId")?.trim() || null;
+  if (
+    outboundMemberId &&
+    (parsedScope.scope !== "outbound" || !UUID_RE.test(outboundMemberId))
+  ) {
+    return NextResponse.json({ error: "invalid_member_id" }, { status: 422 });
+  }
+  const messageSearchParams = new URLSearchParams(request.nextUrl.searchParams);
+  messageSearchParams.delete("scope");
+  messageSearchParams.delete("campaign");
+  messageSearchParams.delete("memberId");
   const parsedMessageQuery = parseInboxThreadMessageQuery(
-    request.nextUrl.searchParams,
+    messageSearchParams,
     threadId,
   );
   if (!parsedMessageQuery.ok) {
@@ -157,6 +179,10 @@ export async function GET(
       contactPhoneE164: contacts.phoneE164,
       doNotContact: contacts.doNotContact,
       doNotContactReason: contacts.doNotContactReason,
+      prospectAccountId: partnerAccounts.id,
+      prospectCompany: partnerAccounts.name,
+      prospectCampaign: partnerAccounts.sourceCampaign,
+      prospectSegment: partnerAccounts.segment,
       propertyAddressLine1: properties.addressLine1,
       propertyAddressLine2: properties.addressLine2,
       propertyCity: properties.city,
@@ -167,16 +193,26 @@ export async function GET(
         select max(coalesce(cm.received_at, cm.created_at))
         from conversation_messages cm
         where cm.thread_id = ${conversationThreads.id} and cm.direction = 'inbound'
-      )`
+      )`,
     })
     .from(conversationThreads)
     .leftJoin(contacts, eq(conversationThreads.contactId, contacts.id))
+    .leftJoin(
+      partnerAccounts,
+      eq(contacts.partnerAccountId, partnerAccounts.id),
+    )
     .leftJoin(properties, eq(conversationThreads.propertyId, properties.id))
     .leftJoin(teamMembers, eq(conversationThreads.assignedTo, teamMembers.id))
     .where(
       and(
         eq(conversationThreads.id, threadId),
         genericInboxThreadScopeCondition(),
+        parsedScope.scope === "outbound"
+          ? activeOutboundProspectCondition({
+              campaign,
+              memberId: outboundMemberId,
+            })
+          : undefined,
       ),
     )
     .limit(1);
@@ -186,9 +222,13 @@ export async function GET(
   }
 
   const serviceArea = await getServiceAreaPolicy(db);
-  const normalizedPostalCode = normalizePostalCode(threadRow.propertyPostalCode ?? null);
+  const normalizedPostalCode = normalizePostalCode(
+    threadRow.propertyPostalCode ?? null,
+  );
   const outOfArea =
-    normalizedPostalCode !== null ? !isPostalCodeAllowed(normalizedPostalCode, serviceArea) : null;
+    normalizedPostalCode !== null
+      ? !isPostalCodeAllowed(normalizedPostalCode, serviceArea)
+      : null;
 
   const participantRows = await db
     .select({
@@ -204,10 +244,13 @@ export async function GET(
       contactLastName: contacts.lastName,
       contactEmail: contacts.email,
       contactPhone: contacts.phone,
-      contactPhoneE164: contacts.phoneE164
+      contactPhoneE164: contacts.phoneE164,
     })
     .from(conversationParticipants)
-    .leftJoin(teamMembers, eq(conversationParticipants.teamMemberId, teamMembers.id))
+    .leftJoin(
+      teamMembers,
+      eq(conversationParticipants.teamMemberId, teamMembers.id),
+    )
     .leftJoin(contacts, eq(conversationParticipants.contactId, contacts.id))
     .where(eq(conversationParticipants.threadId, threadId));
 
@@ -219,18 +262,22 @@ export async function GET(
     contact: row.contactId
       ? {
           id: row.contactId,
-          name: [row.contactFirstName, row.contactLastName].filter(Boolean).join(" ").trim() || "Contact",
+          name:
+            [row.contactFirstName, row.contactLastName]
+              .filter(Boolean)
+              .join(" ")
+              .trim() || "Contact",
           email: row.contactEmail ?? null,
-          phone: row.contactPhoneE164 ?? row.contactPhone ?? null
+          phone: row.contactPhoneE164 ?? row.contactPhone ?? null,
         }
       : null,
     teamMember: row.teamMemberId
       ? {
           id: row.teamMemberId,
-          name: row.teamMemberName ?? "Team"
+          name: row.teamMemberName ?? "Team",
         }
       : null,
-    createdAt: row.createdAt.toISOString()
+    createdAt: row.createdAt.toISOString(),
   }));
 
   const snapshotCondition = messageCursor
@@ -286,11 +333,17 @@ export async function GET(
       participantName: conversationParticipants.displayName,
       participantTeamName: teamMembers.name,
       participantContactFirstName: contacts.firstName,
-      participantContactLastName: contacts.lastName
+      participantContactLastName: contacts.lastName,
     })
     .from(conversationMessages)
-    .leftJoin(conversationParticipants, eq(conversationMessages.participantId, conversationParticipants.id))
-    .leftJoin(teamMembers, eq(conversationParticipants.teamMemberId, teamMembers.id))
+    .leftJoin(
+      conversationParticipants,
+      eq(conversationMessages.participantId, conversationParticipants.id),
+    )
+    .leftJoin(
+      teamMembers,
+      eq(conversationParticipants.teamMemberId, teamMembers.id),
+    )
     .leftJoin(contacts, eq(conversationParticipants.contactId, contacts.id))
     .where(
       and(
@@ -306,8 +359,7 @@ export async function GET(
     )
     .limit(messageLimit + 1);
 
-  const hasExtraInRequestedDirection =
-    fetchedMessageRows.length > messageLimit;
+  const hasExtraInRequestedDirection = fetchedMessageRows.length > messageLimit;
   const requestedMessageRows = hasExtraInRequestedDirection
     ? fetchedMessageRows.slice(0, messageLimit)
     : fetchedMessageRows;
@@ -332,13 +384,9 @@ export async function GET(
         }
       : null;
   let hasOlder =
-    messageCursor?.direction === "newer"
-      ? false
-      : hasExtraInRequestedDirection;
+    messageCursor?.direction === "newer" ? false : hasExtraInRequestedDirection;
   let hasNewer =
-    messageCursor?.direction === "newer"
-      ? hasExtraInRequestedDirection
-      : false;
+    messageCursor?.direction === "newer" ? hasExtraInRequestedDirection : false;
 
   if (messageCursor && snapshot && visibleMessageRows.length > 0) {
     if (messageCursor.direction === "older") {
@@ -407,7 +455,7 @@ export async function GET(
             status: messageDeliveryEvents.status,
             detail: messageDeliveryEvents.detail,
             provider: messageDeliveryEvents.provider,
-            occurredAt: messageDeliveryEvents.occurredAt
+            occurredAt: messageDeliveryEvents.occurredAt,
           })
           .from(messageDeliveryEvents)
           .where(inArray(messageDeliveryEvents.messageId, messageIds))
@@ -429,7 +477,10 @@ export async function GET(
     const participantName =
       row.participantName ??
       row.participantTeamName ??
-      [row.participantContactFirstName, row.participantContactLastName].filter(Boolean).join(" ").trim();
+      [row.participantContactFirstName, row.participantContactLastName]
+        .filter(Boolean)
+        .join(" ")
+        .trim();
     return {
       id: row.id,
       threadId: row.threadId,
@@ -456,12 +507,15 @@ export async function GET(
           status: event.status,
           detail: event.detail ?? null,
           provider: event.provider ?? null,
-          occurredAt: event.occurredAt.toISOString()
-        })) ?? []
+          occurredAt: event.occurredAt.toISOString(),
+        })) ?? [],
     };
   });
 
-  const contactName = [threadRow.contactFirstName, threadRow.contactLastName].filter(Boolean).join(" ").trim();
+  const contactName = [threadRow.contactFirstName, threadRow.contactLastName]
+    .filter(Boolean)
+    .join(" ")
+    .trim();
   const rawLastInbound = threadRow.lastInboundAt as unknown;
   const lastInboundIso =
     rawLastInbound instanceof Date
@@ -475,8 +529,24 @@ export async function GET(
       ok: true,
       thread: {
         id: threadRow.id,
-        partnerJob: threadRow.portalVisible && threadRow.partnerAccountId && threadRow.partnerBookingId
-          ? { accountId: threadRow.partnerAccountId, jobId: threadRow.partnerBookingId } : null,
+        partnerJob:
+          threadRow.portalVisible &&
+          threadRow.partnerAccountId &&
+          threadRow.partnerBookingId
+            ? {
+                accountId: threadRow.partnerAccountId,
+                jobId: threadRow.partnerBookingId,
+              }
+            : null,
+        prospect:
+          parsedScope.scope === "outbound" && threadRow.prospectAccountId
+            ? {
+                accountId: threadRow.prospectAccountId,
+                company: threadRow.prospectCompany ?? "Prospect company",
+                campaign: threadRow.prospectCampaign ?? null,
+                segment: threadRow.prospectSegment ?? null,
+              }
+            : null,
         status: threadRow.status,
         state: threadRow.state,
         channel: threadRow.channel,
@@ -497,9 +567,7 @@ export async function GET(
           ? threadRow.attentionHandledAt.toISOString()
           : null,
         closedReason: threadRow.closedReason ?? null,
-        closedAt: threadRow.closedAt
-          ? threadRow.closedAt.toISOString()
-          : null,
+        closedAt: threadRow.closedAt ? threadRow.closedAt.toISOString() : null,
         doNotContact: threadRow.doNotContact === true,
         doNotContactReason: threadRow.doNotContactReason ?? null,
         contact: threadRow.contactId
@@ -542,7 +610,7 @@ export async function GET(
 
 export async function PATCH(
   request: NextRequest,
-  context: { params: Promise<{ threadId: string }> }
+  context: { params: Promise<{ threadId: string }> },
 ): Promise<Response> {
   if (!isAdminRequest(request)) {
     return NextResponse.json({ error: "unauthorized" }, { status: 401 });
@@ -590,7 +658,7 @@ export async function PATCH(
     .select({
       state: conversationThreads.state,
       contactId: conversationThreads.contactId,
-      leadId: conversationThreads.leadId
+      leadId: conversationThreads.leadId,
     })
     .from(conversationThreads)
     .where(
@@ -614,12 +682,14 @@ export async function PATCH(
     updates["status"] = payload.status;
   }
   if (typeof payload.assignedTo === "string") {
-    updates["assignedTo"] = payload.assignedTo.trim().length > 0 ? payload.assignedTo.trim() : null;
+    updates["assignedTo"] =
+      payload.assignedTo.trim().length > 0 ? payload.assignedTo.trim() : null;
   } else if (payload.assignedTo === null) {
     updates["assignedTo"] = null;
   }
   if (typeof payload.subject === "string") {
-    updates["subject"] = payload.subject.trim().length > 0 ? payload.subject.trim() : null;
+    updates["subject"] =
+      payload.subject.trim().length > 0 ? payload.subject.trim() : null;
   } else if (payload.subject === null) {
     updates["subject"] = null;
   }
@@ -634,8 +704,15 @@ export async function PATCH(
     const nextState = payload.state;
     const allowBackward = payload.allowBackward === true;
 
-    if (!canTransitionConversationState(currentState, nextState, { allowBackward })) {
-      return NextResponse.json({ error: "invalid_state_transition" }, { status: 400 });
+    if (
+      !canTransitionConversationState(currentState, nextState, {
+        allowBackward,
+      })
+    ) {
+      return NextResponse.json(
+        { error: "invalid_state_transition" },
+        { status: 400 },
+      );
     }
 
     if (nextState !== currentState) {
@@ -671,7 +748,7 @@ export async function PATCH(
       // Match the final provider-dispatch lock order so a DNC choice committed
       // before dispatch begins is authoritative for every queued message.
       await tx.execute(
-        sql`SELECT pg_advisory_xact_lock(hashtextextended(${existingThread.contactId}, 0))`
+        sql`SELECT pg_advisory_xact_lock(hashtextextended(${existingThread.contactId}, 0))`,
       );
     }
     const [updatedThread] = await tx
@@ -695,15 +772,15 @@ export async function PATCH(
           stage: "lost",
           notes: "Closed from mobile inbox as lost.",
           createdAt: now,
-          updatedAt: now
+          updatedAt: now,
         })
         .onConflictDoUpdate({
           target: crmPipeline.contactId,
           set: {
             stage: "lost",
             notes: "Closed from mobile inbox as lost.",
-            updatedAt: now
-          }
+            updatedAt: now,
+          },
         });
     }
 
@@ -715,10 +792,11 @@ export async function PATCH(
           doNotContactAt: now,
           doNotContactBy: actor.id ?? null,
           doNotContactReason:
-            typeof payload.doNotContactReason === "string" && payload.doNotContactReason.trim().length > 0
+            typeof payload.doNotContactReason === "string" &&
+            payload.doNotContactReason.trim().length > 0
               ? payload.doNotContactReason.trim()
               : "Marked Do Not Contact from mobile inbox.",
-          updatedAt: now
+          updatedAt: now,
         })
         .where(eq(contacts.id, existingThread.contactId));
     }
@@ -733,7 +811,7 @@ export async function PATCH(
           nextFollowupAt: null,
           pausedAt: now,
           pausedBy: actor.id ?? null,
-          updatedAt: now
+          updatedAt: now,
         })
         .where(eq(leadAutomationStates.leadId, existingThread.leadId));
     }
@@ -750,7 +828,11 @@ export async function PATCH(
     action: "thread.updated",
     entityType: "conversation_thread",
     entityId: threadId,
-    meta: { updates, previousState: currentState, closeReason: requestedCloseReason }
+    meta: {
+      updates,
+      previousState: currentState,
+      closeReason: requestedCloseReason,
+    },
   });
 
   return NextResponse.json({ ok: true });
