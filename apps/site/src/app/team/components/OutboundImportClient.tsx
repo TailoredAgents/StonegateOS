@@ -16,7 +16,7 @@ const REVIEW_PAGE_SIZE = 50;
 const MAX_CSV_BYTES = 2 * 1024 * 1024;
 const CSV_TEMPLATE =
   "company,company_id,location_id,contact_name,title,email,phone,website,domain,industry,company_size,linkedin_url,city,state,zip,status,priority,next_action,follow_up_date,email_status,source_list_name,notes\r\n";
-type ReviewFilter = "all" | "accepted" | "excluded" | "unchanged";
+type ReviewFilter = "all" | "accepted" | "warnings" | "excluded" | "unchanged";
 
 function newImportKey(): string {
   return `outbound-import.${crypto.randomUUID()}`;
@@ -317,6 +317,11 @@ export function OutboundImportClient(props: {
       return row.status === "create" || row.status === "update";
     if (reviewFilter === "excluded")
       return ["invalid", "duplicate", "conflict"].includes(row.status);
+    if (reviewFilter === "warnings")
+      return (
+        (row.status === "create" || row.status === "update") &&
+        (row.warnings?.length ?? 0) > 0
+      );
     if (reviewFilter === "unchanged") return row.status === "unchanged";
     return true;
   });
@@ -331,6 +336,12 @@ export function OutboundImportClient(props: {
     reviewStart + REVIEW_PAGE_SIZE,
   );
   const report = success?.data.exclusionReport ?? preview?.exclusionReport;
+  const warningRows =
+    preview?.rows.filter(
+      (row) =>
+        (row.status === "create" || row.status === "update") &&
+        (row.warnings?.length ?? 0) > 0,
+    ).length ?? 0;
 
   return (
     <div className="space-y-5">
@@ -432,7 +443,9 @@ export function OutboundImportClient(props: {
               date, email status, source list name, and notes. Column order does
               not matter, and unused optional columns may be left blank. For a
               chain, reuse its company ID and give every facility a unique
-              location ID so shared domains never combine locations.
+              location ID so shared domains never combine locations. Invalid
+              optional contact values and follow-up dates are ignored with a
+              visible warning when another usable contact method remains.
             </p>
           </details>
         </div>
@@ -593,6 +606,13 @@ export function OutboundImportClient(props: {
               updated for {success.data.assignee.name}. No outreach was sent by
               this import.
             </p>
+            {warningRows > 0 ? (
+              <p className="mt-1">
+                {warningRows} imported{" "}
+                {warningRows === 1 ? "row had" : "rows had"} non-blocking
+                warnings that remain visible in this review.
+              </p>
+            ) : null}
             <details className="mt-2">
               <summary className="min-h-[44px] cursor-pointer content-center font-medium">
                 Import receipt and details
@@ -654,12 +674,20 @@ export function OutboundImportClient(props: {
             to import. {preview.counts.total - preview.counts.accepted} will be
             excluded and remain unchanged.
           </p>
+          {warningRows > 0 ? (
+            <p className="rounded-xl border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">
+              {warningRows} ready {warningRows === 1 ? "row has" : "rows have"}{" "}
+              non-blocking warnings. Those rows can still be imported; review
+              the ignored values below.
+            </p>
+          ) : null}
           <dl className="grid grid-cols-2 gap-x-4 gap-y-3 border-y border-[color:var(--team-border)] py-4 sm:grid-cols-4">
             {[
               ["Ready", preview.counts.accepted],
               ["New contacts", preview.counts.create],
               ["Updates", preview.counts.update],
               ["No changes", preview.counts.unchanged],
+              ["Warnings", warningRows],
               ["Duplicates", preview.counts.duplicate],
               ["Conflicts", preview.counts.conflict],
               ["Invalid", preview.counts.invalid],
@@ -696,6 +724,7 @@ export function OutboundImportClient(props: {
               <option value="accepted">
                 Ready to import ({preview.counts.accepted})
               </option>
+              <option value="warnings">Warnings ({warningRows})</option>
               <option value="excluded">
                 Needs attention (
                 {preview.counts.invalid +
@@ -753,6 +782,13 @@ export function OutboundImportClient(props: {
                         .join(", ")
                     : (row.reason ?? "No changes")}
                 </p>
+                {(row.warnings?.length ?? 0) > 0 ? (
+                  <ul className="mt-2 list-disc space-y-1 pl-5 text-xs text-amber-800">
+                    {row.warnings?.map((warning) => (
+                      <li key={warning}>{warning}</li>
+                    ))}
+                  </ul>
+                ) : null}
               </article>
             ))}
           </div>
@@ -831,6 +867,13 @@ export function OutboundImportClient(props: {
                             .map((change) => PLANNED_CHANGE_LABELS[change])
                             .join(", ")
                         : (row.reason ?? "—")}
+                      {(row.warnings?.length ?? 0) > 0 ? (
+                        <ul className="mt-2 list-disc space-y-1 pl-4 text-amber-800">
+                          {row.warnings?.map((warning) => (
+                            <li key={warning}>{warning}</li>
+                          ))}
+                        </ul>
+                      ) : null}
                     </td>
                   </tr>
                 ))}

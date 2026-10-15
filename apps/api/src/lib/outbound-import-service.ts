@@ -388,7 +388,8 @@ function hasImportedHistory(row: NormalizedOutboundImportRow): boolean {
       row.followUpAt ||
       row.emailStatus ||
       row.companyExternalId ||
-      row.locationExternalId,
+      row.locationExternalId ||
+      row.warnings.length > 0,
   );
 }
 
@@ -406,6 +407,7 @@ function researchNotes(row: NormalizedOutboundImportRow): string | null {
     row.nextAction ? `Next action: ${row.nextAction}` : null,
     row.followUpAt ? `Follow-up: ${row.followUpAt}` : null,
     row.emailStatus ? `Email status: ${row.emailStatus}` : null,
+    ...row.warnings.map((warning) => `Import warning: ${warning}`),
     row.notes,
   ].filter((value): value is string => Boolean(value));
   return values.length > 0 ? Array.from(new Set(values)).join(" | ") : null;
@@ -431,6 +433,7 @@ function contactNoteBody(row: NormalizedOutboundImportRow): string | null {
     row.nextAction ? `Next action: ${row.nextAction}` : null,
     row.followUpAt ? `Follow-up: ${row.followUpAt}` : null,
     row.emailStatus ? `Email status: ${row.emailStatus}` : null,
+    ...row.warnings.map((warning) => `Import warning: ${warning}`),
   ].filter((value): value is string => Boolean(value));
   return values.length > 0 ? values.join("\n") : null;
 }
@@ -786,6 +789,7 @@ export async function prepareOutboundImportPreview(
           nextAction: row.nextAction,
           followUpAt: row.followUpAt,
           emailStatus: row.emailStatus,
+          warnings: row.warnings,
           plannedChanges: [],
         },
         existing: null,
@@ -820,6 +824,7 @@ export async function prepareOutboundImportPreview(
           nextAction: row.nextAction,
           followUpAt: row.followUpAt,
           emailStatus: row.emailStatus,
+          warnings: row.warnings,
           plannedChanges: [],
         },
         existing: match.existing,
@@ -866,6 +871,7 @@ export async function prepareOutboundImportPreview(
           nextAction: row.nextAction,
           followUpAt: row.followUpAt,
           emailStatus: row.emailStatus,
+          warnings: row.warnings,
           plannedChanges: [],
         },
         existing,
@@ -971,6 +977,7 @@ export async function prepareOutboundImportPreview(
         nextAction: row.nextAction,
         followUpAt: row.followUpAt,
         emailStatus: row.emailStatus,
+        warnings: row.warnings,
         plannedChanges,
       },
       existing,

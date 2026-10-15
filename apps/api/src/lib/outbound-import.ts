@@ -80,6 +80,7 @@ export type NormalizedOutboundImportRow = Record<
   phoneE164: string | null;
   preflightStatus: "candidate" | "invalid" | "duplicate";
   reason: string | null;
+  warnings: string[];
   duplicateOfRow: number | null;
 };
 
@@ -110,6 +111,7 @@ export type OutboundImportPublicRow = {
   nextAction?: string | null;
   followUpAt?: string | null;
   emailStatus?: string | null;
+  warnings: string[];
   plannedChanges: OutboundImportPlannedChange[];
 };
 
@@ -601,6 +603,65 @@ function applyConnectedDuplicateClusters(
   });
 }
 
+function companyGroupKey(row: NormalizedOutboundImportRow): string | null {
+  if (row.companyExternalId) {
+    return `id:${row.companyExternalId.toLowerCase()}`;
+  }
+  if (!row.company) return null;
+  const normalized = row.company
+    .normalize("NFKC")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/gu, " ")
+    .trim();
+  return normalized ? `name:${normalized}` : null;
+}
+
+function locationSignature(row: NormalizedOutboundImportRow): string | null {
+  const parts = [row.city, row.state, row.zip]
+    .map((value) => value?.trim().toLowerCase() ?? "")
+    .filter(Boolean);
+  return parts.length > 0 ? parts.join("|") : null;
+}
+
+function addMultiLocationWarnings(
+  rows: readonly NormalizedOutboundImportRow[],
+): NormalizedOutboundImportRow[] {
+  const groups = new Map<string, NormalizedOutboundImportRow[]>();
+  for (const row of rows) {
+    if (row.preflightStatus !== "candidate") continue;
+    const key = companyGroupKey(row);
+    if (!key) continue;
+    const group = groups.get(key) ?? [];
+    group.push(row);
+    groups.set(key, group);
+  }
+
+  const warningRows = new Set<number>();
+  for (const group of groups.values()) {
+    const locations = new Set(
+      group
+        .map(locationSignature)
+        .filter((value): value is string => Boolean(value)),
+    );
+    if (locations.size < 2) continue;
+    for (const row of group) {
+      if (!row.locationExternalId) warningRows.add(row.rowNumber);
+    }
+  }
+
+  return rows.map((row) =>
+    warningRows.has(row.rowNumber)
+      ? {
+          ...row,
+          warnings: [
+            ...row.warnings,
+            "This company appears at multiple locations in this file. The row will import, but add a unique location_id before future repeat imports.",
+          ],
+        }
+      : row,
+  );
+}
+
 function parseRows(records: CsvRecord[]): {
   rows: NormalizedOutboundImportRow[];
   ignoredHeaders: string[];
@@ -655,6 +716,7 @@ function parseRows(records: CsvRecord[]): {
   for (const record of dataRecords) {
     const values = emptyCanonicalRow();
     let invalidReason: string | null = null;
+    const warnings: string[] = [];
     const extraCells = record.cells.slice(canonicalByColumn.length);
     if (extraCells.some((cell) => cell.trim().length > 0)) {
       invalidReason = "The row contains more values than the header row.";
@@ -675,14 +737,36 @@ function parseRows(records: CsvRecord[]): {
 
     const normalizedEmailResult = normalizeEmail(values.email);
     const normalizedPhoneResult = normalizePhone(values.phone);
-    if (!normalizedEmailResult.valid) {
-      invalidReason ??= "Email is invalid.";
-    }
-    if (!normalizedPhoneResult.valid) {
-      invalidReason ??= "Phone is invalid.";
-    }
-    if (!normalizedEmailResult.value && !normalizedPhoneResult.value) {
-      invalidReason ??= "A valid email or phone is required.";
+    const emailNormalized = normalizedEmailResult.valid
+      ? normalizedEmailResult.value
+      : null;
+    const phoneE164 = normalizedPhoneResult.valid
+      ? normalizedPhoneResult.value
+      : null;
+    const rawEmail = values.email;
+    const rawPhone = values.phone;
+    if (!normalizedEmailResult.valid) values.email = null;
+    if (!normalizedPhoneResult.valid) values.phone = null;
+    if (!emailNormalized && !phoneE164) {
+      invalidReason ??=
+        !normalizedEmailResult.valid && !normalizedPhoneResult.valid
+          ? "Email and phone are invalid; a usable contact method is required."
+          : !normalizedEmailResult.valid
+            ? "Email is invalid and no valid phone is available."
+            : !normalizedPhoneResult.valid
+              ? "Phone is invalid and no valid email is available."
+              : "A valid email or phone is required.";
+    } else {
+      if (!normalizedEmailResult.valid && rawEmail) {
+        warnings.push(
+          `Email "${rawEmail}" was ignored because it is invalid; the valid phone will be used.`,
+        );
+      }
+      if (!normalizedPhoneResult.valid && rawPhone) {
+        warnings.push(
+          `Phone "${rawPhone}" was ignored because it is invalid; the valid email will be used.`,
+        );
+      }
     }
     if (values.followUpAt) {
       const rawFollowUp = values.followUpAt;
@@ -709,8 +793,10 @@ function parseRows(records: CsvRecord[]): {
         }
       }
       if (!parsedFollowUp.isValid) {
-        invalidReason ??=
-          "Follow-up date must be YYYY-MM-DD or a valid date and time.";
+        warnings.push(
+          `Follow-up date "${rawFollowUp}" was ignored. Use YYYY-MM-DD or a valid date and time.`,
+        );
+        values.followUpAt = null;
       } else {
         values.followUpAt = parsedFollowUp.toISO();
       }
@@ -719,15 +805,16 @@ function parseRows(records: CsvRecord[]): {
     rows.push({
       ...values,
       rowNumber: record.rowNumber,
-      emailNormalized: normalizedEmailResult.value,
-      phoneE164: normalizedPhoneResult.value,
+      emailNormalized,
+      phoneE164,
       preflightStatus: invalidReason ? "invalid" : "candidate",
       reason: invalidReason,
+      warnings,
       duplicateOfRow: null,
     });
   }
   return {
-    rows: applyConnectedDuplicateClusters(rows),
+    rows: addMultiLocationWarnings(applyConnectedDuplicateClusters(rows)),
     ignoredHeaders: Array.from(new Set(ignoredHeaders)),
   };
 }
@@ -945,6 +1032,7 @@ export function hashOutboundImportPreview(input: {
         row.existingContactId,
         row.email,
         row.phone,
+        row.warnings,
         row.plannedChanges,
       ]),
     }),

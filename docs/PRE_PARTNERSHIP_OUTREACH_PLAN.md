@@ -12,7 +12,7 @@
 | Team navigation          | Restored as the only visible Sales workspace; still gated by `outbound.read`        |
 | Phase 1                  | Complete locally: guided queue, continue-to-next outcomes, and full CSV guidance    |
 | Phase 2                  | Complete locally: active-prospect Inbox and recorded call/SMS/email/reply counts    |
-| Focused verification     | 16 outbound suites/168 tests, 44 Inbox tests, and 22 browser checks passing locally |
+| Focused verification     | 16 outbound suites/170 tests, 44 Inbox tests, and 22 browser checks passing locally |
 | Production certification | Controlled smoke test still required                                                |
 | Recommended next step    | Verify the complete flow with controlled identities, then refine conversion handoff |
 
@@ -51,6 +51,7 @@ Imported records remain isolated operationally by their outbound campaign/source
 | Safe preview           | Preview -> Review -> explicit `IMPORT N` confirmation                                                                                                                         | Implemented                            |
 | Deduplication          | Normalized email/phone matching, within-file duplicate clusters, archived/DNC/conflict handling                                                                               | Implemented                            |
 | Import safety          | Exact preview hash, idempotency, transaction, advisory/row locks, complete exclusion CSV                                                                                      | Implemented                            |
+| Recoverable warnings   | A bad secondary email/phone or follow-up date is ignored with a visible warning when the row still has a usable contact method                                                | Implemented locally                    |
 | Automatic setup        | Creates or updates contact, prospect status, partner account link, pipeline row, note, assignment, and outbound task                                                          | Implemented                            |
 | Historical carryover   | Prior outreach status, priority, next action, follow-up date, email status, and append-only notes are retained during import                                                  | Implemented locally                    |
 | Repeat-import identity | Stable location ID, then stable company ID, then exact company/location matching; public email domains are never company identities                                           | Implemented locally                    |
@@ -178,6 +179,7 @@ Acceptance gate: the owner can understand the status of the 80-lead effort witho
 - Notes: imported notes are appended as auditable contact history and added to account research when they are new; existing notes and conversations are never replaced.
 - Domain safety: Gmail, Outlook, Yahoo, iCloud, and other public mailbox domains are ignored as company identifiers. A business domain is only a final fallback when stronger company/location identity is unavailable.
 - Historical email status remains visibly labeled as imported history; it does not fabricate a provider delivery receipt or count as a newly sent email.
+- Recoverable import issues are warnings, not exclusions: a valid phone can rescue an invalid email, a valid email can rescue an invalid phone, and an invalid follow-up date is retained in import history but not scheduled. Identity conflicts, DNC, true duplicates, and rows with no usable contact method remain blocked.
 - Assignment: choose one accountable owner during preview; reassign through supported bulk controls if needed.
 - Initial state: new untouched prospects receive an unstarted outbound task; rows carrying prior outreach resume from their imported status and follow-up.
 - Cadence: start only after the first real contact attempt.

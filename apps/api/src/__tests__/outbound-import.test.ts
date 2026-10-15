@@ -93,6 +93,63 @@ describe("Outbound import CSV normalization", () => {
     });
   });
 
+  it("keeps usable leads when one contact field or the follow-up date is invalid", () => {
+    const parsed = parseOutboundImportPayload(
+      payload(
+        [
+          "company,email,phone,follow_up_date",
+          "Phone lead,not-an-email,4045550101,not-a-date",
+          "Email lead,jane@example.com,not-a-phone,2026-10-20",
+          "Blocked lead,also-invalid,still-invalid,",
+        ].join("\r\n"),
+      ),
+    );
+
+    expect(parsed.rows[0]).toMatchObject({
+      preflightStatus: "candidate",
+      email: null,
+      emailNormalized: null,
+      phoneE164: "+14045550101",
+      followUpAt: null,
+    });
+    expect(parsed.rows[0]?.warnings).toEqual([
+      expect.stringContaining('Email "not-an-email" was ignored'),
+      expect.stringContaining('Follow-up date "not-a-date" was ignored'),
+    ]);
+    expect(parsed.rows[1]).toMatchObject({
+      preflightStatus: "candidate",
+      emailNormalized: "jane@example.com",
+      phone: null,
+      phoneE164: null,
+      followUpAt: "2026-10-20T13:00:00.000Z",
+    });
+    expect(parsed.rows[1]?.warnings).toEqual([
+      expect.stringContaining('Phone "not-a-phone" was ignored'),
+    ]);
+    expect(parsed.rows[2]).toMatchObject({
+      preflightStatus: "invalid",
+      reason:
+        "Email and phone are invalid; a usable contact method is required.",
+    });
+  });
+
+  it("warns when repeated companies have distinct locations but no location IDs", () => {
+    const parsed = parseOutboundImportPayload(
+      payload(
+        [
+          "company,company_id,location_id,email,city,state",
+          "Extra Space Storage,extra-space,,one@example.com,Atlanta,GA",
+          "Extra Space Storage,extra-space,facility-2,two@example.com,Decatur,GA",
+        ].join("\r\n"),
+      ),
+    );
+
+    expect(parsed.rows[0]?.warnings).toEqual([
+      expect.stringContaining("appears at multiple locations"),
+    ]);
+    expect(parsed.rows[1]?.warnings).toEqual([]);
+  });
+
   it("never treats a public mailbox provider as a company domain", () => {
     expect(normalizePartnerAccountDomain("manager@gmail.com")).toBeNull();
     expect(
@@ -372,6 +429,7 @@ describe("Outbound identity and report safety", () => {
         contactName: "@person",
         email: null,
         phone: null,
+        warnings: [],
         plannedChanges: [],
       },
       {
@@ -384,6 +442,7 @@ describe("Outbound identity and report safety", () => {
         contactName: null,
         email: "safe@example.com",
         phone: null,
+        warnings: [],
         plannedChanges: [],
       },
     ];
@@ -407,6 +466,7 @@ describe("Outbound identity and report safety", () => {
       contactName: "Jane",
       email: "jane@example.com",
       phone: null,
+      warnings: [],
       plannedChanges: ["contact.create", "pipeline.create"],
     };
     const common = {
@@ -422,6 +482,12 @@ describe("Outbound identity and report safety", () => {
             plannedChanges: ["contact.create", "task.create"],
           },
         ],
+      }),
+    );
+    expect(hashOutboundImportPreview({ ...common, rows: [row] })).not.toBe(
+      hashOutboundImportPreview({
+        ...common,
+        rows: [{ ...row, warnings: ["Email was ignored."] }],
       }),
     );
   });

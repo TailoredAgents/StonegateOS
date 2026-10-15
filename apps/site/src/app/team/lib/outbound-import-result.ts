@@ -58,6 +58,7 @@ export type OutboundImportRow = {
   nextAction?: string | null;
   followUpAt?: string | null;
   emailStatus?: string | null;
+  warnings?: string[];
   plannedChanges: OutboundImportPlannedChange[];
 };
 
@@ -251,6 +252,15 @@ function parseRow(value: unknown): OutboundImportRow | null {
       !nullableString(value["followUpAt"])) ||
     (value["emailStatus"] !== undefined &&
       !nullableString(value["emailStatus"])) ||
+    (value["warnings"] !== undefined &&
+      (!Array.isArray(value["warnings"]) ||
+        value["warnings"].length > 10 ||
+        !value["warnings"].every(
+          (warning) =>
+            typeof warning === "string" &&
+            warning.length > 0 &&
+            warning.length <= 1_000,
+        ))) ||
     !Array.isArray(value["plannedChanges"]) ||
     !value["plannedChanges"].every(
       (change) =>

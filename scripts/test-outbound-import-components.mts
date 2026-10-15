@@ -48,6 +48,8 @@ const preview = {
     contactName: `Person ${index + 1}`,
     email: `person${index}@example.test`,
     phone: null,
+    warnings:
+      index === 0 ? ["Follow-up date was ignored because it was invalid."] : [],
     plannedChanges: index < 51 ? ["contact.create", "task.create"] : [],
   })),
 };
@@ -224,6 +226,17 @@ for (const engine of [chromium, webkit]) {
         await h.page.getByRole("button", { name: "Next rows" }).count(),
         0,
       );
+      await h.page.getByLabel("Show contacts").selectOption("warnings");
+      await expect(
+        h.page.getByText("Showing 1–1 of 1 matching rows."),
+      ).toBeVisible();
+      await expect(
+        h.page
+          .getByText("Follow-up date was ignored because it was invalid.", {
+            exact: true,
+          })
+          .first(),
+      ).toBeVisible();
       await h.page.getByLabel("Show contacts").selectOption("accepted");
       await expect(
         h.page.getByText("Showing 1–50 of 51 matching rows."),
