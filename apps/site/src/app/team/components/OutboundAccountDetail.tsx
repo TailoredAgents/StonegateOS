@@ -76,7 +76,7 @@ export function OutboundAccountDetail({
         </div>
         <a
           href={closeHref}
-          className={`${teamButtonClass("secondary")} shrink-0`}
+          className={`${teamButtonClass("secondary", "sm")} shrink-0`}
           aria-label="Close company details"
         >
           Close
@@ -89,12 +89,18 @@ export function OutboundAccountDetail({
       </div>
 
       {communication ? (
-        <div className="mt-5 border-t border-[color:var(--team-border)] pt-4">
+        <div className="mt-4">
           <OutboundCommunicationPanel item={item} workspace={communication} />
         </div>
       ) : null}
 
-      <div className="mt-5 border-t border-[color:var(--team-border)] pt-4">
+      <div
+        className={
+          communication
+            ? "mt-4"
+            : "mt-5 border-t border-[color:var(--team-border)] pt-4"
+        }
+      >
         <OutboundContactActions
           key={
             communication

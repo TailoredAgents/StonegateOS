@@ -5,10 +5,12 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
 import { chromium, expect, webkit, type BrowserType } from "@playwright/test";
-import { resolveOutboundContactContext } from "../apps/site/src/app/team/outbound-detail";
 
 const repo = fileURLToPath(new URL("../", import.meta.url)).replace(/\/$/u, "");
 const require = createRequire(`${repo}/package.json`);
+const { resolveOutboundContactContext } = require(
+  `${repo}/apps/site/src/app/team/outbound-detail.ts`,
+) as typeof import("../apps/site/src/app/team/outbound-detail");
 const { build } = createRequire(require.resolve("tsx"))("esbuild");
 const siteRequire = createRequire(`${repo}/apps/site/package.json`);
 const tailwindConfig = siteRequire(
@@ -250,6 +252,9 @@ async function harness(engine: BrowserType, width: number, readOnly = false) {
                       "draftOutboundFirstTouchAction",
                       "draftOutboundFollowupAction",
                       "openContactThreadAction",
+                      "prepareInboxMessageAction",
+                      "retryFailedMessageAction",
+                      "sendPreparedInboxMessageAction",
                       "setOutboundDispositionAction",
                       "startContactCallAction",
                     ]

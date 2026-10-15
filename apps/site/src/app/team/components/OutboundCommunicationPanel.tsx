@@ -83,7 +83,7 @@ export function OutboundCommunicationPanel({
     <section
       id="outbound-communication"
       aria-labelledby="outbound-communication-title"
-      className="scroll-mt-24 overflow-hidden rounded-2xl border border-[color:var(--team-border)] bg-[color:var(--team-elevated)] shadow-[0_10px_28px_var(--team-card-shadow)]"
+      className="scroll-mt-24 overflow-hidden rounded-xl border border-[color:var(--team-border-strong)] bg-[color:var(--team-elevated)]"
     >
       <header className="border-b border-[color:var(--team-border)] bg-[color:var(--team-panel-alt)] px-4 py-3">
         <div className="flex flex-wrap items-start justify-between gap-3">
@@ -147,7 +147,7 @@ export function OutboundCommunicationPanel({
       />
 
       {!outreachBlocked ? (
-        <p className="border-t border-[color:var(--team-border)] bg-[color:var(--team-surface-muted)] px-4 py-2.5 text-xs text-[color:var(--team-text-soft)]">
+        <p className="border-t border-[color:var(--team-border)] bg-[color:var(--team-surface-muted)] px-4 py-2.5 text-xs text-[color:var(--team-text-muted)]">
           Delivered messages and confirmed calls update the outreach checks
           automatically. Record the outcome below to schedule the next step.
         </p>
@@ -194,9 +194,9 @@ function OutboundChannelPanel({
     canSendMessages && !outreachBlocked && !conversation?.error;
 
   return (
-    <div className="overflow-hidden rounded-2xl border border-[color:var(--team-border)] bg-[color:var(--team-surface)] shadow-sm">
+    <div className="overflow-hidden rounded-xl border border-[color:var(--team-border)] bg-[color:var(--team-surface)]">
       <div className="flex flex-wrap items-center justify-between gap-2 border-b border-[color:var(--team-border)] px-3 py-2">
-        <p className="min-w-0 truncate text-xs text-[color:var(--team-text-soft)]">
+        <p className="min-w-0 truncate text-xs text-[color:var(--team-text-muted)]">
           {destination}
         </p>
         {hasOlderMessages && fullInboxHref ? (

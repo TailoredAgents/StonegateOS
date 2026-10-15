@@ -37,6 +37,10 @@ conversations.
    delivery failures, full-Inbox handoff, and responsive layout.
 5. Run focused type, lint, contract, and cross-browser component checks before
    committing and pushing.
+6. Complete a desktop visual pass without changing the established mobile
+   workflow: contain the queue and company detail in a two-pane workspace,
+   tighten filtering controls, strengthen row hierarchy and status color, and
+   reduce nested-card noise around communication and outcome controls.
 
 ## Acceptance criteria
 
@@ -70,6 +74,15 @@ conversations.
 - Refined the visual hierarchy with channel icons, a clear active state,
   compact conversation headers, a smaller empty-history area, and an in-card
   call result notice.
+- Reworked the desktop Work Queue into a bounded split workspace with
+  independently scrolling prospect and company panes. Mobile keeps its
+  existing stacked layout and touch target sizing.
+- Consolidated the queue summary and filters, made prospect rows easier to
+  scan with semantic status chips, and gave calls, texts, emails, and replies
+  distinct activity colors in both light and dark themes.
+- Reduced duplicate dividers, heavy shadows, and oversized card radii in the
+  selected-company workspace while leaving all operational actions and safety
+  checks intact.
 
 ## Verification
 
@@ -77,10 +90,9 @@ conversations.
 - Focused site lint: passed.
 - Outbound test suite: 171 passed.
 - Inbox loader/composer/workspace suite: 44 passed.
-- Partner navigation and responsive browser suite: 17 passed across Chromium
-  and WebKit.
-- Inline communication interaction suite: 6 passed across Chromium and WebKit
-  at 320px and 1440px widths, including draft retention, URL state, no page
-  navigation, call feedback, overflow, and Do Not Contact controls.
+- Outbound browser/component suite: 28 passed across Chromium and WebKit,
+  covering 320px through 1440px layouts, accessibility, permission boundaries,
+  import recovery, draft retention, URL state, in-place communication, call
+  feedback, overflow, and Do Not Contact controls.
 - Live signed-in browser review was unavailable in this workspace, so final
   production visual confirmation remains a post-deploy check.

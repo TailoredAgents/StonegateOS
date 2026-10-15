@@ -9,6 +9,7 @@ import {
   loadInboxList,
   type InboxInput,
 } from "../inbox-loader";
+import { outboundOutcomeLabel } from "../outbound-detail";
 import {
   buildOutboundCommunicationHref,
   buildOutboundHref,
@@ -61,6 +62,18 @@ function dueBadgeClass(item: OutboundQueueItem) {
   return "bg-[color:var(--team-surface-muted)] text-[color:var(--team-text-muted)]";
 }
 
+function outcomeBadgeClass(value: string | null) {
+  if (value === "partner" || value === "connected")
+    return "border-[color:var(--team-success-border)] bg-[color:var(--team-success-surface)] text-[color:var(--team-success-text)]";
+  if (value === "callback_requested")
+    return "border-[color:var(--team-warning-border)] bg-[color:var(--team-warning-surface)] text-[color:var(--team-warning-text)]";
+  if (value === "email_sent")
+    return "border-[color:var(--team-info-border)] bg-[color:var(--team-info-surface)] text-[color:var(--team-info-text)]";
+  if (value === "not_interested" || value === "dnc")
+    return "border-[color:var(--team-danger-border)] bg-[color:var(--team-danger-surface)] text-[color:var(--team-danger-text)]";
+  return "border-[color:var(--team-border)] bg-[color:var(--team-surface-muted)] text-[color:var(--team-text-muted)]";
+}
+
 function OutboundHeader({
   memberId,
   filters,
@@ -80,7 +93,7 @@ function OutboundHeader({
 }) {
   return (
     <header
-      className={`${PANEL} space-y-4 border-t-4 border-t-[color:var(--team-brand-green)] p-4 sm:p-5`}
+      className={`${PANEL} space-y-3 border-t-4 border-t-[color:var(--team-brand-green)] p-4`}
     >
       <div className="flex flex-wrap items-start justify-between gap-4">
         <div>
@@ -137,7 +150,7 @@ function OutboundHeader({
               key={link.label}
               href={link.href}
               aria-current={link.active ? "page" : undefined}
-              className={`inline-flex min-h-11 items-center rounded-xl px-4 py-2 text-sm font-semibold ${TEAM_FOCUS_RING} ${link.active ? "bg-[color:var(--team-selection)] text-[color:var(--team-brand-green-strong)]" : `${MUTED} hover:bg-[color:var(--team-surface-muted)]`}`}
+              className={`inline-flex min-h-11 items-center rounded-xl px-4 py-2 text-sm font-semibold lg:min-h-10 ${TEAM_FOCUS_RING} ${link.active ? "bg-[color:var(--team-selection)] text-[color:var(--team-brand-green-strong)]" : `${MUTED} hover:bg-[color:var(--team-surface-muted)]`}`}
             >
               {link.label}
             </a>
@@ -679,155 +692,161 @@ export async function OutboundSection({
           reassigning accounts is temporarily unavailable.
         </p>
       ) : null}
-      <div className="flex flex-wrap items-center justify-between gap-2 text-sm">
-        <p>
-          {owner ? (
-            <>
-              <span className="font-semibold">{owner}’s</span> prospects
-            </>
-          ) : (
-            "Assigned prospects"
-          )}{" "}
-          <span className={MUTED}>
-            · {queue.total} matching{" "}
-            {queue.total === 1 ? "account" : "accounts"}
-          </span>
-        </p>
-        <div className="flex flex-wrap gap-2">
-          {!selected && firstWorkableProspect ? (
-            <a
-              href={`${prospectHref(firstWorkableProspect)}#outbound-account`}
-              className={teamButtonClass("primary", "sm")}
-            >
-              Work next prospect
-            </a>
-          ) : null}
-          <a
-            href={buildOutboundHref({
-              memberId: resolvedMemberId,
-              filters,
-              patch: { cursor: "", direction: "" },
-            })}
-            className={`inline-flex min-h-11 items-center rounded-lg px-3 font-semibold ${TEAM_FOCUS_RING}`}
-          >
-            Refresh queue
-          </a>
-        </div>
-      </div>
-      <div className={`${PANEL} p-4`}>
-        <nav
-          aria-label="Follow-up shortcuts"
-          className="mb-4 flex flex-wrap gap-2"
-        >
-          {quickFilters.map((shortcut) => {
-            const active =
-              (filters.due ?? "") === shortcut.due &&
-              (filters.disposition ?? "") === shortcut.disposition;
-            return (
+      <div className={`${PANEL} overflow-hidden`}>
+        <div className="flex flex-wrap items-center justify-between gap-2 px-4 py-3 text-sm">
+          <p>
+            {owner ? (
+              <>
+                <span className="font-semibold">{owner}’s</span> prospects
+              </>
+            ) : (
+              "Assigned prospects"
+            )}{" "}
+            <span className={MUTED}>
+              · {queue.total} matching{" "}
+              {queue.total === 1 ? "account" : "accounts"}
+            </span>
+          </p>
+          <div className="flex flex-wrap gap-2">
+            {!selected && firstWorkableProspect ? (
               <a
-                key={shortcut.label}
-                aria-current={active ? "page" : undefined}
-                href={buildOutboundFilterHref({
-                  memberId: resolvedMemberId,
-                  filters,
-                  patch: shortcut,
-                })}
-                className={`inline-flex min-h-11 items-center rounded-xl border px-3 py-2 text-sm font-medium ${TEAM_FOCUS_RING} ${active ? "border-[color:var(--team-control-hover-border)] bg-[color:var(--team-selection)] text-[color:var(--team-brand-green-strong)]" : "border-[color:var(--team-border)] hover:bg-[color:var(--team-surface-muted)]"}`}
+                href={`${prospectHref(firstWorkableProspect)}#outbound-account`}
+                className={teamButtonClass("primary", "sm")}
               >
-                {shortcut.label}
+                Work next prospect
               </a>
-            );
-          })}
-        </nav>
-        <form method="get" action="/team/sales/outbound" className="space-y-3">
-          <input type="hidden" name="out_due" value={filters.due ?? ""} />
-          <div className="grid items-end gap-3 sm:grid-cols-[minmax(0,1fr)_minmax(140px,220px)_auto]">
-            <label className="grid min-w-0 gap-1 text-sm font-medium">
-              Find a business or contact
-              <input
-                type="search"
-                name="out_q"
-                defaultValue={filters.q ?? ""}
-                placeholder="Company, name, phone or email"
-                maxLength={200}
-                className={FIELD}
-              />
-            </label>
-            <label className="grid min-w-0 gap-1 text-sm font-medium">
-              Assigned to
-              <select
-                name="memberId"
-                defaultValue={resolvedMemberId}
-                className={FIELD}
-              >
-                {!members.some((member) => member.id === resolvedMemberId) ? (
-                  <option value={resolvedMemberId}>Current teammate</option>
-                ) : null}
-                {members.map((member) => (
-                  <option key={member.id} value={member.id}>
-                    {member.name}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <button type="submit" className={teamButtonClass("primary")}>
-              Search
-            </button>
-          </div>
-          <details open={advancedCount > 0 || undefined}>
-            <summary
-              className={`min-h-11 cursor-pointer content-center py-2 text-sm font-medium ${TEAM_FOCUS_RING}`}
-            >
-              More filters{advancedCount ? ` (${advancedCount} active)` : ""}
-            </summary>
-            <div className="grid gap-3 pb-2 sm:grid-cols-2 xl:grid-cols-5">
-              <FilterSelect
-                label="Campaign"
-                name="out_campaign"
-                value={filters.campaign}
-                values={queue.facets.campaigns}
-              />
-              <FilterSelect
-                label="Company type"
-                name="out_segment"
-                value={filters.segment}
-                values={queue.facets.segments}
-              />
-              <FilterSelect
-                label="Attempt"
-                name="out_attempt"
-                value={filters.attempt}
-                values={queue.facets.attempts}
-              />
-              <FilterSelect
-                label="Contact details"
-                name="out_has"
-                value={filters.has}
-                values={["phone", "email", "both"]}
-              />
-              <FilterSelect
-                label="Last outcome"
-                name="out_disposition"
-                value={filters.disposition}
-                values={queue.facets.dispositions}
-              />
-            </div>
-            <button
-              type="submit"
-              className={teamButtonClass("secondary", "sm")}
-            >
-              Apply filters
-            </button>
-          </details>
-          {hasFilters ? (
+            ) : null}
             <a
-              href={resetHref}
-              className={`inline-flex min-h-11 items-center rounded-lg px-2 text-sm underline ${TEAM_FOCUS_RING}`}
+              href={buildOutboundHref({
+                memberId: resolvedMemberId,
+                filters,
+                patch: { cursor: "", direction: "" },
+              })}
+              className={`inline-flex min-h-11 items-center rounded-lg px-3 font-semibold lg:min-h-9 ${TEAM_FOCUS_RING}`}
             >
-              Clear all filters
+              Refresh queue
             </a>
-          ) : null}
-        </form>
+          </div>
+        </div>
+        <div className="border-t border-[color:var(--team-border)] p-3 sm:p-4">
+          <nav
+            aria-label="Follow-up shortcuts"
+            className="mb-3 flex flex-wrap gap-1 rounded-xl bg-[color:var(--team-surface-muted)] p-1"
+          >
+            {quickFilters.map((shortcut) => {
+              const active =
+                (filters.due ?? "") === shortcut.due &&
+                (filters.disposition ?? "") === shortcut.disposition;
+              return (
+                <a
+                  key={shortcut.label}
+                  aria-current={active ? "page" : undefined}
+                  href={buildOutboundFilterHref({
+                    memberId: resolvedMemberId,
+                    filters,
+                    patch: shortcut,
+                  })}
+                  className={`inline-flex min-h-11 items-center rounded-lg border px-3 py-1.5 text-sm font-medium lg:min-h-9 ${TEAM_FOCUS_RING} ${active ? "border-[color:var(--team-control-hover-border)] bg-[color:var(--team-surface)] text-[color:var(--team-brand-green-strong)] shadow-sm" : "border-transparent text-[color:var(--team-text-muted)] hover:border-[color:var(--team-border)] hover:bg-[color:var(--team-surface)]"}`}
+                >
+                  {shortcut.label}
+                </a>
+              );
+            })}
+          </nav>
+          <form
+            method="get"
+            action="/team/sales/outbound"
+            className="space-y-3"
+          >
+            <input type="hidden" name="out_due" value={filters.due ?? ""} />
+            <div className="grid items-end gap-3 sm:grid-cols-[minmax(0,1fr)_minmax(140px,220px)_auto]">
+              <label className="grid min-w-0 gap-1 text-sm font-medium">
+                Find a business or contact
+                <input
+                  type="search"
+                  name="out_q"
+                  defaultValue={filters.q ?? ""}
+                  placeholder="Company, name, phone or email"
+                  maxLength={200}
+                  className={FIELD}
+                />
+              </label>
+              <label className="grid min-w-0 gap-1 text-sm font-medium">
+                Assigned to
+                <select
+                  name="memberId"
+                  defaultValue={resolvedMemberId}
+                  className={FIELD}
+                >
+                  {!members.some((member) => member.id === resolvedMemberId) ? (
+                    <option value={resolvedMemberId}>Current teammate</option>
+                  ) : null}
+                  {members.map((member) => (
+                    <option key={member.id} value={member.id}>
+                      {member.name}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <button type="submit" className={teamButtonClass("primary")}>
+                Search
+              </button>
+            </div>
+            <details open={advancedCount > 0 || undefined}>
+              <summary
+                className={`min-h-11 cursor-pointer content-center py-2 text-sm font-medium ${TEAM_FOCUS_RING}`}
+              >
+                More filters{advancedCount ? ` (${advancedCount} active)` : ""}
+              </summary>
+              <div className="grid gap-3 pb-2 sm:grid-cols-2 xl:grid-cols-5">
+                <FilterSelect
+                  label="Campaign"
+                  name="out_campaign"
+                  value={filters.campaign}
+                  values={queue.facets.campaigns}
+                />
+                <FilterSelect
+                  label="Company type"
+                  name="out_segment"
+                  value={filters.segment}
+                  values={queue.facets.segments}
+                />
+                <FilterSelect
+                  label="Attempt"
+                  name="out_attempt"
+                  value={filters.attempt}
+                  values={queue.facets.attempts}
+                />
+                <FilterSelect
+                  label="Contact details"
+                  name="out_has"
+                  value={filters.has}
+                  values={["phone", "email", "both"]}
+                />
+                <FilterSelect
+                  label="Last outcome"
+                  name="out_disposition"
+                  value={filters.disposition}
+                  values={queue.facets.dispositions}
+                />
+              </div>
+              <button
+                type="submit"
+                className={teamButtonClass("secondary", "sm")}
+              >
+                Apply filters
+              </button>
+            </details>
+            {hasFilters ? (
+              <a
+                href={resetHref}
+                className={`inline-flex min-h-11 items-center rounded-lg px-2 text-sm underline ${TEAM_FOCUS_RING}`}
+              >
+                Clear all filters
+              </a>
+            ) : null}
+          </form>
+        </div>
       </div>
 
       {permissions.canManage && queue.items.length ? (
@@ -864,13 +883,13 @@ export async function OutboundSection({
       ) : null}
 
       <div
-        className={`grid min-w-0 items-start gap-5 ${selected ? "xl:grid-cols-[minmax(0,1fr)_minmax(360px,0.9fr)]" : ""}`}
+        className={`grid min-w-0 items-start gap-4 ${queue.items.length ? "xl:h-[calc(100dvh-8rem)] xl:min-h-[34rem] xl:max-h-[56rem] xl:items-stretch" : ""} ${selected ? "xl:grid-cols-[minmax(22rem,0.92fr)_minmax(27rem,1.08fr)]" : ""}`}
       >
         {selected ? (
-          <div className="order-first min-w-0 xl:sticky xl:top-24 xl:order-last xl:max-h-[calc(100dvh-7rem)] xl:self-start xl:overflow-y-auto">
+          <div className="order-first min-w-0 xl:order-last xl:h-full xl:min-h-0 xl:self-stretch xl:overflow-y-auto xl:overscroll-contain xl:pr-1">
             <nav
               aria-label="Prospect navigation"
-              className="mb-2 flex min-h-11 items-center justify-between gap-2"
+              className="mb-2 flex min-h-11 items-center justify-between gap-2 xl:sticky xl:top-0 xl:z-10 xl:bg-[color:var(--team-app-bg)] xl:py-1"
             >
               {previousProspect ? (
                 <a
@@ -920,8 +939,11 @@ export async function OutboundSection({
             />
           </div>
         ) : null}
-        <div id="outbound-list" className={`${PANEL} scroll-mt-24`}>
-          <div className="flex flex-wrap items-center justify-between gap-2 border-b border-[color:var(--team-border)] px-4 py-3">
+        <div
+          id="outbound-list"
+          className={`${PANEL} scroll-mt-24 xl:flex xl:h-full xl:min-h-0 xl:flex-col xl:overflow-hidden`}
+        >
+          <div className="flex shrink-0 flex-wrap items-center justify-between gap-2 border-b border-[color:var(--team-border)] px-4 py-3">
             <h3 className="font-semibold">Prospect work queue</h3>
             <span className={`text-sm ${MUTED}`}>
               {queue.items.length
@@ -930,7 +952,7 @@ export async function OutboundSection({
             </span>
           </div>
           {queue.items.length ? (
-            <ul className="divide-y divide-[color:var(--team-border)]">
+            <ul className="divide-y divide-[color:var(--team-border)] xl:min-h-0 xl:flex-1 xl:overflow-y-auto xl:overscroll-contain">
               {queue.items.map((item) => {
                 const contact = item.contacts.find(
                   (candidate) => candidate.id === item.primaryContactId,
@@ -941,10 +963,10 @@ export async function OutboundSection({
                     <a
                       href={`${prospectHref(item)}#outbound-account`}
                       aria-current={active ? "true" : undefined}
-                      className={`block min-w-0 border-l-4 p-4 transition ${TEAM_FOCUS_RING} ${active ? "border-l-[color:var(--team-brand-green)] bg-[color:var(--team-selection)]" : "border-l-transparent hover:bg-[color:var(--team-surface-muted)]"}`}
+                      className={`block min-w-0 border-l-4 px-3 py-3 transition ${TEAM_FOCUS_RING} ${active ? "border-l-[color:var(--team-brand-green)] bg-[color:var(--team-selection)] shadow-[inset_0_0_0_1px_var(--team-selection-strong)]" : "border-l-transparent hover:bg-[color:var(--team-surface-muted)]"}`}
                     >
                       <div className="flex flex-wrap items-start justify-between gap-2">
-                        <span className="min-w-0 break-words text-base font-semibold">
+                        <span className="min-w-0 break-words text-sm font-semibold sm:text-base">
                           {item.account.name}
                         </span>
                         <span
@@ -953,29 +975,30 @@ export async function OutboundSection({
                           {dueLabel(item)}
                         </span>
                       </div>
-                      <p className={`mt-1 break-words text-sm ${MUTED}`}>
+                      <p className={`mt-1 truncate text-sm ${MUTED}`}>
                         {contact.name} ·{" "}
                         {contact.email ?? contact.phone ?? "No contact details"}
                       </p>
-                      {item.account.segment ? (
-                        <p className={`mt-1 text-xs ${MUTED}`}>
-                          Company type:{" "}
-                          {item.account.segment.replace(/_/g, " ")}
-                        </p>
-                      ) : null}
-                      {item.account.priority || item.account.importedStatus ? (
-                        <p className={`mt-1 text-xs ${MUTED}`}>
-                          {[
-                            item.account.priority
-                              ? `Priority: ${item.account.priority}`
-                              : null,
-                            item.account.importedStatus
-                              ? `Prior status: ${item.account.importedStatus}`
-                              : null,
-                          ]
-                            .filter(Boolean)
-                            .join(" · ")}
-                        </p>
+                      {item.account.segment ||
+                      item.account.priority ||
+                      item.account.importedStatus ? (
+                        <div className="mt-2 flex flex-wrap gap-1.5">
+                          {item.account.segment ? (
+                            <span className="rounded-full border border-[color:var(--team-border)] bg-[color:var(--team-surface-muted)] px-2 py-0.5 text-[11px] font-medium text-[color:var(--team-text-muted)]">
+                              {item.account.segment.replace(/_/g, " ")}
+                            </span>
+                          ) : null}
+                          {item.account.priority ? (
+                            <span className="rounded-full border border-[color:var(--team-warning-border)] bg-[color:var(--team-warning-surface)] px-2 py-0.5 text-[11px] font-medium text-[color:var(--team-warning-text)]">
+                              {item.account.priority} priority
+                            </span>
+                          ) : null}
+                          {item.account.importedStatus ? (
+                            <span className="rounded-full border border-[color:var(--team-info-border)] bg-[color:var(--team-info-surface)] px-2 py-0.5 text-[11px] font-medium text-[color:var(--team-info-text)]">
+                              {item.account.importedStatus}
+                            </span>
+                          ) : null}
+                        </div>
                       ) : null}
                       <div className="mt-2">
                         <OutboundOutreachProgress
@@ -983,21 +1006,21 @@ export async function OutboundSection({
                           compact
                         />
                       </div>
-                      <div
-                        className={`mt-2 flex flex-wrap gap-x-3 gap-y-1 text-xs ${MUTED}`}
-                      >
-                        <span>
-                          {item.lastDisposition
-                            ? item.lastDisposition.replace(/_/g, " ")
-                            : "No outcome recorded"}
+                      <div className="mt-2 flex flex-wrap items-center gap-1.5 text-xs">
+                        <span
+                          className={`rounded-full border px-2 py-0.5 font-medium ${outcomeBadgeClass(item.lastDisposition)}`}
+                        >
+                          {outboundOutcomeLabel(item.lastDisposition)}
                         </span>
                         {item.dueAt ? (
-                          <span>
+                          <span className={MUTED}>
                             Due {formatOutboundEasternTime(item.dueAt)}
                           </span>
                         ) : null}
                         {item.contactCount > 1 ? (
-                          <span>{item.contactCount} contacts</span>
+                          <span className={MUTED}>
+                            {item.contactCount} contacts
+                          </span>
                         ) : null}
                       </div>
                       {contact.doNotContact ? (
@@ -1009,9 +1032,6 @@ export async function OutboundSection({
                           {item.dncContactCount} linked contact restricted
                         </p>
                       ) : null}
-                      <span className="mt-2 block text-xs font-semibold">
-                        {active ? "Account open" : "Open account →"}
-                      </span>
                     </a>
                   </li>
                 );
@@ -1050,7 +1070,7 @@ export async function OutboundSection({
           {queue.previousCursor || queue.nextCursor ? (
             <nav
               aria-label="Prospect pages"
-              className="flex justify-between gap-3 border-t border-[color:var(--team-border)] p-3"
+              className="flex shrink-0 justify-between gap-3 border-t border-[color:var(--team-border)] p-3"
             >
               {queue.previousCursor ? (
                 <a

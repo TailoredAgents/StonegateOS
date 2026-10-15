@@ -216,29 +216,35 @@ export function OutboundCommunicationClient({
 
   return (
     <div className="p-3 sm:p-4">
-      <div className="grid grid-cols-3 gap-2" aria-label="Outreach controls">
-        <button
-          type="button"
-          onClick={() => void startCall()}
-          disabled={callDisabled}
-          className={`${CONTROL_BASE} border-[color:var(--team-border)] bg-[color:var(--team-surface)] text-[color:var(--team-text)] shadow-sm hover:border-[color:var(--team-brand-green)] hover:bg-[color:var(--team-selection)] disabled:cursor-not-allowed disabled:opacity-55`}
-          title={
-            outreachBlocked
-              ? "Outreach is blocked for this contact"
-              : !canCall
-                ? "You do not have permission to place calls"
+      <div
+        className={`grid gap-2 ${canCall ? "grid-cols-3" : "grid-cols-2"}`}
+        aria-label="Outreach controls"
+      >
+        {canCall ? (
+          <button
+            type="button"
+            onClick={() => void startCall()}
+            disabled={callDisabled}
+            className={`${CONTROL_BASE} border-[color:var(--team-border)] bg-[color:var(--team-surface)] text-[color:var(--team-text)] shadow-sm hover:border-[color:var(--team-brand-green)] hover:bg-[color:var(--team-selection)] disabled:cursor-not-allowed disabled:opacity-55`}
+            title={
+              outreachBlocked
+                ? "Outreach is blocked for this contact"
                 : !phone?.trim()
                   ? "No phone number saved"
                   : `Call ${contactName}`
-          }
-        >
-          {callBusy ? (
-            <LoaderCircle className="h-4 w-4 animate-spin" aria-hidden="true" />
-          ) : (
-            <Phone className="h-4 w-4" aria-hidden="true" />
-          )}
-          <span>{callBusy ? "Calling…" : "Call"}</span>
-        </button>
+            }
+          >
+            {callBusy ? (
+              <LoaderCircle
+                className="h-4 w-4 animate-spin"
+                aria-hidden="true"
+              />
+            ) : (
+              <Phone className="h-4 w-4" aria-hidden="true" />
+            )}
+            <span>{callBusy ? "Calling…" : "Call"}</span>
+          </button>
+        ) : null}
         <ChannelButton
           label="Text"
           icon={<MessageSquare className="h-4 w-4" aria-hidden="true" />}

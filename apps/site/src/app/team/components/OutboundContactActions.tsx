@@ -205,7 +205,13 @@ export function OutboundContactActions({
       )}
 
       {task && !outreachBlocked ? (
-        <div className="border-y border-[color:var(--team-border)] py-3">
+        <div
+          className={
+            hideCommunicationActions
+              ? "rounded-xl bg-[color:var(--team-surface-muted)] px-3 py-3"
+              : "border-y border-[color:var(--team-border)] py-3"
+          }
+        >
           <h3 className="text-base font-semibold">Next step</h3>
           <p className="mt-1 text-sm leading-relaxed">
             {!hasActions
@@ -358,7 +364,7 @@ export function OutboundContactActions({
           {permissions.canManage && task ? (
             <form
               action={setOutboundDispositionAction}
-              className="space-y-3 border-t border-[color:var(--team-border)] pt-4"
+              className={`space-y-3 ${hideCommunicationActions ? "" : "border-t border-[color:var(--team-border)] pt-4"}`}
             >
               <h3 className="text-base font-semibold">What happened?</h3>
               {revisionChanged ? (

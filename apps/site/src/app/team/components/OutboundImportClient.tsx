@@ -558,7 +558,7 @@ export function OutboundImportClient(props: {
           >
             {busy === "preview" ? "Building preview…" : "Preview import"}
           </button>
-          <span className="text-xs text-[color:var(--team-text-soft)]">
+          <span className="text-xs text-[color:var(--team-text-muted)]">
             Nothing changes until you review and confirm.
           </span>
         </div>
@@ -684,7 +684,7 @@ export function OutboundImportClient(props: {
               ["Excluded", preview.counts.total - preview.counts.accepted],
             ].map(([label, value]) => (
               <div key={String(label)} className="min-w-0">
-                <dt className="text-xs text-[color:var(--team-text-soft)]">
+                <dt className="text-xs text-[color:var(--team-text-muted)]">
                   {label}
                 </dt>
                 <dd className="mt-1 text-lg font-semibold text-[color:var(--team-text)]">
@@ -870,7 +870,7 @@ export function OutboundImportClient(props: {
               </tbody>
             </table>
           </div>
-          <div className="flex flex-wrap items-center justify-between gap-3 text-xs text-[color:var(--team-text-soft)]">
+          <div className="flex flex-wrap items-center justify-between gap-3 text-xs text-[color:var(--team-text-muted)]">
             <p>
               Showing {filteredRows.length === 0 ? 0 : reviewStart + 1}–
               {Math.min(reviewStart + visibleRows.length, filteredRows.length)}{" "}

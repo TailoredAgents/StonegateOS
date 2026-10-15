@@ -5,16 +5,16 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
 import { chromium, webkit, expect } from "@playwright/test";
-import tailwindConfig from "../apps/site/tailwind.config";
-import {
-  buildOutboundFilterHref,
-  buildOutboundPartnerSetupHref,
-} from "../apps/site/src/app/team/outbound-navigation";
 
 // Real components, local synthetic data and disabled external actions. Not a
 // production session or delivery/invitation certification.
 const repo = fileURLToPath(new URL("../", import.meta.url)).replace(/\/$/, "");
 const require = createRequire(`${repo}/package.json`);
+const tailwindConfig = require(`${repo}/apps/site/tailwind.config.ts`)
+  .default as typeof import("../apps/site/tailwind.config").default;
+const { buildOutboundFilterHref, buildOutboundPartnerSetupHref } = require(
+  `${repo}/apps/site/src/app/team/outbound-navigation.ts`,
+) as typeof import("../apps/site/src/app/team/outbound-navigation");
 const { build } = createRequire(require.resolve("tsx"))("esbuild");
 const siteRequire = createRequire(`${repo}/apps/site/package.json`);
 const postcss = siteRequire("postcss");
@@ -289,7 +289,7 @@ for (const engine of [chromium, webkit]) {
         ).toBeVisible();
         await expect(page.locator('select[name="out_segment"]')).toHaveCount(1);
         await expect(
-          page.getByText("Company type: property manager"),
+          page.locator("#outbound-list").getByText("property manager"),
         ).toBeVisible();
         assert.equal(await page.locator("#outbound-account").count(), 1);
         assert.equal(
@@ -299,6 +299,17 @@ for (const engine of [chromium, webkit]) {
           false,
           `overflow at ${width}`,
         );
+        if (width === 1440) {
+          const scrollModes = await page.evaluate(() => ({
+            queue: getComputedStyle(
+              document.querySelector("#outbound-list ul")!,
+            ).overflowY,
+            detail: getComputedStyle(
+              document.querySelector("#outbound-account")!.parentElement!,
+            ).overflowY,
+          }));
+          assert.deepEqual(scrollModes, { queue: "auto", detail: "auto" });
+        }
         await page
           .locator("summary")
           .filter({ hasText: "Update several accounts" })
@@ -379,7 +390,7 @@ for (const engine of [chromium, webkit]) {
       await page.goto(`${app.url}/?blocked=1&out_account=${accountId}`);
       await expect(
         page.getByRole("button", { name: "Call", exact: true }),
-      ).toHaveCount(0);
+      ).toBeDisabled();
       await page
         .locator("summary")
         .filter({ hasText: "Update several accounts" })
