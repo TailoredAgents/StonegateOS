@@ -13,11 +13,21 @@ on:
         description: Run a specific validation lane
         type: choice
         default: all
-        options: [all, quote, expense, browser]
+        options: [all, database, quote, expense, browser]
+      node_version:
+        description: Node runtime for this validation run
+        type: choice
+        default: '24.21.0'
+        options: ['24.21.0', '20']
+      postgres_version:
+        description: PostgreSQL version for disposable databases
+        type: choice
+        default: '17'
+        options: ['17', '16']
 
 jobs:
   quote-v2-postgres:
-    if: github.event_name != 'workflow_dispatch' || inputs.suite == '' || inputs.suite == 'all' || inputs.suite == 'quote'
+    if: github.event_name != 'workflow_dispatch' || inputs.suite == '' || inputs.suite == 'all' || inputs.suite == 'quote' || inputs.suite == 'database'
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     env:
@@ -29,7 +39,7 @@ jobs:
 
     services:
       postgres:
-        image: postgres:16
+        image: postgres:${{ inputs.postgres_version || '16' }}
         env:
           POSTGRES_DB: mystos
           POSTGRES_USER: myst
@@ -55,7 +65,7 @@ jobs:
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: ${{ inputs.node_version || '20' }}
           cache: "pnpm"
 
       - name: Install dependencies
@@ -87,7 +97,7 @@ jobs:
           test/quote-action-services.test.ts
 
   expense-v2-postgres:
-    if: github.event_name != 'workflow_dispatch' || inputs.suite == '' || inputs.suite == 'all' || inputs.suite == 'expense'
+    if: github.event_name != 'workflow_dispatch' || inputs.suite == '' || inputs.suite == 'all' || inputs.suite == 'expense' || inputs.suite == 'database'
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     env:
@@ -95,7 +105,7 @@ jobs:
 
     services:
       postgres:
-        image: postgres:16
+        image: postgres:${{ inputs.postgres_version || '16' }}
         env:
           POSTGRES_DB: mystos
           POSTGRES_USER: myst
@@ -121,7 +131,7 @@ jobs:
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: ${{ inputs.node_version || '20' }}
           cache: "pnpm"
 
       - name: Install dependencies
@@ -180,7 +190,7 @@ jobs:
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: ${{ inputs.node_version || '20' }}
           cache: "pnpm"
 
       - name: Install dependencies

@@ -117,9 +117,13 @@ async function manifest(sql) {
 }
 export function compare(expected, actual) {
   const failures = [];
-  for (const key of ['schema','constraints','indexes','enums','tables','largeObjects']) {
+  for (const key of ['schema','constraints','indexes','tables','largeObjects']) {
     if (JSON.stringify(expected[key]) !== JSON.stringify(actual[key])) failures.push(key);
   }
+  // PostgreSQL rebuilds fractional enum sort positions during dump/restore.
+  // The ordered labels must remain identical; internal numeric positions need not.
+  const labels = m => m.enums.map(({position,...rest})=>rest);
+  if (JSON.stringify(labels(expected)) !== JSON.stringify(labels(actual))) failures.push('enums');
   // Minor extension patches and source physical size may differ on a supported restore target.
   if (JSON.stringify(expected.extensions.map(x => x.name)) !== JSON.stringify(actual.extensions.map(x => x.name))) failures.push('extension names');
   const definitions = (m) => m.sequences.map(({ last_value, ...rest }) => rest);
@@ -185,10 +189,29 @@ async function verify(directory) {
   const db = sqlClient();
   try {
     const actual = await db.begin('isolation level repeatable read read only', manifest);
-    const failures = compare(expected,actual);
-    await privateJson(path.join(directory,`verification-${Date.now()}.json`),{ checkedAt:new Date().toISOString(),failures,actual });
+    const normalized=structuredClone(expected);
+    const canonicalized=[];
+    const target = new URL(connection());
+    // Re-parse source CHECK expressions on the restore server. Different PostgreSQL
+    // patch versions may flatten ANDs or array casts. Never strip SQL punctuation
+    // or whitelist a changed condition. The server's parsed definitions must match.
+    if (['127.0.0.1','localhost','[::1]'].includes(target.hostname) && target.pathname.startsWith('/stonegate_restore_')) {
+      for (const item of normalized.constraints) {
+        const restored=actual.constraints.find(x=>x.schema===item.schema&&x.table===item.table&&x.name===item.name);
+        if (!restored || restored.definition===item.definition || !item.definition.startsWith('CHECK (')) continue;
+        const canonical = await db.begin(async sql => {
+          await sql.unsafe(`CREATE TEMPORARY TABLE migration_constraint_probe (LIKE ${quote(item.schema)}.${quote(item.table)}) ON COMMIT DROP`);
+          await sql.unsafe(`ALTER TABLE pg_temp.migration_constraint_probe ADD CONSTRAINT migration_check ${item.definition}`);
+          const [result]=await sql`SELECT pg_get_constraintdef(oid) AS definition FROM pg_constraint WHERE conrelid='pg_temp.migration_constraint_probe'::regclass AND conname='migration_check'`;
+          return result.definition;
+        });
+        if (canonical===restored.definition) {canonicalized.push(`${item.schema}.${item.table}.${item.name}`);item.definition=canonical;}
+      }
+    }
+    const failures = compare(normalized,actual);
+    await privateJson(path.join(directory,`verification-${Date.now()}.json`),{ checkedAt:new Date().toISOString(),failures,canonicalizedCheckConstraints:canonicalized,actual });
     if (failures.length) throw new Error('Restore mismatch: '+failures.join(', '));
-    console.log(JSON.stringify({ event:'restore-verified',tables:actual.tables.length,rows:actual.tables.reduce((sum,t)=>sum+t.rows,0),failures }));
+    console.log(JSON.stringify({ event:'restore-verified',tables:actual.tables.length,rows:actual.tables.reduce((sum,t)=>sum+t.rows,0),canonicalizedCheckConstraints:canonicalized.length,failures }));
   } finally { await db.end(); }
 }
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {

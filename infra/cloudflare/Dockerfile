@@ -8,8 +8,8 @@ WORKDIR /app
 RUN corepack enable && corepack prepare pnpm@9.15.9 --activate
 COPY . .
 RUN pnpm install --frozen-lockfile --prod=false
-RUN case "$SERVICE" in \
-      site) pnpm --filter site exec contentlayer build && pnpm --filter site build ;; \
+RUN --mount=type=secret,id=site_build_env case "$SERVICE" in \
+      site) node infra/cloudflare/build-site.mjs ;; \
       api) pnpm --filter api build ;; \
       outbox|discord) true ;; \
       *) exit 1 ;; \

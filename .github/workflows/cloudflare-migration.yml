@@ -53,7 +53,7 @@ jobs:
       - name: Add migration runtime files to the pinned source
         run: |
           mkdir -p source/infra/cloudflare
-          cp migration/infra/cloudflare/Dockerfile migration/infra/cloudflare/native-probe.mjs source/infra/cloudflare/
+          cp migration/infra/cloudflare/Dockerfile migration/infra/cloudflare/native-probe.mjs migration/infra/cloudflare/build-site.mjs source/infra/cloudflare/
           cat > source/.dockerignore <<'EOF'
           .git
           **/node_modules
@@ -66,7 +66,8 @@ jobs:
         env:
           SERVICE: ${{ matrix.service }}
           REVISION: ${{ matrix.revision }}
-        run: docker build --build-arg SERVICE="$SERVICE" --build-arg SOURCE_REVISION="$REVISION" -f source/infra/cloudflare/Dockerfile -t stonegate-migration:"$SERVICE" source
+          SITE_BUILD_ENV: ${{ secrets.STONEGATE_MIGRATION_SITE_PUBLIC_ENV }}
+        run: docker build --secret id=site_build_env,env=SITE_BUILD_ENV --build-arg SERVICE="$SERVICE" --build-arg SOURCE_REVISION="$REVISION" -f source/infra/cloudflare/Dockerfile -t stonegate-migration:"$SERVICE" source
       - name: Test native libraries without external network access
         env:
           SERVICE: ${{ matrix.service }}

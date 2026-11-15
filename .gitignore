@@ -10,6 +10,9 @@ node_modules/
 out/
 .vercel/
 .contentlayer/
+.wrangler/
+**/.dev.vars*
+worker-configuration.d.ts
 
 # Env
 .env

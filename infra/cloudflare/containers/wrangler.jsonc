@@ -1,0 +1,91 @@
+{
+  "name": "stonegate-container-validation",
+  "main": "worker.ts",
+  "account_id": "78ed83c6e3947c93763acef3a48a5561",
+  "compatibility_date": "2026-11-15",
+  "compatibility_flags": [
+    "nodejs_compat"
+  ],
+  "workers_dev": true,
+  "preview_urls": false,
+  "observability": {
+    "enabled": true,
+    "head_sampling_rate": 1
+  },
+  "containers": [
+    {
+      "class_name": "SiteValidation",
+      "scheduling_policy": "durable_object",
+      "images": {
+        "base": {
+          "image": "registry.cloudflare.com/78ed83c6e3947c93763acef3a48a5561/stonegate-migration-site@sha256:06cbfb37c71816ef25666ff019d10ce97bbe94222b22dcb594f56725d349e32a"
+        }
+      }
+    },
+    {
+      "class_name": "ApiValidation",
+      "scheduling_policy": "durable_object",
+      "images": {
+        "base": {
+          "image": "registry.cloudflare.com/78ed83c6e3947c93763acef3a48a5561/stonegate-migration-api@sha256:653a34768240fa6ce57012cee4fb39c64b67212837c9d959278bc21007cb0de2"
+        }
+      }
+    },
+    {
+      "class_name": "OutboxValidation",
+      "scheduling_policy": "durable_object",
+      "images": {
+        "base": {
+          "image": "registry.cloudflare.com/78ed83c6e3947c93763acef3a48a5561/stonegate-migration-outbox@sha256:eb8fc25502246571577a4cd6b12474053c5e4f80f1797dff1d194096e6b71ece"
+        }
+      }
+    },
+    {
+      "class_name": "DiscordValidation",
+      "scheduling_policy": "durable_object",
+      "images": {
+        "base": {
+          "image": "registry.cloudflare.com/78ed83c6e3947c93763acef3a48a5561/stonegate-migration-discord@sha256:e53fe115042386f7cd6420bc87cbb20638528cfdd59608fdafa84cc47094598e"
+        }
+      }
+    }
+  ],
+  "durable_objects": {
+    "bindings": [
+      {
+        "name": "SITE",
+        "class_name": "SiteValidation"
+      },
+      {
+        "name": "API",
+        "class_name": "ApiValidation"
+      },
+      {
+        "name": "OUTBOX",
+        "class_name": "OutboxValidation"
+      },
+      {
+        "name": "DISCORD",
+        "class_name": "DiscordValidation"
+      }
+    ]
+  },
+  "exports": {
+    "SiteValidation": {
+      "type": "durable-object",
+      "storage": "sqlite"
+    },
+    "ApiValidation": {
+      "type": "durable-object",
+      "storage": "sqlite"
+    },
+    "OutboxValidation": {
+      "type": "durable-object",
+      "storage": "sqlite"
+    },
+    "DiscordValidation": {
+      "type": "durable-object",
+      "storage": "sqlite"
+    }
+  }
+}

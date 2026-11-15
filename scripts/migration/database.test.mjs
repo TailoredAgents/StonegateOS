@@ -28,3 +28,10 @@ test('verification catches missing tables, changed counts and changed contents',
     assert.deepEqual(compare(base,{...base,tables}),['tables']);
   }
 });
+test('enum labels retain order even when PostgreSQL renumbers internal positions',()=>{
+  const base={schema:[],constraints:[],indexes:[],sequences:[],extensions:[],largeObjects:'0',tables:[],enums:[{name:'stage',label:'new',position:1},{name:'stage',label:'inserted',position:1.5},{name:'stage',label:'done',position:2}]};
+  const renumbered={...base,enums:base.enums.map((e,i)=>({...e,position:i+1}))};
+  assert.deepEqual(compare(base,renumbered),[]);
+  assert.deepEqual(compare(base,{...renumbered,enums:[...renumbered.enums].reverse()}),['enums']);
+  assert.deepEqual(compare(base,{...renumbered,enums:renumbered.enums.slice(1)}),['enums']);
+});

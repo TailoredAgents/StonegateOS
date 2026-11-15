@@ -1,9 +1,11 @@
 name: Transfer verified migration images
 on:
-  push:
-    branches: [codex/cloudflare-migration]
-    paths: [.github/workflows/cloudflare-migration-images.yml]
   workflow_dispatch:
+    inputs:
+      candidate_sha:
+        description: Full commit SHA of a successful migration image build
+        type: string
+        required: true
 permissions:
   contents: read
   packages: read
@@ -22,9 +24,12 @@ jobs:
           REGISTRY_USER: ${{ secrets.CF_MIGRATION_REGISTRY_USER }}
           REGISTRY_PASSWORD: ${{ secrets.CF_MIGRATION_REGISTRY_PASSWORD }}
           SERVICE: ${{ matrix.service }}
-          CANDIDATE: 08a19075b8b3a534920131652c2dc917346a16d7
+          CANDIDATE: ${{ inputs.candidate_sha }}
         run: |
           set -euo pipefail
+          [[ "$CANDIDATE" =~ ^[0-9a-f]{40}$ ]]
+          successful=$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/cloudflare-migration.yml/runs?head_sha=$CANDIDATE&status=success&per_page=10" --jq '.workflow_runs | length')
+          test "$successful" -gt 0
           test -n "$REGISTRY_USER" && test -n "$REGISTRY_PASSWORD"
           printf '%s' "$GH_TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
           printf '%s' "$REGISTRY_PASSWORD" | docker login registry.cloudflare.com -u "$REGISTRY_USER" --password-stdin
