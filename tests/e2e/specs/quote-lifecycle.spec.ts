@@ -15,6 +15,53 @@ import {
 } from "../support/sdk";
 import { getEnvVar } from "../support/env";
 
+const diagnostics = new WeakMap<object, Array<Record<string, unknown>>>();
+test.beforeEach(async ({ page }) => {
+  const events: Array<Record<string, unknown>> = [];
+  diagnostics.set(page, events);
+  const record = (event: Record<string, unknown>) => {
+    if (events.length < 100) events.push({ at: Date.now(), ...event });
+  };
+  page.on("console", (entry) => {
+    if (["error", "warning"].includes(entry.type()))
+      record({ console: entry.text().slice(0, 2000) });
+  });
+  page.on("pageerror", (error) => record({ pageError: error.message }));
+  page.on("requestfailed", (request) =>
+    record({ failedUrl: request.url(), failure: request.failure() }),
+  );
+  page.on("response", (response) => {
+    if (
+      response.request().method() !== "POST" ||
+      !response.url().includes("/quote/")
+    )
+      return;
+    record({
+      actionStatus: response.status(),
+      redirect: response.headers()["x-action-redirect"],
+    });
+    void response
+      .finished()
+      .then((error) =>
+        record({ actionFinished: true, error: error?.message ?? null }),
+      )
+      .catch((error: unknown) =>
+        record({ actionFinished: false, error: String(error) }),
+      );
+  });
+});
+test.afterEach(async ({ page }, testInfo) => {
+  if (testInfo.status !== "passed")
+    await testInfo.attach("quote-browser-runtime", {
+      body: JSON.stringify(
+        { url: page.url(), events: diagnostics.get(page) },
+        null,
+        2,
+      ),
+      contentType: "application/json",
+    });
+});
+
 async function ownerMutationHeaders(
   extra: Record<string, string> = {},
 ): Promise<Record<string, string>> {

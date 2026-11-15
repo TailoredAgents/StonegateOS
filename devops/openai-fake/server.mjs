@@ -217,10 +217,38 @@ function structuredOutput(parsedJson) {
       : null;
   if (!isRecord(format?.schema)) return null;
   const output = valueForSchema(format.schema);
-  if (
-    format.name === "expense_receipt_extraction" &&
-    isRecord(output)
-  ) {
+  if (format.name === "notification_copy" && isRecord(output)) {
+    // Notification fields are message content, not email addresses. Preserve
+    // the supplied synthetic time/link so browser tests exercise real delivery.
+    const prompt = Array.isArray(parsedJson.input)
+      ? parsedJson.input
+          .filter((item) => item.role === "user")
+          .map((item) => (typeof item.content === "string" ? item.content : ""))
+          .join("\n")
+      : "";
+    const field = (name) =>
+      prompt
+        .split("\n")
+        .find((line) => line.startsWith(`${name}: `))
+        ?.slice(name.length + 2) ?? "";
+    const when = field("Appointment time");
+    const reason = field("Reason");
+    const link = field("Reschedule link") || field("Share link");
+    const subject = when
+      ? reason === "requested"
+        ? "You're booked!"
+        : "Appointment update"
+      : reason === "accepted"
+        ? "Thanks for approving your quote"
+        : reason === "declined"
+          ? "Quote decision received"
+          : "Your Stonegate quote";
+    const body = `Stonegate Junk Removal: ${subject}${when ? ` We'll see you ${when}.` : "."}${link ? ` ${link}` : ""}`;
+    output.email_subject = subject;
+    output.email_body = body;
+    output.sms_body = body.slice(0, 320);
+  }
+  if (format.name === "expense_receipt_extraction" && isRecord(output)) {
     // The receipt contract has a cross-field rule that a standard receipt
     // cannot carry scale-ticket details. The generic schema synthesizer picks
     // the first non-null anyOf branch, so make this deterministic fake response
