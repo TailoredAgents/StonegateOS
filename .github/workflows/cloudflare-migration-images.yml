@@ -1,0 +1,36 @@
+name: Transfer verified migration images
+on:
+  push:
+    branches: [codex/cloudflare-migration]
+    paths: [.github/workflows/cloudflare-migration-images.yml]
+  workflow_dispatch:
+permissions:
+  contents: read
+  packages: read
+jobs:
+  transfer:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        service: [site, api, outbox, discord]
+    steps:
+      - name: Transfer already-tested candidate
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REGISTRY_USER: ${{ secrets.CF_MIGRATION_REGISTRY_USER }}
+          REGISTRY_PASSWORD: ${{ secrets.CF_MIGRATION_REGISTRY_PASSWORD }}
+          SERVICE: ${{ matrix.service }}
+          CANDIDATE: 08a19075b8b3a534920131652c2dc917346a16d7
+        run: |
+          set -euo pipefail
+          test -n "$REGISTRY_USER" && test -n "$REGISTRY_PASSWORD"
+          printf '%s' "$GH_TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
+          printf '%s' "$REGISTRY_PASSWORD" | docker login registry.cloudflare.com -u "$REGISTRY_USER" --password-stdin
+          source="ghcr.io/tailoredagents/stonegate-migration-${SERVICE}:${CANDIDATE}"
+          destination="registry.cloudflare.com/78ed83c6e3947c93763acef3a48a5561/stonegate-migration-${SERVICE}:${CANDIDATE}"
+          docker pull "$source"
+          docker tag "$source" "$destination"
+          docker push "$destination"
+          docker image inspect "$destination" --format '{{json .RepoDigests}}' >> "$GITHUB_STEP_SUMMARY"
