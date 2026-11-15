@@ -11,7 +11,7 @@ on:
 
 jobs:
   quote-v2-postgres:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 20
     env:
       DATABASE_URL: postgres://myst:myst@localhost:5432/mystos
@@ -78,7 +78,7 @@ jobs:
           test/quote-action-services.test.ts
 
   expense-v2-postgres:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
     env:
       DATABASE_URL: postgres://myst:myst@localhost:5432/mystos
@@ -151,7 +151,7 @@ jobs:
           src/__tests__/management-commission-rates.integration.test.ts
 
   playwright-e2e:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 60
 
     steps:

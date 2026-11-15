@@ -15,7 +15,7 @@ on:
 
 jobs:
   partner-portal-production:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 45
     services:
       postgres:
