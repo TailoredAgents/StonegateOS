@@ -7,7 +7,7 @@
   "workers_dev":true,
   "preview_urls":false,
   "observability":{"enabled":true},
-  "containers":[{"class_name":"LifecycleValidation","scheduling_policy":"durable_object","images":{"base":{"image":"registry.cloudflare.com/78ed83c6e3947c93763acef3a48a5561/stonegate-migration-api@sha256:66d89910bbb1e1dc6da83f468adccab2547a10f6866f216261cc3dd4c3e44524"}}}],
+  "containers":[{"class_name":"LifecycleValidation","scheduling_policy":"durable_object","images":{"base":{"image":"registry.cloudflare.com/78ed83c6e3947c93763acef3a48a5561/stonegate-migration-api@sha256:657b7af5a48d1107140ef387d2a53226964d02ee5ab590ecbee3289539760e52"}}}],
   "durable_objects":{"bindings":[{"name":"LIFECYCLE","class_name":"LifecycleValidation"}]},
   "exports":{"LifecycleValidation":{"type":"durable-object","storage":"sqlite"}}
 }

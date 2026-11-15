@@ -121,6 +121,40 @@ export function InboxCustomerWorkspaceClient({
   const [scheduleWarning, setScheduleWarning] = useState<string | null>(null);
   const [isPending, startTransition] = useTransition();
   const requestRef = React.useRef<AbortController | null>(null);
+  const [directory, setDirectory] = useState<TeamMemberOption[] | null>(null);
+  const [directoryError, setDirectoryError] = useState(false);
+  const [directoryAttempt, setDirectoryAttempt] = useState(0);
+
+  useEffect(() => {
+    if (drawer !== "booking" || teamMembers.length > 0) return;
+    const controller = new AbortController();
+    setDirectory(null);
+    setDirectoryError(false);
+    void (async () => {
+      try {
+        const response = await fetch("/api/team/directory", {
+          cache: "no-store",
+          signal: controller.signal,
+        });
+        const data = (await response.json()) as {
+          ok?: boolean;
+          members?: TeamMemberOption[];
+        };
+        if (
+          !response.ok ||
+          !data.ok ||
+          !Array.isArray(data.members) ||
+          !data.members.length
+        ) {
+          throw new Error("Directory unavailable");
+        }
+        if (!controller.signal.aborted) setDirectory(data.members);
+      } catch {
+        if (!controller.signal.aborted) setDirectoryError(true);
+      }
+    })();
+    return () => controller.abort();
+  }, [drawer, teamMembers.length, directoryAttempt]);
 
   const loadWorkspace = React.useCallback(async () => {
     requestRef.current?.abort();
@@ -492,10 +526,32 @@ export function InboxCustomerWorkspaceClient({
                   }}
                 />
               ) : null}
-              {drawer === "booking" ? (
+              {drawer === "booking" &&
+              teamMembers.length === 0 &&
+              !directory ? (
+                directoryError ? (
+                  <div role="alert">
+                    <p>Team members could not load. Retry before booking.</p>
+                    <button
+                      type="button"
+                      className={teamButtonClass("secondary", "sm")}
+                      onClick={() =>
+                        setDirectoryAttempt((attempt) => attempt + 1)
+                      }
+                    >
+                      Retry team members
+                    </button>
+                  </div>
+                ) : (
+                  <p role="status">Loading team members…</p>
+                )
+              ) : null}
+              {drawer === "booking" && (teamMembers.length > 0 || directory) ? (
                 <BookingDrawer
                   workspace={workspace}
-                  teamMembers={teamMembers}
+                  teamMembers={
+                    teamMembers.length > 0 ? teamMembers : directory!
+                  }
                   isPending={isPending}
                   onSubmit={(formData) => {
                     startTransition(async () => {

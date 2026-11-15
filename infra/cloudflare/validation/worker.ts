@@ -1,5 +1,6 @@
 import { createHash, timingSafeEqual } from 'node:crypto';
 import postgres from 'postgres';
+import { observe, observationHistory } from './observations';
 
 function authorized(request: Request, secret: string | undefined): boolean {
   if (!secret) return false;
@@ -12,11 +13,28 @@ function json(value: unknown, status = 200): Response {
   return Response.json(value, {status, headers:{'cache-control':'no-store','x-content-type-options':'nosniff'}});
 }
 export default {
+  async scheduled(controller:ScheduledController,env:Env):Promise<void> {
+    const result = await observe(env.VALIDATION,controller.scheduledTime);
+    if ('pass' in result && !result.pass) throw new Error('Migration health observation failed');
+  },
   async fetch(request: Request, env: Env): Promise<Response> {
     if (!authorized(request, env.MIGRATION_PROBE_TOKEN)) return json({error:'unauthorized'},401);
     const url = new URL(request.url);
     const bucket = url.searchParams.get('bucket') === 'legacy' ? env.LEGACY : env.MEDIA;
     try {
+      if (request.method === 'POST' && url.pathname === '/observe') {
+        const result=await observe(env.VALIDATION);
+        return json(result,'expired' in result?410:result.pass?200:503);
+      }
+      if (request.method === 'GET' && url.pathname === '/observations') {
+        return json(await observationHistory(env.VALIDATION));
+      }
+      if (request.method === 'GET' && url.pathname === '/observation') {
+        const key=url.searchParams.get('key')??'';
+        if(!/^observations\/[0-9TZ:.\-]+\/[0-9a-f-]{36}\.json$/.test(key)) return json({error:'invalid_key'},400);
+        const object=await env.VALIDATION.get(key);
+        return object?new Response(object.body,{headers:{'content-type':'application/json','cache-control':'no-store'}}):json({error:'not_found'},404);
+      }
       if (request.method === 'GET' && url.pathname === '/database-check') {
         const sql=postgres(env.RESTORE_DB.connectionString,{max:1,fetch_types:false,prepare:true,connect_timeout:10,idle_timeout:1,max_lifetime:30});
         try {

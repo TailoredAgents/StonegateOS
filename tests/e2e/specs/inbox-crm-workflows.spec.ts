@@ -122,6 +122,8 @@ test.describe("Inbox CRM workspace API", () => {
       "/api/team/contacts/workspace?contactId=test-contact",
     );
     expect(response.status()).toBe(401);
+    const directory = await request.get("/api/team/directory");
+    expect(directory.status()).toBe(401);
   });
 
   test.describe("as admin", () => {
@@ -145,6 +147,13 @@ test.describe("Inbox CRM workspace API", () => {
       expect(payload.missingFields).not.toContain("address");
       expect(payload.quotes.length).toBeGreaterThanOrEqual(0);
       expect(payload.upcomingAppointments.length).toBeGreaterThanOrEqual(0);
+      const directory = await page.request.get("/api/team/directory");
+      expect(directory.status()).toBe(200);
+      const directoryPayload = await directory.json();
+      expect(directoryPayload.members.length).toBeGreaterThan(0);
+      for (const member of directoryPayload.members) {
+        expect(Object.keys(member).sort()).toEqual(["id", "name"]);
+      }
     });
   });
 });
@@ -237,12 +246,29 @@ test.describe("Inbox CRM drawers", () => {
 
     await test.step("Booking drawer creates appointment and fills composer", async () => {
       currentWorkspace = workspaceFixture(seed, "booking");
+      let directoryAttempts = 0;
+      await page.route("**/api/team/directory", async (route) => {
+        directoryAttempts += 1;
+        if (directoryAttempts === 1) {
+          await route.fulfill({ status: 503, json: { ok: false } });
+        } else {
+          await route.continue();
+        }
+      });
       await page.reload();
       await page.locator("#inbox-thread-body").fill("");
       await page.getByRole("button", { name: "Book", exact: true }).click();
       await expect(
         page.getByRole("heading", { name: "Book appointment" }),
       ).toBeVisible();
+
+      await expect(
+        page.getByText("Team members could not load. Retry before booking."),
+      ).toBeVisible();
+      await expect(
+        page.getByRole("button", { name: "Book and draft confirmation" }),
+      ).toHaveCount(0);
+      await page.getByRole("button", { name: "Retry team members" }).click();
 
       await page.getByLabel("Start time").fill(`${futureDate(7)}T10:00`);
       await page.getByLabel("Assigned associate").selectOption({ index: 1 });

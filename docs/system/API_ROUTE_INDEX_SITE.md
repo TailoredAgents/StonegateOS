@@ -1,8 +1,8 @@
 # API Route Index (apps/site)
 
-Generated from source. Fingerprint: `90424e42126ed446`.
+Generated from source. Fingerprint: `917c860acc52b6f9`.
 
-Routes discovered: 126
+Routes discovered: 127
 
 This index inventories exported HTTP handlers. It does not replace endpoint authentication, request-schema, response-schema, or side-effect documentation.
 
@@ -94,6 +94,7 @@ This index inventories exported HTTP handlers. It does not replace endpoint auth
 | GET, POST, PATCH | `/api/team/contacts/sales-agent-next-action` | `apps/site/src/app/api/team/contacts/sales-agent-next-action/route.ts` |
 | GET | `/api/team/contacts/summary` | `apps/site/src/app/api/team/contacts/summary/route.ts` |
 | GET | `/api/team/contacts/workspace` | `apps/site/src/app/api/team/contacts/workspace/route.ts` |
+| GET | `/api/team/directory` | `apps/site/src/app/api/team/directory/route.ts` |
 | POST | `/api/team/expenses/[expenseId]/correct` | `apps/site/src/app/api/team/expenses/[expenseId]/correct/route.ts` |
 | POST | `/api/team/expenses/[expenseId]/post` | `apps/site/src/app/api/team/expenses/[expenseId]/post/route.ts` |
 | GET | `/api/team/expenses/[expenseId]/receipt` | `apps/site/src/app/api/team/expenses/[expenseId]/receipt/route.ts` |

@@ -1,10 +1,13 @@
 import { readFile,writeFile } from 'node:fs/promises';
 import path from 'node:path';
+import { execFileSync } from 'node:child_process';
 const directory=process.argv[2];
 if(!directory)throw new Error('Private evidence directory required');
 const token=(await readFile(path.join(directory,'probe-token'),'utf8')).trim();
 const origin='https://stonegate-container-validation.jeffrey-78e.workers.dev';
-const manifest=JSON.parse(await readFile(new URL('../../infra/cloudflare/source-manifest.json',import.meta.url),'utf8'));
+const candidate=process.argv[3];
+if(candidate && !/^[a-f0-9]{40}$/.test(candidate))throw new Error('Candidate must be a full commit SHA');
+const manifest=JSON.parse(candidate?execFileSync('git',['show',`${candidate}:infra/cloudflare/source-manifest.json`],{encoding:'utf8'}):await readFile(new URL('../../infra/cloudflare/source-manifest.json',import.meta.url),'utf8'));
 const config=JSON.parse(await readFile(new URL('../../infra/cloudflare/containers/wrangler.jsonc',import.meta.url),'utf8'));
 const results=[];
 const unauthorized=await fetch(origin+'/api/api/healthz');

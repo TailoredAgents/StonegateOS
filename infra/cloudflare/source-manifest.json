@@ -29,6 +29,14 @@
         "outbox"
       ],
       "purpose": "Drain in-flight worker work on SIGTERM, skip new schedulers and release the database pool before exit"
+    },
+    {
+      "path": "infra/cloudflare/patches/inbox-booking-directory.patch",
+      "sha256": "d28776d4d19f65c2f7e0a0a2efbfb5470f79fd68f7263ed8ea47086e60b7d52a",
+      "services": [
+        "site"
+      ],
+      "purpose": "Load the authenticated team directory on booking drawer open, with failure and retry states"
     }
   ]
 }
