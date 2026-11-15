@@ -16,17 +16,19 @@ Private receipts and credentials are held outside this public repository under `
 | Native Cloudflare runtime | 29 checks passed across all four pinned images, including restarts, Sharp, Argon2, FFmpeg and PDF rendering | Diagnostic entrypoints only; consumers have not started |
 | Actual Next.js runtime | Seven page/asset/health checks passed inside a network-isolated Cloudflare Container | No authenticated business flows or production API access in this trial |
 | Private Worker SQL | Five consecutive reads matched restored table counts through Hyperdrive and Tunnel | Private IP works; internal hostname path failed. Certificate verification is disabled for this isolated restore trial and must be resolved for production |
-| Verified Container SQL | Six read-only TLS queries across two Container restarts; wrong certificate identity rejected in both cycles | Access service token expires November 22; outage recovery and application-level pooling still need validation |
+| Verified Container SQL | Six read-only TLS queries across two Container restarts; wrong certificate identity rejected; deliberate relay outages fail closed and the same pool reconnects in both cycles | Access service token expires November 22; real application reads and rotation still need validation |
+| Actual API runtime | Database readiness, migration journal and unauthorized-admin rejection pass across two Container restarts at 2 GiB / 1 vCPU, with relay failure/recovery tests | A 1 GiB / 0.25 vCPU trial timed out on its second restart; no customer mutations/providers were exercised |
+| Idle controller lifecycle | Same network-isolated Container remained healthy across multiple Durable Object executions and a scheduled health alarm | A bounded diagnostic proves lifecycle behavior, not production billing or background-consumer recovery |
 | Existing regression suites | Quote and Expense follow-up passed on PG17/Node24; Partner Portal production journey passed | Broad browser audit failed in setup and UI contracts; focused rerun required |
 | Production health and access rejection | 13 live checks passed; unsigned Twilio callbacks rejected | Positive provider scenarios require controlled staging fixtures/sandbox credentials |
 
 The restore verifier canonicalizes CHECK expressions using the restore server's PostgreSQL parser and compares enum label order independently of PostgreSQL's internal fractional ordering numbers. Seven equivalent CHECK renderings were accounted for; row contents were not normalized away. Sequence values are not MVCC and are not claimed to match a live source snapshot.
 
-The candidate images preserve different live revisions per service. Authenticated Render SSH confirmed Node 24.22.1 for the website and 24.21.0 for API, outbox and Discord. Build run `43766913190` and image-transfer run `43767348029` passed. The website build contains all 14 captured public configuration fields; its manifest hash matches the deployed configuration. Initial images without that configuration are superseded.
+The candidate images preserve different live revisions per service. Authenticated Render SSH confirmed Node 24.22.1 for the website and 24.21.0 for API, outbox and Discord. Build run `43769971570` and image-transfer run `43770400985` passed. Each image includes the SHA-256-recorded database TLS servername compatibility patch, validated against its pinned source and covered by TLS configuration tests. The website build contains all 14 captured public configuration fields; its manifest hash matches the deployed configuration. Initial images without that configuration are superseded.
 
 The Container SQL trial uses the official `cloudflared access tcp` client, a service-token-only Access policy and the private Render connector. The client trusts Node roots plus Cloudflare's provided Container CA. PostgreSQL separately verifies an explicitly pinned certificate obtained over authenticated Render SSH, including its server identity. All query credentials belong to a non-superuser SELECT-only restore role; no production database credentials enter the trial. The earlier Hyperdrive trial with certificate verification disabled remains diagnostic only.
 
-The broad baseline audit (`43763531179`) was stopped near its time limit after capturing failures. Its core browser setup rejected a too-short synthetic admin-session secret. API tests reported 4,234 passing, 193 skipped and three failed source-contract assertions (formatting, an extracted message component, and a sidebar CSS scope). Portal audit paths also encountered disabled feature configurations and UI assertion failures. These are not successful migration checks. Focused fixture/contract corrections and reruns are tracked on this branch; production application behavior is unchanged.
+The broad baseline audit (`43763531179`) was stopped near its time limit after capturing failures. Its core browser setup rejected a too-short synthetic admin-session secret. API tests reported 4,234 passing, 193 skipped and three failed source-contract assertions (formatting, an extracted message component, and a sidebar CSS scope). Portal audit paths also encountered disabled feature configurations and UI assertion failures. These are not successful migration checks. After fixture/contract corrections, run `43769726286` passed all pre-browser lanes. Core browser results were 35 passed, 11 failed and 102 skipped after the fail-fast limit, including in-flight failures. Remaining failures include obsolete legacy-admin authentication, URL query ordering, mobile UI expectations, confirmation email matching, draft payout report generation and legacy quote actions. Focused reruns are tracked on this branch. The browser lane was discovered still using PG16 via Docker Compose; its version is now explicitly connected to the PG17 workflow input. Production application behavior is unchanged.
 
 Temporary resources (prorated; additional to unchanged production hosting):
 
@@ -38,7 +40,8 @@ Temporary resources (prorated; additional to unchanged production hosting):
 | Zero Trust / Access | `migration-db.stonegatejunkremoval.com` | Free plan activated, $0/month; seven-day service credential, one restrictive Service Auth policy |
 | Restore VPC service | `01a1e122-4780-75b2-9926-b159cbdfad10` | Restricted destination TCP5432; temporary private IP |
 | Read-only restore Hyperdrive | `b449cf5370d34f62aaa57be60980a710` | Caching disabled; origin connection limit five |
-| Diagnostic Workers | `stonegate-migration-validation`, `stonegate-container-validation`, `stonegate-database-validation` | Bearer protected, synthetic operations only; metered usage |
+| Diagnostic Workers | `stonegate-migration-validation`, `stonegate-container-validation`, `stonegate-database-validation`, `stonegate-lifecycle-validation` | Bearer protected, synthetic operations only; metered usage |
+| Encrypted recovery R2 bucket | `stonegate-migration-backups` | Public access disabled; encrypted dump and catalog/manifest uploaded, downloaded and integrity checked |
 | Synthetic R2 bucket | `stonegate-migration-validation` | No public domain; isolated PUT/GET/DELETE trials |
 
 Do not treat the $27.50/month equivalent temporary Render overlap as savings. Original services are still billed. Validation Containers are stopped after tests and have a 60-second idle shutdown. No production database has been provisioned at a replacement provider. One new restore-only CNAME was added; all 17 pre-existing DNS records were compared and remain unchanged.
@@ -63,11 +66,21 @@ Working rollout defaults following the user's instruction to proceed:
 - Website on Workers if a compatibility trial passes; API, outbox and Discord in Containers.
 - Retain the public website origin and existing R2 bucket names/object keys.
 - Keep PostgreSQL. Evaluate PlanetScale's Cloudflare integration as the replacement; confirm version, extensions, recovery capability, capacity and total price before provisioning.
-- Target approximately $55–75/month after optimization; retain the $70–95/month conservative alternative until runtime measurements establish achievable savings.
+- Treat $55–75/month as an optimization target only. The current conservative Container fallback models approximately $90–106/month with the temporary relay and retained database; see the utilization-based refinement above.
 - Plan an off-hours write interruption with a proposed 30-minute ceiling. The rehearsal must demonstrate that ceiling; otherwise revise the window or replication method before scheduling.
 - Observe each application move through a normal operating day; observe all application services together for at least 72 hours before the production database move.
 - Retain the old database for 30 days after the database handoff. This is a proposed retention period, not a scheduled deletion.
 - Request a temporary additional hosting budget of $100/month equivalent, prorated, for overlapping services, an isolated test/restore target, backups and a possible connectivity relay. Shared account fees and existing provider usage remain separately accounted for.
+
+## Cost refinement from observed utilization
+
+Seven days of hourly Render metrics (November 8–15) show average CPU use of approximately 0.0028, 0.0050, 0.0032 and 0.0021 cores for site, API, outbox and Discord. Maximum hourly memory samples were about 0.685, 0.909, 0.396 and 0.301 GiB respectively. These are hourly samples, not load-tested peak requirements; they do not justify assigning a 256 MiB instance to Discord or leaving the API with no headroom.
+
+`scripts/migration/cost-model.mjs` models a conservative 6 GiB total memory allocation and 16 GB disk across four always-running Containers, four continuously active Durable Objects, a full $5 Workers allocation and the current $23.50 PostgreSQL cost. With available included usage and twice the observed CPU usage, moving services while retaining the $7 relay models $90.42/month versus $105.50 now: about $15.08/month saved. If shared allowances are consumed and CPU is five times the observed baseline, the model reaches $105.69/month, essentially no savings. Removing the relay at the same database price models $83.42/month, about $22.08 saved. Request/log/storage/egress overages, taxes and temporary restore overlap are excluded. No replacement database quote is implied.
+
+The idle-controller trial passed with the same Container surviving multiple Durable Object executions and an alarm. A conditional model with each controller active 5% of the time, included usage available and unchanged 6 GiB Container allocation estimates $77.92/month with the relay ($27.58 saved), or $70.92 without the relay at the same database price ($34.58 saved). The 5% duty cycle and replacement database price are assumptions, not measured billing. The earlier $55–75 target requires this more efficient lifecycle/layout or validated smaller allocations; it is not the cost of the continuously monitored Container fallback. Avoid keeping all Durable Objects active with permanent monitor promises unless needed. Compare hibernation, bounded health alarms and a Worker-based website, and measure actual use before committing production resource sizes. Current Durable Object billing rounds excess duration to million GB-second units.
+
+The encrypted R2 dump is 218,138,707 bytes; its downloaded SHA-256 and AES-GCM authentication both match. Encrypted metadata also passed a round trip. The encryption key remains outside R2 in the private evidence directory. A separately recoverable key escrow is still required before retiring the source.
 
 ## Baseline refreshed on November 15
 
@@ -259,6 +272,8 @@ The final write-interruption window, destination PostgreSQL plan and measured st
 
 ## Technical references
 
+- [Cloudflare Container pricing](https://developers.cloudflare.com/containers/platform/pricing/)
+- [Durable Object duration pricing and rounding](https://developers.cloudflare.com/durable-objects/platform/pricing/)
 - [Current Cloudflare Next.js deployment guidance](https://developers.cloudflare.com/workers/framework-guides/web-apps/nextjs/)
 - [Workers best practices](https://developers.cloudflare.com/workers/best-practices/workers-best-practices/)
 - [Cloudflare Container rollouts and process lifecycle](https://developers.cloudflare.com/containers/configuration/rollouts/)

@@ -14,7 +14,8 @@ export class DatabaseValidation extends DurableObject<Env> {
       }
       if(!this.env.MIGRATION_RESTORE_CONNECTION)throw new Error('Missing restore credentials');
       if(!container.running) {
-        container.start({image:container.images.base,instance:'basic',enableInternet:true});
+        container.start({image:container.images.base,
+          instance:new URL(request.url).pathname==='/api-check'?{vcpu:1,memoryMib:2048,diskMb:4000}:'basic',enableInternet:true});
         this.ctx.waitUntil(container.monitor().catch(()=>console.error(JSON.stringify({event:'database_validation_container_stopped'}))));
       }
       await container.setInactivityTimeout(60000);
@@ -27,7 +28,7 @@ export class DatabaseValidation extends DurableObject<Env> {
       }
       if(!ready)throw new Error('Container not ready');
       const probe=await container.exec(['node','-e',databaseCheck],{cwd:'/app',stdout:'pipe',stderr:'pipe',
-        env:{MIGRATION_RESTORE_CONNECTION:this.env.MIGRATION_RESTORE_CONNECTION},signal:AbortSignal.timeout(90000)});
+        env:{MIGRATION_RESTORE_CONNECTION:this.env.MIGRATION_RESTORE_CONNECTION,MIGRATION_CHECK_API:new URL(request.url).pathname==='/api-check'?'1':'0'},signal:AbortSignal.timeout(90000)});
       const result=await probe.output();
       if(result.stdout.byteLength===0) {
         const diagnostic=new TextDecoder().decode(result.stderr);
@@ -46,7 +47,7 @@ export default {
       return Response.json({error:'unauthorized'},{status:401,headers:{'cache-control':'no-store'}});
     }
     const route=new URL(request.url).pathname;
-    if(request.method!=='POST' || !['/check','/stop'].includes(route))return Response.json({error:'not_found'},{status:404});
+    if(request.method!=='POST' || !['/check','/api-check','/stop'].includes(route))return Response.json({error:'not_found'},{status:404});
     try{return await env.DATABASE.getByName('restore-validation-v1',{locationHint:'enam'}).fetch(request);}
     catch{console.error(JSON.stringify({event:'database_container_probe_failed'}));return Response.json({error:'probe_failed'},{status:503});}
   },

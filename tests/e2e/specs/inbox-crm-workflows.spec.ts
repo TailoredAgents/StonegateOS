@@ -5,7 +5,9 @@ import {
 } from "../../../apps/site/src/app/team/lib/customer-workspace";
 import { getLatestE2ESeedSummary } from "../support/db";
 
-const adminStorage = "tests/e2e/storage/admin.json";
+// Team routes require an authenticated human session. The legacy recovery
+// cookie intentionally does not authorize workspace access.
+const adminStorage = "tests/e2e/storage/mobile-owner.json";
 
 function futureDate(days = 6): string {
   return new Date(Date.now() + days * 24 * 60 * 60 * 1000)

@@ -24,6 +24,10 @@ on:
         type: choice
         default: '17'
         options: ['17', '16']
+      browser_grep:
+        description: Optional Playwright title filter for a focused browser rerun
+        type: string
+        default: ''
 
 jobs:
   quote-v2-postgres:
@@ -174,6 +178,8 @@ jobs:
     if: github.event_name != 'workflow_dispatch' || inputs.suite == '' || inputs.suite == 'all' || inputs.suite == 'browser' || inputs.suite == 'browser-core'
     runs-on: ubuntu-24.04
     timeout-minutes: 60
+    env:
+      E2E_POSTGRES_IMAGE: postgres:${{ inputs.postgres_version || '16' }}
 
     steps:
       - name: Checkout repo
@@ -261,6 +267,7 @@ jobs:
         env:
           CI: "true"
           FULL_BROWSER_AUDIT: ${{ github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.suite != 'browser-core') }}
+          BROWSER_GREP: ${{ inputs.browser_grep }}
         run: |
           wait_for_application_health() {
             services_ready=false
@@ -294,7 +301,11 @@ jobs:
           echo $! > dev-server.pid
           wait_for_application_health
           set +e
-          pnpm test:e2e --max-failures=8
+          if [ -n "$BROWSER_GREP" ]; then
+            pnpm exec playwright test --grep "$BROWSER_GREP" --max-failures=8
+          else
+            pnpm test:e2e --max-failures=8
+          fi
           core_status=$?
           quote_status=0
           partner_status=0

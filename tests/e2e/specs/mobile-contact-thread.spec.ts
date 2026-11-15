@@ -15,7 +15,7 @@ test.describe("Mobile contact messaging", () => {
     await expect(page.getByRole("button", { name: "Call" })).toBeVisible();
 
     await Promise.all([
-      page.waitForURL(/\/mobile\?threadId=/),
+      page.waitForURL((url) => url.pathname === "/mobile" && Boolean(url.searchParams.get("threadId"))),
       page.getByRole("button", { name: "Message" }).click()
     ]);
 
