@@ -414,9 +414,23 @@ export async function ensureE2ECommissionPrincipals(): Promise<void> {
 
 export async function createE2EDraftPayoutRun(): Promise<string> {
   const sql = getSql();
-  const now = Date.now();
-  const periodStart = new Date(now - 24 * 60 * 60 * 1000);
-  const periodEnd = new Date(now + 24 * 60 * 60 * 1000);
+  // Completion refreshes reports for the configured calendar week. An
+  // arbitrary +/-24-hour fixture is deliberately not a matching payout run.
+  const [period] = await sql<
+    Array<{ timezone: string; start: Date; end: Date }>
+  >`
+    WITH settings AS (
+      SELECT COALESCE((SELECT timezone FROM commission_settings WHERE key = 'default'),
+        'America/New_York') AS timezone
+    ), bounds AS (
+      SELECT timezone, date_trunc('week', CURRENT_TIMESTAMP AT TIME ZONE timezone) AS local_start
+      FROM settings
+    )
+    SELECT timezone, local_start AT TIME ZONE timezone AS start,
+      (local_start + INTERVAL '1 week') AT TIME ZONE timezone AS end
+    FROM bounds
+  `;
+  if (!period) throw new Error("Unable to resolve E2E payout week");
   const rows = await sql<Array<{ id: string }>>`
     INSERT INTO payout_runs (
       timezone,
@@ -426,10 +440,10 @@ export async function createE2EDraftPayoutRun(): Promise<string> {
       status
     )
     VALUES (
-      'America/New_York',
-      ${periodStart},
-      ${periodEnd},
-      ${periodEnd},
+      ${period.timezone},
+      ${period.start},
+      ${period.end},
+      ${period.end},
       'draft'
     )
     RETURNING id

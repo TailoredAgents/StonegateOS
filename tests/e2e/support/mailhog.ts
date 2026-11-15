@@ -1,6 +1,11 @@
 import { getOptionalEnvVar } from "./env";
+import { mkdir, writeFile } from "node:fs/promises";
+import { randomUUID } from "node:crypto";
 
-const mailhogBase = (getOptionalEnvVar("MAILHOG_UI", "http://localhost:8025") ?? "http://localhost:8025").replace(/\/$/, "");
+const mailhogBase = (
+  getOptionalEnvVar("MAILHOG_UI", "http://localhost:8025") ??
+  "http://localhost:8025"
+).replace(/\/$/, "");
 
 type MailHogItem = {
   ID: string;
@@ -27,7 +32,9 @@ export async function fetchLatestMail(): Promise<MailHogItem | null> {
 }
 
 export async function clearMailhog(): Promise<void> {
-  const response = await fetch(`${mailhogBase}/api/v1/messages`, { method: "DELETE" });
+  const response = await fetch(`${mailhogBase}/api/v1/messages`, {
+    method: "DELETE",
+  });
   if (!response.ok) {
     throw new Error(`Failed to clear MailHog messages (${response.status})`);
   }
@@ -35,13 +42,18 @@ export async function clearMailhog(): Promise<void> {
 
 export async function waitForMailhogMessage(
   matcher: (item: MailHogItem) => boolean,
-  { timeoutMs = 15_000, intervalMs = 500 }: { timeoutMs?: number; intervalMs?: number } = {}
+  {
+    timeoutMs = 15_000,
+    intervalMs = 500,
+  }: { timeoutMs?: number; intervalMs?: number } = {},
 ): Promise<MailHogItem> {
   const start = Date.now();
+  let lastMessages: MailHogResponse | null = null;
   while (Date.now() - start < timeoutMs) {
     const response = await fetch(`${mailhogBase}/api/v2/messages`);
     if (response.ok) {
       const body = (await response.json()) as MailHogResponse;
+      lastMessages = body;
       // Check ALL messages, not just the latest
       for (const item of body.items) {
         if (matcher(item)) {
@@ -51,5 +63,13 @@ export async function waitForMailhogMessage(
     }
     await new Promise((resolve) => setTimeout(resolve, intervalMs));
   }
+  // E2E runtime safety requires local provider fakes. Keep diagnostic mail in
+  // test artifacts so a MIME mismatch can be distinguished from no delivery.
+  await mkdir("test-results", { recursive: true });
+  await writeFile(
+    `test-results/mailhog-timeout-${randomUUID()}.json`,
+    JSON.stringify(lastMessages, null, 2),
+    { mode: 0o600 },
+  );
   throw new Error("Timed out waiting for MailHog message");
 }

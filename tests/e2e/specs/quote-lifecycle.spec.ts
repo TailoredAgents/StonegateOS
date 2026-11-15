@@ -194,7 +194,12 @@ test.describe("Quote lifecycle journey", () => {
       const approveForScheduling = page.getByRole("button", {
         name: "Approve quote and have Stonegate schedule me",
       });
-      if ((await approveAndBook.count()) > 0) {
+      // Availability loads after the proposal shell; count() does not wait for
+      // hydration and can incorrectly choose the no-availability branch.
+      await expect(
+        approveAndBook.or(approveForScheduling).first(),
+      ).toBeVisible();
+      if (await approveAndBook.isVisible()) {
         bookedFromQuote = true;
         await Promise.all([
           waitForDecision("booking", "confirmed"),

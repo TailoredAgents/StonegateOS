@@ -1,6 +1,6 @@
 import { test, expect } from "../test";
 import type { Locator, Page } from "@playwright/test";
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
 import {
   createE2EMobileAppointment,
@@ -287,8 +287,8 @@ test.describe("Mobile appointment quoted work and payments", () => {
         /bg-emerald-300\/10/u,
       );
       await expect(card.getByText("Job", { exact: true })).toBeVisible();
-      await expect(card).toHaveClass(/border-white\/10/u);
-      await expect(card).toHaveClass(/bg-slate-900\/90/u);
+      await expect(card).toHaveClass(/border-emerald-300\/30/u);
+      await expect(card).toHaveClass(/bg-emerald-300\/10/u);
       const collapsedScope = card.getByText(quotedScopeText, {
         exact: true,
       });
@@ -2129,7 +2129,9 @@ test.describe("Mobile appointment quoted work and payments", () => {
     await expect(
       page.getByRole("img", { name: "Sectional in garage" }),
     ).toBeVisible();
-    await expect(page.getByText("Customer MMS", { exact: true })).toBeVisible();
+    await expect(
+      page.getByText("Customer MMS · Photo uploaded", { exact: true }),
+    ).toBeVisible();
     await expect(page.getByText("Take photo", { exact: true })).toBeVisible();
     await expect(
       page.getByText("Choose photos", { exact: true }),
@@ -2195,13 +2197,31 @@ test.describe("Mobile appointment quoted work and payments", () => {
           jobTotalCents: 47_500,
           balanceCents: 47_500,
         };
+        const version = new Date().toISOString();
         await route.fulfill({
           status: 200,
           contentType: "application/json",
           body: JSON.stringify({
             ok: true,
-            appointmentId,
-            finalTotalCents: 47_500,
+            data: {
+              appointmentId,
+              finalTotalCents: 47_500,
+              previousFinalTotalCents: 32_500,
+              paidTowardJobCents: 0,
+              paymentLocked: false,
+              changed: true,
+              version,
+            },
+            receipt: {
+              operationId: randomUUID(),
+              correlationId: randomUUID(),
+              actorId: randomUUID(),
+              committedAt: version,
+              auditEventId: randomUUID(),
+              entityType: "appointment",
+              entityId: appointmentId,
+              version,
+            },
           }),
         });
       },
