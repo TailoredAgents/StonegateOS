@@ -1,0 +1,13 @@
+{
+  "capturedAt": "2026-11-15",
+  "repository": "TailoredAgents/StonegateOS",
+  "services": {
+    "site": "5a90cf86608c76cd85773dbd2362b7fa07d5019c",
+    "api": "0e66a789ea1c33b297aa5f1324571904c3fa2894",
+    "outbox": "0c0026b4cd0e26d65c93480e1aeb7e62596ffb0b",
+    "discord": "5a90cf86608c76cd85773dbd2362b7fa07d5019c"
+  },
+  "runtime": "24.21.0",
+  "runtimeEvidence": "API running instance observed through authenticated SSH; other services still require independent runtime confirmation",
+  "pnpm": "9.15.9"
+}

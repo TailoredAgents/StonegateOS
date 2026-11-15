@@ -1,0 +1,11 @@
+{
+  "name": "stonegate-migration-tools",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node --test *.test.mjs"
+  },
+  "dependencies": {
+    "postgres": "3.4.4"
+  }
+}

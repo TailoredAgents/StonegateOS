@@ -1,0 +1,83 @@
+name: Cloudflare migration validation
+on:
+  push:
+    branches: [codex/cloudflare-migration]
+    paths:
+      - infra/cloudflare/**
+      - scripts/migration/**
+      - .github/workflows/cloudflare-migration.yml
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: cloudflare-migration-${{ github.ref }}
+  cancel-in-progress: false
+jobs:
+  recovery-tool-tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24.21.0'
+      - run: npm ci --ignore-scripts --prefix scripts/migration
+      - run: node --test scripts/migration/*.test.mjs
+  container-build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - service: site
+            revision: 5a90cf86608c76cd85773dbd2362b7fa07d5019c
+          - service: api
+            revision: 0e66a789ea1c33b297aa5f1324571904c3fa2894
+          - service: outbox
+            revision: 0c0026b4cd0e26d65c93480e1aeb7e62596ffb0b
+          - service: discord
+            revision: 5a90cf86608c76cd85773dbd2362b7fa07d5019c
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: migration
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ matrix.revision }}
+          path: source
+          persist-credentials: false
+      - name: Add migration runtime files to the pinned source
+        run: |
+          mkdir -p source/infra/cloudflare
+          cp migration/infra/cloudflare/Dockerfile migration/infra/cloudflare/native-probe.mjs source/infra/cloudflare/
+          cat > source/.dockerignore <<'EOF'
+          .git
+          **/node_modules
+          **/.env*
+          **/.dev.vars*
+          output
+          artifacts
+          EOF
+      - name: Build pinned application image
+        env:
+          SERVICE: ${{ matrix.service }}
+          REVISION: ${{ matrix.revision }}
+        run: docker build --build-arg SERVICE="$SERVICE" --build-arg SOURCE_REVISION="$REVISION" -f source/infra/cloudflare/Dockerfile -t stonegate-migration:"$SERVICE" source
+      - name: Test native libraries without external network access
+        env:
+          SERVICE: ${{ matrix.service }}
+        run: docker run --rm --network none stonegate-migration:"$SERVICE" node infra/cloudflare/native-probe.mjs --self-test
+      - name: Publish immutable candidate image
+        env:
+          SERVICE: ${{ matrix.service }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          printf '%s' "$GH_TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
+          image="ghcr.io/tailoredagents/stonegate-migration-${SERVICE}:${GITHUB_SHA}"
+          docker tag stonegate-migration:"$SERVICE" "$image"
+          docker push "$image"
+          docker image inspect "$image" --format '{{json .RepoDigests}}' >> "$GITHUB_STEP_SUMMARY"
