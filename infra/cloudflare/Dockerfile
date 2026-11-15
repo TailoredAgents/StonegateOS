@@ -1,5 +1,6 @@
 # Built from a clean checkout of the per-service revision in source-manifest.json.
-FROM node:24.21.0-bookworm-slim AS build
+ARG NODE_VERSION=24.21.0
+FROM node:${NODE_VERSION}-bookworm-slim AS build
 ARG SERVICE
 ARG SOURCE_REVISION
 ENV HUSKY=0 NEXT_TELEMETRY_DISABLED=1 PNPM_HOME=/pnpm
@@ -16,10 +17,13 @@ RUN --mount=type=secret,id=site_build_env case "$SERVICE" in \
     esac
 RUN printf '%s' "$SOURCE_REVISION" > /app/infra/cloudflare/source-revision
 
-FROM node:24.21.0-bookworm-slim
+FROM cloudflare/cloudflared:2026.11.0@sha256:bf723075c9a1a35e785bdcac0e8420f504e8074cc65784ed03300b8219aafadc AS tunnel-client
+
+FROM node:${NODE_VERSION}-bookworm-slim
 ENV NODE_ENV=production NEXT_TELEMETRY_DISABLED=1 DOTENV_CONFIG_PATH=/dev/null
 WORKDIR /app
 COPY --from=build --chown=node:node /app /app
+COPY --from=tunnel-client /usr/local/bin/cloudflared /usr/local/bin/cloudflared
 USER node
 EXPOSE 8080
 # Default is a diagnostic server with no database or provider access.

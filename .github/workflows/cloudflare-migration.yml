@@ -13,6 +13,21 @@ concurrency:
   group: cloudflare-migration-${{ github.ref }}
   cancel-in-progress: false
 jobs:
+  source-manifest:
+    runs-on: ubuntu-24.04
+    outputs:
+      matrix: ${{ steps.manifest.outputs.matrix }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: manifest
+        run: |
+          node --input-type=module <<'JS'
+          import {readFileSync,appendFileSync} from 'node:fs';
+          const m=JSON.parse(readFileSync('infra/cloudflare/source-manifest.json','utf8'));
+          const matrix=Object.entries(m.services).map(([service,revision])=>({service,revision,node:m.runtimeByService[service]}));
+          if(matrix.length!==4 || matrix.some(x=>!['site','api','outbox','discord'].includes(x.service) || !/^[a-f0-9]{40}$/.test(x.revision) || !/^24\.\d+\.\d+$/.test(x.node)))throw Error('Invalid pinned source manifest');
+          appendFileSync(process.env.GITHUB_OUTPUT,'matrix='+JSON.stringify(matrix)+'\n');
+          JS
   recovery-tool-tests:
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -24,6 +39,7 @@ jobs:
       - run: npm ci --ignore-scripts --prefix scripts/migration
       - run: node --test scripts/migration/*.test.mjs
   container-build:
+    needs: source-manifest
     runs-on: ubuntu-latest
     timeout-minutes: 45
     permissions:
@@ -32,15 +48,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - service: site
-            revision: 5a90cf86608c76cd85773dbd2362b7fa07d5019c
-          - service: api
-            revision: 0e66a789ea1c33b297aa5f1324571904c3fa2894
-          - service: outbox
-            revision: 0c0026b4cd0e26d65c93480e1aeb7e62596ffb0b
-          - service: discord
-            revision: 5a90cf86608c76cd85773dbd2362b7fa07d5019c
+        include: ${{ fromJSON(needs.source-manifest.outputs.matrix) }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -66,8 +74,9 @@ jobs:
         env:
           SERVICE: ${{ matrix.service }}
           REVISION: ${{ matrix.revision }}
+          NODE_VERSION: ${{ matrix.node }}
           SITE_BUILD_ENV: ${{ secrets.STONEGATE_MIGRATION_SITE_PUBLIC_ENV }}
-        run: docker build --secret id=site_build_env,env=SITE_BUILD_ENV --build-arg SERVICE="$SERVICE" --build-arg SOURCE_REVISION="$REVISION" -f source/infra/cloudflare/Dockerfile -t stonegate-migration:"$SERVICE" source
+        run: docker build --secret id=site_build_env,env=SITE_BUILD_ENV --build-arg SERVICE="$SERVICE" --build-arg SOURCE_REVISION="$REVISION" --build-arg NODE_VERSION="$NODE_VERSION" -f source/infra/cloudflare/Dockerfile -t stonegate-migration:"$SERVICE" source
       - name: Test native libraries without external network access
         env:
           SERVICE: ${{ matrix.service }}

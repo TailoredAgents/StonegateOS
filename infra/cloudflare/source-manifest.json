@@ -8,6 +8,12 @@
     "discord": "5a90cf86608c76cd85773dbd2362b7fa07d5019c"
   },
   "runtime": "24.21.0",
-  "runtimeEvidence": "API running instance observed through authenticated SSH; other services still require independent runtime confirmation",
-  "pnpm": "9.15.9"
+  "runtimeEvidence": "All four services observed using node --version over authenticated SSH with pinned Render host key on 2026-11-15",
+  "pnpm": "9.15.9",
+  "runtimeByService": {
+    "site": "24.22.1",
+    "api": "24.21.0",
+    "outbox": "24.21.0",
+    "discord": "24.21.0"
+  }
 }

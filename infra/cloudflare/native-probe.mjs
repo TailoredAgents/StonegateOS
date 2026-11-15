@@ -14,11 +14,13 @@ async function nativeChecks() {
   const password='synthetic-migration-password';
   if (!await argon.verify(await argon.hash(password),password)) throw new Error('argon2 round-trip failed');
   const { stdout }=await execute(ffmpeg,['-version'],{timeout:15000,maxBuffer:65536});
+  const { stdout: tunnelVersion }=await execute('/usr/local/bin/cloudflared',['--version'],{timeout:15000,maxBuffer:65536});
+  if(!tunnelVersion.includes('2026.11.0'))throw new Error('Unexpected tunnel client version');
   const React=requireApi('react');
   const pdf=await import(requireApi.resolve('@react-pdf/renderer'));
   const document=React.createElement(pdf.Document,null,React.createElement(pdf.Page,null,React.createElement(pdf.Text,null,'Synthetic migration validation')));
   const documentBytes=await pdf.renderToBuffer(document);
-  return {ok:true,source,node:process.version,sharpBytes:image.length,argon2:true,ffmpeg:stdout.split('\n')[0],pdfBytes:documentBytes.length};
+  return {ok:true,source,node:process.version,sharpBytes:image.length,argon2:true,ffmpeg:stdout.split('\n')[0],cloudflared:tunnelVersion.trim(),pdfBytes:documentBytes.length};
 }
 if (process.argv.includes('--self-test')) {
   console.log(JSON.stringify(await nativeChecks()));
