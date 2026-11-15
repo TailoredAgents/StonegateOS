@@ -27,8 +27,15 @@ describe("Team CRM design-system contract", () => {
     expect(teamUi).toContain(
       "focus-visible:ring-offset-[color:var(--team-focus-offset)]",
     );
-    expect(globalCss.match(/--team-focus-ring:/gu)).toHaveLength(2);
-    expect(globalCss.match(/--team-focus-offset:/gu)).toHaveLength(2);
+    // The sidebar has its own contrast palette; check each theme's scope
+    // instead of counting unrelated declarations across the entire stylesheet.
+    for (const selector of [".team-theme-light", ".team-theme-dark", ".team-theme-light .team-sidebar-theme"]) {
+      const start = globalCss.indexOf(`${selector} {`);
+      expect(start).toBeGreaterThanOrEqual(0);
+      const declarations = globalCss.slice(start, globalCss.indexOf("}", start));
+      expect(declarations.match(/--team-focus-ring:/gu)).toHaveLength(1);
+      expect(declarations.match(/--team-focus-offset:/gu)).toHaveLength(1);
+    }
   });
 
   it("defines static light/dark semantic status and action tokens", () => {

@@ -28,8 +28,10 @@ jobs:
         run: |
           set -euo pipefail
           [[ "$CANDIDATE" =~ ^[0-9a-f]{40}$ ]]
-          successful=$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/cloudflare-migration.yml/runs?head_sha=$CANDIDATE&status=success&per_page=10" --jq '.workflow_runs | length')
-          test "$successful" -gt 0
+          build_run=$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/cloudflare-migration.yml/runs?head_sha=$CANDIDATE&status=success&per_page=10" --jq '.workflow_runs[0].id // empty')
+          test -n "$build_run"
+          successful=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$build_run/jobs?per_page=100" --jq '[.jobs[] | select((.name | startswith("container-build")) and .conclusion == "success")] | length')
+          test "$successful" -eq 4
           test -n "$REGISTRY_USER" && test -n "$REGISTRY_PASSWORD"
           printf '%s' "$GH_TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
           printf '%s' "$REGISTRY_PASSWORD" | docker login registry.cloudflare.com -u "$REGISTRY_USER" --password-stdin

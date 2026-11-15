@@ -17,16 +17,27 @@ jobs:
     runs-on: ubuntu-24.04
     outputs:
       matrix: ${{ steps.manifest.outputs.matrix }}
+      build: ${{ steps.manifest.outputs.build }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - id: manifest
+        env:
+          BEFORE_SHA: ${{ github.event.before }}
         run: |
           node --input-type=module <<'JS'
           import {readFileSync,appendFileSync} from 'node:fs';
+          import {execFileSync} from 'node:child_process';
           const m=JSON.parse(readFileSync('infra/cloudflare/source-manifest.json','utf8'));
           const matrix=Object.entries(m.services).map(([service,revision])=>({service,revision,node:m.runtimeByService[service]}));
           if(matrix.length!==4 || matrix.some(x=>!['site','api','outbox','discord'].includes(x.service) || !/^[a-f0-9]{40}$/.test(x.revision) || !/^24\.\d+\.\d+$/.test(x.node)))throw Error('Invalid pinned source manifest');
           appendFileSync(process.env.GITHUB_OUTPUT,'matrix='+JSON.stringify(matrix)+'\n');
+          const buildPaths=new Set(['infra/cloudflare/Dockerfile','infra/cloudflare/build-site.mjs','infra/cloudflare/native-probe.mjs','infra/cloudflare/source-manifest.json']);
+          const before=process.env.BEFORE_SHA;
+          const changed=process.env.GITHUB_EVENT_NAME==='push' && before && !/^0+$/.test(before)?execFileSync('git',['diff','--name-only',before,process.env.GITHUB_SHA],{encoding:'utf8'}).trim().split('\n'):[];
+          const build=process.env.GITHUB_EVENT_NAME==='workflow_dispatch' || !before || /^0+$/.test(before) || changed.some(p=>buildPaths.has(p));
+          appendFileSync(process.env.GITHUB_OUTPUT,'build='+build+'\n');
           JS
   recovery-tool-tests:
     runs-on: ubuntu-latest
@@ -40,6 +51,7 @@ jobs:
       - run: node --test scripts/migration/*.test.mjs
   container-build:
     needs: source-manifest
+    if: needs.source-manifest.outputs.build == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 45
     permissions:

@@ -451,8 +451,8 @@ describe("selected Inbox thread Site contract", () => {
     expect(route).toContain(
       "[asc(conversationMessages.createdAt), asc(conversationMessages.id)]",
     );
-    expect(route).toContain(
-      "[desc(conversationMessages.createdAt), desc(conversationMessages.id)]",
+    expect(route).toMatch(
+      /\[\s*desc\(conversationMessages\.createdAt\),\s*desc\(conversationMessages\.id\),?\s*\]/u,
     );
     expect(route).toContain(
       "const messageIds = visibleMessageRows.map((row) => row.id)",

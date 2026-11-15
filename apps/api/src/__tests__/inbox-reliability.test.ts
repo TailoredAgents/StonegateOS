@@ -119,8 +119,10 @@ describe("Inbox browser reliability contracts", () => {
     expect(loader).not.toContain("sales-agent-next-action");
     expect(view).toContain("InboxRetryClient");
     expect(view).toContain("InboxComposerClient");
-    expect(view).toContain("Delivery failed");
-    expect(view).toContain("Retry delivery");
+    expect(view).toContain("<InboxMessage");
+    const message = siteSource("src/app/team/components/InboxMessage.tsx");
+    expect(message).toContain("Delivery failed");
+    expect(message).toContain("Retry delivery");
   });
 
   it("offers AI drafting without bringing the large workspace back above messages", () => {

@@ -16,12 +16,17 @@ Private receipts and credentials are held outside this public repository under `
 | Native Cloudflare runtime | 29 checks passed across all four pinned images, including restarts, Sharp, Argon2, FFmpeg and PDF rendering | Diagnostic entrypoints only; consumers have not started |
 | Actual Next.js runtime | Seven page/asset/health checks passed inside a network-isolated Cloudflare Container | No authenticated business flows or production API access in this trial |
 | Private Worker SQL | Five consecutive reads matched restored table counts through Hyperdrive and Tunnel | Private IP works; internal hostname path failed. Certificate verification is disabled for this isolated restore trial and must be resolved for production |
-| Existing regression suites | Quote and Expense PostgreSQL suites and Partner Portal production journey passed | Quote/Expense initial runs used PG16/Node20; PG17/Node24 follow-up pending. Broad browser lane still running |
+| Verified Container SQL | Six read-only TLS queries across two Container restarts; wrong certificate identity rejected in both cycles | Access service token expires November 22; outage recovery and application-level pooling still need validation |
+| Existing regression suites | Quote and Expense follow-up passed on PG17/Node24; Partner Portal production journey passed | Broad browser audit failed in setup and UI contracts; focused rerun required |
 | Production health and access rejection | 13 live checks passed; unsigned Twilio callbacks rejected | Positive provider scenarios require controlled staging fixtures/sandbox credentials |
 
 The restore verifier canonicalizes CHECK expressions using the restore server's PostgreSQL parser and compares enum label order independently of PostgreSQL's internal fractional ordering numbers. Seven equivalent CHECK renderings were accounted for; row contents were not normalized away. Sequence values are not MVCC and are not claimed to match a live source snapshot.
 
-The candidate images preserve different live revisions per service. The API was observed running Node 24.21.0 over authenticated Render SSH. A later image build supplies the website's public variables and media CSP origin at build time using a strict field allowlist; the initial images did not include that public configuration and are not production candidates.
+The candidate images preserve different live revisions per service. Authenticated Render SSH confirmed Node 24.22.1 for the website and 24.21.0 for API, outbox and Discord. Build run `43766913190` and image-transfer run `43767348029` passed. The website build contains all 14 captured public configuration fields; its manifest hash matches the deployed configuration. Initial images without that configuration are superseded.
+
+The Container SQL trial uses the official `cloudflared access tcp` client, a service-token-only Access policy and the private Render connector. The client trusts Node roots plus Cloudflare's provided Container CA. PostgreSQL separately verifies an explicitly pinned certificate obtained over authenticated Render SSH, including its server identity. All query credentials belong to a non-superuser SELECT-only restore role; no production database credentials enter the trial. The earlier Hyperdrive trial with certificate verification disabled remains diagnostic only.
+
+The broad baseline audit (`43763531179`) was stopped near its time limit after capturing failures. Its core browser setup rejected a too-short synthetic admin-session secret. API tests reported 4,234 passing, 193 skipped and three failed source-contract assertions (formatting, an extracted message component, and a sidebar CSS scope). Portal audit paths also encountered disabled feature configurations and UI assertion failures. These are not successful migration checks. Focused fixture/contract corrections and reruns are tracked on this branch; production application behavior is unchanged.
 
 Temporary resources (prorated; additional to unchanged production hosting):
 
@@ -29,19 +34,20 @@ Temporary resources (prorated; additional to unchanged production hosting):
 |---|---|---|
 | Private restore PostgreSQL | `dpg-dbt21dui0phs73efick0-a` | Basic 1GB + 5GB storage, about $20.50/month equivalent |
 | Render Tunnel connector | `srv-dbt2abt6e07s73b7ps30` | Starter, $7/month equivalent; automatic deploy disabled |
-| Cloudflare Tunnel | `e1e17afc-ff6e-4a8d-a7ef-a83d6c0d645d` | QUIC; no public ingress hostname |
+| Cloudflare Tunnel | `e1e17afc-ff6e-4a8d-a7ef-a83d6c0d645d` | QUIC; restore-only Access-protected TCP ingress |
+| Zero Trust / Access | `migration-db.stonegatejunkremoval.com` | Free plan activated, $0/month; seven-day service credential, one restrictive Service Auth policy |
 | Restore VPC service | `01a1e122-4780-75b2-9926-b159cbdfad10` | Restricted destination TCP5432; temporary private IP |
 | Read-only restore Hyperdrive | `b449cf5370d34f62aaa57be60980a710` | Caching disabled; origin connection limit five |
-| Diagnostic Workers | `stonegate-migration-validation`, `stonegate-container-validation` | Bearer protected, synthetic operations only; metered usage |
+| Diagnostic Workers | `stonegate-migration-validation`, `stonegate-container-validation`, `stonegate-database-validation` | Bearer protected, synthetic operations only; metered usage |
 | Synthetic R2 bucket | `stonegate-migration-validation` | No public domain; isolated PUT/GET/DELETE trials |
 
-Do not treat the $27.50/month equivalent temporary Render overlap as savings. Original services are still billed. Validation Containers are stopped after tests and have a 60-second idle shutdown. No production database has been provisioned at a replacement provider.
+Do not treat the $27.50/month equivalent temporary Render overlap as savings. Original services are still billed. Validation Containers are stopped after tests and have a 60-second idle shutdown. No production database has been provisioned at a replacement provider. One new restore-only CNAME was added; all 17 pre-existing DNS records were compared and remain unchanged.
 
 Current next gates:
 
-1. Finish PG17/Node24 and broad browser regression lanes; record all failures.
-2. Build website with the captured public build configuration and verify the immutable artifact.
-3. Prove a supported, authenticated, certificate-verified Container-to-PostgreSQL route. A working Worker Hyperdrive binding does not satisfy this gate.
+1. Rerun the affected browser baseline with valid synthetic session secrets; resolve the remaining failures without weakening application checks.
+2. Exercise the verified Container SQL path through connector interruptions, pool reconnects and token/certificate rotation.
+3. Start isolated real API/site staging against disposable data, preserving the per-service deployed revisions and provider isolation.
 4. Finish authenticated application/provider staging flows, consumer drain/fencing, durable webhook handling, and rollback rehearsal.
 5. Only then move traffic and begin the observation windows below. There is no unattended production cutover or retirement timer armed.
 
@@ -245,14 +251,11 @@ The first implementation package is A–D preparation: isolate source, establish
 
 Calendar dates and a reliable engineering estimate follow the access and runtime trials. The 72-hour application observation and proposed 30-day database retention are explicit elapsed-time periods, separate from implementation effort.
 
-## Decisions needed from the user
+## Outstanding operating assumptions
 
-1. Source: migrate currently deployed behavior first (recommended), or finish/release the pending local application changes before migration?
-2. Maintenance: maximum acceptable interruption to booking/payment/admin writes, and a preferred low-traffic window in Eastern time? Proposed planning ceiling: 30 minutes, contingent on rehearsal.
-3. Cost: temporary additional hosting budget for overlap/testing? Proposed allowance: $100/month equivalent, prorated; steady-state target remains approximately $55–75/month pending measurement.
-4. Access: can the user administer Render SSH/internal shell and Cloudflare DNS permissions, or should another named administrator handle those steps? Use account settings/secure tooling, not pasted secrets.
+The user authorized end-to-end execution and use of the open provider tabs. The confirmed Render workspace is My Workspace. Access and source-isolation choices have been resolved without changing the original working tree. No further permission is needed for authorized staging work.
 
-These are missing operational decisions/capabilities, not a repeated request to authorize the already requested planning work.
+The final write-interruption window, destination PostgreSQL plan and measured steady-state cost remain unsettled. Keep the proposed 30-minute interruption ceiling and 30-day source retention as planning defaults; do not schedule a database handoff or deletion until recovery timings and all prerequisite gates support them.
 
 ## Technical references
 

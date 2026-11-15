@@ -16,7 +16,7 @@ async function check(service,route,method='GET') {
   const body=await response.json();
   const result={service,route,method,status:response.status,ms:Math.round(performance.now()-start),body,pass:response.ok};
   if(route==='api/healthz' || route==='native-check')result.pass&&=body.source===manifest.services[service];
-  if(route==='native-check')result.pass&&=body.argon2===true&&body.sharpBytes>0&&body.pdfBytes>0&&body.node==='v'+manifest.runtime;
+  if(route==='native-check')result.pass&&=body.argon2===true&&body.sharpBytes>0&&body.pdfBytes>0&&body.node==='v'+manifest.runtimeByService[service]&&body.cloudflared?.includes('2026.11.0');
   if(route==='image') {
     const binding=config.durable_objects.bindings.find(x=>x.name===service.toUpperCase());
     const image=config.containers.find(x=>x.class_name===binding.class_name).images.base.image;
@@ -27,6 +27,7 @@ async function check(service,route,method='GET') {
   if(!result.pass)throw new Error(`${service} ${route} failed`);
 }
 const settled=await Promise.allSettled(Object.keys(manifest.services).map(async service=>{
+  try {
   await check(service,'api/healthz');
   await check(service,'image');
   await check(service,'native-check','POST');
@@ -35,6 +36,11 @@ const settled=await Promise.allSettled(Object.keys(manifest.services).map(async 
   await check(service,'api/healthz');
   await check(service,'native-check','POST');
   await check(service,'stop','POST');
+  } finally {
+    const response=await fetch(`${origin}/${service}/stop`,{method:'POST',headers:{authorization:`Bearer ${token}`},signal:AbortSignal.timeout(15000)});
+    await response.body?.cancel();
+    if(!response.ok)throw new Error(`${service} cleanup failed (${response.status})`);
+  }
 }));
 for(let i=0;i<settled.length;i++)if(settled[i].status==='rejected')results.push({service:Object.keys(manifest.services)[i],pass:false,error:settled[i].reason.message});
 await writeFile(path.join(directory,`container-validation-${Date.now()}.json`),JSON.stringify({at:new Date().toISOString(),results},null,2),{mode:0o600,flag:'wx'});

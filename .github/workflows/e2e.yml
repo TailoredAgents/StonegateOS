@@ -13,7 +13,7 @@ on:
         description: Run a specific validation lane
         type: choice
         default: all
-        options: [all, database, quote, expense, browser]
+        options: [all, database, quote, expense, browser, browser-core]
       node_version:
         description: Node runtime for this validation run
         type: choice
@@ -171,7 +171,7 @@ jobs:
           src/__tests__/management-commission-rates.integration.test.ts
 
   playwright-e2e:
-    if: github.event_name != 'workflow_dispatch' || inputs.suite == '' || inputs.suite == 'all' || inputs.suite == 'browser'
+    if: github.event_name != 'workflow_dispatch' || inputs.suite == '' || inputs.suite == 'all' || inputs.suite == 'browser' || inputs.suite == 'browser-core'
     runs-on: ubuntu-24.04
     timeout-minutes: 60
 
@@ -260,7 +260,7 @@ jobs:
       - name: Start production-like stack and run Playwright verification
         env:
           CI: "true"
-          FULL_BROWSER_AUDIT: ${{ github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' }}
+          FULL_BROWSER_AUDIT: ${{ github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.suite != 'browser-core') }}
         run: |
           wait_for_application_health() {
             services_ready=false
@@ -294,7 +294,7 @@ jobs:
           echo $! > dev-server.pid
           wait_for_application_health
           set +e
-          pnpm test:e2e
+          pnpm test:e2e --max-failures=8
           core_status=$?
           quote_status=0
           partner_status=0
@@ -352,7 +352,9 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: playwright-artifacts
-          path: artifacts/e2e
+          path: |
+            artifacts/e2e
+            artifacts/team-crm-audit
 
       - name: Cleanup e2e data
         if: always()

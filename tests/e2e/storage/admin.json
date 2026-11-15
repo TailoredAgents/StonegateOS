@@ -2,7 +2,7 @@
   "cookies": [
     {
       "name": "myst-admin-session",
-      "value": "e2e-admin-session-secret",
+      "value": "e2e-admin-session-secret-local-only-2026",
       "domain": "localhost",
       "path": "/",
       "expires": 1788178871,

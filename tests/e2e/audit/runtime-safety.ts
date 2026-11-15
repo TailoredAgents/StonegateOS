@@ -63,8 +63,8 @@ const OPTIONAL_PROVIDER_CREDENTIALS = [
 const EXACT_E2E_SENTINELS: Readonly<Record<string, string>> = {
   SITE_URL: "https://stonegate.e2e.test",
   ADMIN_API_KEY: "e2e-admin-key",
-  ADMIN_SESSION_SECRET: "e2e-admin-session-secret",
-  CREW_SESSION_SECRET: "e2e-crew-session-secret",
+  ADMIN_SESSION_SECRET: "e2e-admin-session-secret-local-only-2026",
+  CREW_SESSION_SECRET: "e2e-crew-session-secret-local-only-2026",
   AGENT_BOT_SHARED_SECRET: "e2e-agent-bot-shared-secret",
   TEAM_AUTH_RATE_LIMIT_SECRET: "e2e-team-auth-rate-limit-secret-000000000000",
   TEAM_AUTH_RATE_LIMIT_BYPASS_TOKEN: "e2e-team-auth-rate-limit-bypass",
