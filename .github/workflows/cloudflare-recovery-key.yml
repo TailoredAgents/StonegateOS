@@ -1,0 +1,31 @@
+name: Recovery key escrow
+on:
+  workflow_dispatch:
+    inputs:
+      recipient_public_key:
+        description: Base64 of a fresh RSA 4096-bit public PEM; keep its private key locally
+        type: string
+        required: true
+permissions:
+  contents: read
+jobs:
+  wrap:
+    if: github.ref == 'refs/heads/codex/cloudflare-migration' || github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 3
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24.21.0'
+      - name: Encrypt escrowed key for the requesting operator
+        env:
+          BACKUP_KEY_BASE64: ${{ secrets.STONEGATE_MIGRATION_BACKUP_KEY_20261115 }}
+          RECIPIENT_PUBLIC_KEY: ${{ inputs.recipient_public_key }}
+        run: node scripts/migration/wrap-recovery-key.mjs
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wrapped-recovery-key
+          path: artifacts/recovery-key/wrapped-key.json
+          retention-days: 1
+          if-no-files-found: error
