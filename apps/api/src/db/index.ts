@@ -8,8 +8,10 @@ declare global {
 }
 
 let cachedDb: ReturnType<typeof drizzle> | undefined;
+let ownedClient: ReturnType<typeof postgres> | undefined;
 
 export function getDb() {
+  if (cachedDb) return cachedDb;
   const connectionString = process.env["DATABASE_URL"];
 
   if (!connectionString) {
@@ -26,6 +28,7 @@ export function getDb() {
       idle_timeout: 20,
       ...(ssl ? { ssl } : {}),
     });
+  ownedClient = client;
 
   if (process.env["NODE_ENV"] !== "production") {
     globalThis.__mystDbClient = client;
@@ -56,7 +59,13 @@ export async function closeDbForTests(): Promise<void> {
     throw new Error("closeDbForTests is only available in test environments");
   }
 
-  const client = globalThis.__mystDbClient;
+  await closeDbForWorkerShutdown();
+}
+
+/** Call only after the worker has drained its batch, schedulers and heartbeat. */
+export async function closeDbForWorkerShutdown(): Promise<void> {
+  const client = ownedClient ?? globalThis.__mystDbClient;
+  ownedClient = undefined;
   cachedDb = undefined;
   globalThis.__mystDrizzle = undefined;
   globalThis.__mystDbClient = undefined;

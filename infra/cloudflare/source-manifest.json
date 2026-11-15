@@ -21,6 +21,14 @@
       "path": "infra/cloudflare/patches/database-tls-servername.patch",
       "sha256": "ad18beef443666465cd28c7802b9a3c099083be0e81b0309807b276df65b5756",
       "purpose": "Verify the database certificate identity when the TCP socket terminates at a local authenticated relay; defaults unchanged"
+    },
+    {
+      "path": "infra/cloudflare/patches/outbox-graceful-drain.patch",
+      "sha256": "44c0fc2b52642b0cc9042cce2f3871faf6a380c2936110926299b60e3741afef",
+      "services": [
+        "outbox"
+      ],
+      "purpose": "Drain in-flight worker work on SIGTERM, skip new schedulers and release the database pool before exit"
     }
   ]
 }

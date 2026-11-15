@@ -1,0 +1,224 @@
+diff --git a/apps/api/src/db/index.ts b/apps/api/src/db/index.ts
+index 82b06dd5..0ccf3d55 100644
+--- a/apps/api/src/db/index.ts
++++ b/apps/api/src/db/index.ts
+@@ -8,8 +8,10 @@ declare global {
+ }
+ 
+ let cachedDb: ReturnType<typeof drizzle> | undefined;
++let ownedClient: ReturnType<typeof postgres> | undefined;
+ 
+ export function getDb() {
++  if (cachedDb) return cachedDb;
+   const connectionString = process.env["DATABASE_URL"];
+ 
+   if (!connectionString) {
+@@ -26,6 +28,7 @@ export function getDb() {
+       idle_timeout: 20,
+       ...(ssl ? { ssl } : {}),
+     });
++  ownedClient = client;
+ 
+   if (process.env["NODE_ENV"] !== "production") {
+     globalThis.__mystDbClient = client;
+@@ -56,7 +59,13 @@ export async function closeDbForTests(): Promise<void> {
+     throw new Error("closeDbForTests is only available in test environments");
+   }
+ 
+-  const client = globalThis.__mystDbClient;
++  await closeDbForWorkerShutdown();
++}
++
++/** Call only after the worker has drained its batch, schedulers and heartbeat. */
++export async function closeDbForWorkerShutdown(): Promise<void> {
++  const client = ownedClient ?? globalThis.__mystDbClient;
++  ownedClient = undefined;
+   cachedDb = undefined;
+   globalThis.__mystDrizzle = undefined;
+   globalThis.__mystDbClient = undefined;
+diff --git a/apps/api/src/lib/outbox-worker-runtime.ts b/apps/api/src/lib/outbox-worker-runtime.ts
+index 25a8e413..40ef24e4 100644
+--- a/apps/api/src/lib/outbox-worker-runtime.ts
++++ b/apps/api/src/lib/outbox-worker-runtime.ts
+@@ -15,6 +15,27 @@ export type OutboxWorkerHeartbeat = {
+   stop: () => Promise<void>;
+ };
+ 
++/** Stop admitting work while allowing an awaited provider operation to settle. */
++export function createOutboxDrainController() {
++  let stopping = false;
++  let wake: (() => void) | null = null;
++  return {
++    get stopping() { return stopping; },
++    requestStop() {
++      stopping = true;
++      wake?.();
++    },
++    wait(ms: number): Promise<void> {
++      if (stopping) return Promise.resolve();
++      return new Promise((resolve) => {
++        const finish = () => { clearTimeout(timer); wake = null; resolve(); };
++        const timer = setTimeout(finish, ms);
++        wake = finish;
++      });
++    },
++  };
++}
++
+ const DEFAULT_BATCH_SIZE = 10;
+ const MIN_BATCH_SIZE = 1;
+ const MAX_BATCH_SIZE = 100;
+diff --git a/scripts/outbox-worker.ts b/scripts/outbox-worker.ts
+index 17777a7e..39b6e736 100644
+--- a/scripts/outbox-worker.ts
++++ b/scripts/outbox-worker.ts
+@@ -6,12 +6,9 @@ import {
+   parseOutboxWorkerConfiguration,
+   shouldLogOutboxBatch,
+   startOutboxWorkerHeartbeat,
++  createOutboxDrainController,
+ } from "../apps/api/src/lib/outbox-worker-runtime";
+ 
+-async function sleep(ms: number) {
+-  return new Promise((resolve) => setTimeout(resolve, ms));
+-}
+-
+ async function recordWorkerHeartbeat(
+   ok: boolean,
+   detail?: string | null,
+@@ -315,6 +312,14 @@ async function main() {
+   });
+ 
+   if (pollIntervalMs > 0) {
++    const drain = createOutboxDrainController();
++    const requestDrain = () => {
++      if (drain.stopping) return;
++      drain.requestStop();
++      logWorkerEvent("info", "outbox.worker.draining", { ok: true });
++    };
++    process.on("SIGTERM", requestDrain);
++    process.on("SIGINT", requestDrain);
+     const heartbeat = startOutboxWorkerHeartbeat({
+       intervalMs: heartbeatIntervalMs,
+       record: () => recordAndLogWorkerHeartbeat(true),
+@@ -326,11 +331,12 @@ async function main() {
+       },
+     });
+ 
++    let drained = false;
+     try {
+       // Continuous polling loop
+-      while (true) {
++      while (!drain.stopping) {
+         const stats = await runOnce(batchSize);
+-        if (Date.now() >= nextSeoAt) {
++        if (!drain.stopping && Date.now() >= nextSeoAt) {
+           try {
+             await runSeoOnce();
+           } catch (error) {
+@@ -345,7 +351,7 @@ async function main() {
+               ? seoIntervalMs
+               : 6 * 60 * 60 * 1000);
+         }
+-        if (Date.now() >= nextGoogleAdsAt) {
++        if (!drain.stopping && Date.now() >= nextGoogleAdsAt) {
+           try {
+             await runGoogleAdsQueueOnce();
+             await runGoogleAdsAnalystQueueOnce();
+@@ -362,7 +368,7 @@ async function main() {
+               ? googleAdsIntervalMs
+               : 24 * 60 * 60 * 1000);
+         }
+-        if (Date.now() >= nextSalesDraftPrepAt) {
++        if (!drain.stopping && Date.now() >= nextSalesDraftPrepAt) {
+           try {
+             await runSalesDraftPrepOnce();
+           } catch (error) {
+@@ -378,7 +384,7 @@ async function main() {
+               ? salesDraftPrepIntervalMs
+               : 3 * 60 * 1000);
+         }
+-        if (Date.now() >= nextFacebookDmNameBackfillAt) {
++        if (!drain.stopping && Date.now() >= nextFacebookDmNameBackfillAt) {
+           try {
+             await runFacebookDmNameBackfillOnce();
+           } catch (error) {
+@@ -394,7 +400,7 @@ async function main() {
+               ? facebookDmNameBackfillIntervalMs
+               : 2 * 60 * 60 * 1000);
+         }
+-        if (Date.now() >= nextTraccarSyncAt) {
++        if (!drain.stopping && Date.now() >= nextTraccarSyncAt) {
+           try {
+             await runTraccarSyncOnce();
+           } catch (error) {
+@@ -410,7 +416,7 @@ async function main() {
+               ? traccarSyncIntervalMs
+               : 60 * 1000);
+         }
+-        if (Date.now() >= nextAppointmentMediaCleanupAt) {
++        if (!drain.stopping && Date.now() >= nextAppointmentMediaCleanupAt) {
+           try {
+             await runAppointmentMediaCleanupOnce();
+           } catch (error) {
+@@ -426,7 +432,7 @@ async function main() {
+               ? appointmentMediaCleanupIntervalMs
+               : 60 * 60 * 1000);
+         }
+-        if (Date.now() >= nextSquareReconciliationAt) {
++        if (!drain.stopping && Date.now() >= nextSquareReconciliationAt) {
+           try {
+             await runSquareReconciliationOnce();
+           } catch (error) {
+@@ -442,7 +448,7 @@ async function main() {
+               ? squareReconciliationIntervalMs
+               : 2 * 60 * 1000);
+         }
+-        if (Date.now() >= nextPartnerInviteRecoveryAt) {
++        if (!drain.stopping && Date.now() >= nextPartnerInviteRecoveryAt) {
+           try {
+             await runPartnerInviteRecoveryOnce();
+           } catch (error) {
+@@ -458,7 +464,7 @@ async function main() {
+               ? partnerInviteRecoveryIntervalMs
+               : 60 * 1000);
+         }
+-        if (Date.now() >= nextPartnerRecurringHorizonAt) {
++        if (!drain.stopping && Date.now() >= nextPartnerRecurringHorizonAt) {
+           try {
+             await runPartnerRecurringHorizonOnce();
+           } catch (error) {
+@@ -474,7 +480,7 @@ async function main() {
+               ? partnerRecurringHorizonIntervalMs
+               : 5 * 60 * 1000);
+         }
+-        if (Date.now() >= nextPartnerAuthRetentionAt) {
++        if (!drain.stopping && Date.now() >= nextPartnerAuthRetentionAt) {
+           try {
+             await runPartnerAuthRetentionOnce();
+           } catch (error) {
+@@ -491,11 +497,15 @@ async function main() {
+               : 24 * 60 * 60 * 1000);
+         }
+         if (stats.total === 0) {
+-          await sleep(pollIntervalMs);
++          await drain.wait(pollIntervalMs);
+         }
+       }
++      drained = drain.stopping;
+     } finally {
+       await heartbeat.stop();
++      process.off("SIGTERM", requestDrain);
++      process.off("SIGINT", requestDrain);
++      if (drained) logWorkerEvent("info", "outbox.worker.drained", { ok: true });
+     }
+   } else {
+     await runOnce(batchSize, { logIdle: true });
+@@ -526,4 +536,7 @@ main().catch(async (error) => {
+   }
+   logWorkerEvent("error", "outbox.worker.failed", { ok: false, detail });
+   process.exitCode = 1;
++}).finally(async () => {
++  const { closeDbForWorkerShutdown } = await import("../apps/api/src/db");
++  await closeDbForWorkerShutdown();
+ });

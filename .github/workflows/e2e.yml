@@ -85,6 +85,9 @@ jobs:
           pnpm --filter api typecheck
           pnpm --filter site typecheck
 
+      - name: Verify outbox worker signal drain on disposable PostgreSQL
+        run: pnpm exec tsx scripts/migration/outbox-drain-integration.mts
+
       - name: Run mandatory database quote lifecycle test
         run: >-
           pnpm --filter api test -- --runInBand

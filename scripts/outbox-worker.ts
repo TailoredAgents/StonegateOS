@@ -6,11 +6,8 @@ import {
   parseOutboxWorkerConfiguration,
   shouldLogOutboxBatch,
   startOutboxWorkerHeartbeat,
+  createOutboxDrainController,
 } from "../apps/api/src/lib/outbox-worker-runtime";
-
-async function sleep(ms: number) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
 
 async function recordWorkerHeartbeat(
   ok: boolean,
@@ -315,6 +312,14 @@ async function main() {
   });
 
   if (pollIntervalMs > 0) {
+    const drain = createOutboxDrainController();
+    const requestDrain = () => {
+      if (drain.stopping) return;
+      drain.requestStop();
+      logWorkerEvent("info", "outbox.worker.draining", { ok: true });
+    };
+    process.on("SIGTERM", requestDrain);
+    process.on("SIGINT", requestDrain);
     const heartbeat = startOutboxWorkerHeartbeat({
       intervalMs: heartbeatIntervalMs,
       record: () => recordAndLogWorkerHeartbeat(true),
@@ -326,11 +331,12 @@ async function main() {
       },
     });
 
+    let drained = false;
     try {
       // Continuous polling loop
-      while (true) {
+      while (!drain.stopping) {
         const stats = await runOnce(batchSize);
-        if (Date.now() >= nextSeoAt) {
+        if (!drain.stopping && Date.now() >= nextSeoAt) {
           try {
             await runSeoOnce();
           } catch (error) {
@@ -345,7 +351,7 @@ async function main() {
               ? seoIntervalMs
               : 6 * 60 * 60 * 1000);
         }
-        if (Date.now() >= nextGoogleAdsAt) {
+        if (!drain.stopping && Date.now() >= nextGoogleAdsAt) {
           try {
             await runGoogleAdsQueueOnce();
             await runGoogleAdsAnalystQueueOnce();
@@ -362,7 +368,7 @@ async function main() {
               ? googleAdsIntervalMs
               : 24 * 60 * 60 * 1000);
         }
-        if (Date.now() >= nextSalesDraftPrepAt) {
+        if (!drain.stopping && Date.now() >= nextSalesDraftPrepAt) {
           try {
             await runSalesDraftPrepOnce();
           } catch (error) {
@@ -378,7 +384,7 @@ async function main() {
               ? salesDraftPrepIntervalMs
               : 3 * 60 * 1000);
         }
-        if (Date.now() >= nextFacebookDmNameBackfillAt) {
+        if (!drain.stopping && Date.now() >= nextFacebookDmNameBackfillAt) {
           try {
             await runFacebookDmNameBackfillOnce();
           } catch (error) {
@@ -394,7 +400,7 @@ async function main() {
               ? facebookDmNameBackfillIntervalMs
               : 2 * 60 * 60 * 1000);
         }
-        if (Date.now() >= nextTraccarSyncAt) {
+        if (!drain.stopping && Date.now() >= nextTraccarSyncAt) {
           try {
             await runTraccarSyncOnce();
           } catch (error) {
@@ -410,7 +416,7 @@ async function main() {
               ? traccarSyncIntervalMs
               : 60 * 1000);
         }
-        if (Date.now() >= nextAppointmentMediaCleanupAt) {
+        if (!drain.stopping && Date.now() >= nextAppointmentMediaCleanupAt) {
           try {
             await runAppointmentMediaCleanupOnce();
           } catch (error) {
@@ -426,7 +432,7 @@ async function main() {
               ? appointmentMediaCleanupIntervalMs
               : 60 * 60 * 1000);
         }
-        if (Date.now() >= nextSquareReconciliationAt) {
+        if (!drain.stopping && Date.now() >= nextSquareReconciliationAt) {
           try {
             await runSquareReconciliationOnce();
           } catch (error) {
@@ -442,7 +448,7 @@ async function main() {
               ? squareReconciliationIntervalMs
               : 2 * 60 * 1000);
         }
-        if (Date.now() >= nextPartnerInviteRecoveryAt) {
+        if (!drain.stopping && Date.now() >= nextPartnerInviteRecoveryAt) {
           try {
             await runPartnerInviteRecoveryOnce();
           } catch (error) {
@@ -458,7 +464,7 @@ async function main() {
               ? partnerInviteRecoveryIntervalMs
               : 60 * 1000);
         }
-        if (Date.now() >= nextPartnerRecurringHorizonAt) {
+        if (!drain.stopping && Date.now() >= nextPartnerRecurringHorizonAt) {
           try {
             await runPartnerRecurringHorizonOnce();
           } catch (error) {
@@ -474,7 +480,7 @@ async function main() {
               ? partnerRecurringHorizonIntervalMs
               : 5 * 60 * 1000);
         }
-        if (Date.now() >= nextPartnerAuthRetentionAt) {
+        if (!drain.stopping && Date.now() >= nextPartnerAuthRetentionAt) {
           try {
             await runPartnerAuthRetentionOnce();
           } catch (error) {
@@ -491,11 +497,15 @@ async function main() {
               : 24 * 60 * 60 * 1000);
         }
         if (stats.total === 0) {
-          await sleep(pollIntervalMs);
+          await drain.wait(pollIntervalMs);
         }
       }
+      drained = drain.stopping;
     } finally {
       await heartbeat.stop();
+      process.off("SIGTERM", requestDrain);
+      process.off("SIGINT", requestDrain);
+      if (drained) logWorkerEvent("info", "outbox.worker.drained", { ok: true });
     }
   } else {
     await runOnce(batchSize, { logIdle: true });
@@ -526,4 +536,7 @@ main().catch(async (error) => {
   }
   logWorkerEvent("error", "outbox.worker.failed", { ok: false, detail });
   process.exitCode = 1;
+}).finally(async () => {
+  const { closeDbForWorkerShutdown } = await import("../apps/api/src/db");
+  await closeDbForWorkerShutdown();
 });

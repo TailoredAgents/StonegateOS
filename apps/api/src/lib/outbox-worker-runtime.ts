@@ -15,6 +15,27 @@ export type OutboxWorkerHeartbeat = {
   stop: () => Promise<void>;
 };
 
+/** Stop admitting work while allowing an awaited provider operation to settle. */
+export function createOutboxDrainController() {
+  let stopping = false;
+  let wake: (() => void) | null = null;
+  return {
+    get stopping() { return stopping; },
+    requestStop() {
+      stopping = true;
+      wake?.();
+    },
+    wait(ms: number): Promise<void> {
+      if (stopping) return Promise.resolve();
+      return new Promise((resolve) => {
+        const finish = () => { clearTimeout(timer); wake = null; resolve(); };
+        const timer = setTimeout(finish, ms);
+        wake = finish;
+      });
+    },
+  };
+}
+
 const DEFAULT_BATCH_SIZE = 10;
 const MIN_BATCH_SIZE = 1;
 const MAX_BATCH_SIZE = 100;

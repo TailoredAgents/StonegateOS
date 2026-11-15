@@ -71,21 +71,29 @@ jobs:
           path: source
           persist-credentials: false
       - name: Add migration runtime files to the pinned source
+        env:
+          SERVICE: ${{ matrix.service }}
         run: |
           mkdir -p source/infra/cloudflare
           cp migration/infra/cloudflare/Dockerfile migration/infra/cloudflare/native-probe.mjs migration/infra/cloudflare/build-site.mjs source/infra/cloudflare/
           node --input-type=module <<'JS'
           import {readFileSync,writeFileSync} from 'node:fs';
           import {createHash} from 'node:crypto';
+          import {execFileSync} from 'node:child_process';
+          import {resolve} from 'node:path';
           const {compatibilityPatches}=JSON.parse(readFileSync('migration/infra/cloudflare/source-manifest.json','utf8'));
-          for(const patch of compatibilityPatches) {
+          const selected=compatibilityPatches.filter(p=>!p.services||p.services.includes(process.env.SERVICE));
+          for(const patch of selected) {
             if(createHash('sha256').update(readFileSync('migration/'+patch.path)).digest('hex')!==patch.sha256)throw Error('Compatibility patch hash mismatch');
+            const filename=resolve('migration/'+patch.path);
+            execFileSync('git',['apply','--check',filename],{cwd:'source'});
+            execFileSync('git',['apply',filename],{cwd:'source'});
           }
-          writeFileSync('source/infra/cloudflare/compatibility-patches.json',JSON.stringify(compatibilityPatches));
+          writeFileSync('source/infra/cloudflare/compatibility-patches.json',JSON.stringify(selected));
           JS
-          git -C source apply --check ../migration/infra/cloudflare/patches/database-tls-servername.patch
-          git -C source apply ../migration/infra/cloudflare/patches/database-tls-servername.patch
           cp migration/apps/api/src/__tests__/database-ssl.test.ts source/apps/api/src/__tests__/database-ssl.test.ts
+          mkdir -p source/scripts/migration
+          cp migration/scripts/migration/worker-drain.test.mjs source/scripts/migration/
           cat > source/.dockerignore <<'EOF'
           .git
           **/node_modules
