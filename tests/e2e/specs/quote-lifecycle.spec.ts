@@ -239,7 +239,9 @@ test.describe("Quote lifecycle journey", () => {
 
       if (bookedFromQuote) {
         expect(eventTypes).toContain("estimate.requested");
-        expect(eventTypes).not.toContain("quote.decision");
+        // Booking atomically records the accepted decision as well as the
+        // appointment; both durable events must remain available to consumers.
+        expect(eventTypes).toContain("quote.decision");
 
         const bookingEmail = await waitForMailhogMessage((message) => {
           const toHeader = message.Content.Headers["To"] ?? [];

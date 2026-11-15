@@ -2251,8 +2251,8 @@ test.describe("Mobile appointment quoted work and payments", () => {
     ).toBeVisible();
     await expect(page.getByText("$475.00 remaining")).toBeVisible();
     await expect(
-      page.getByRole("button", { name: "Final job total saved" }),
-    ).toBeDisabled();
+      page.getByRole("button", { name: "Save final job total" }),
+    ).toHaveCount(0);
     await openCompletionReview(page, appointmentId);
     await expect(page.locator('input[name="finalTotal"]')).toHaveValue(
       "475.00",

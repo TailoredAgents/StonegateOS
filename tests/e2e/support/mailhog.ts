@@ -65,9 +65,9 @@ export async function waitForMailhogMessage(
   }
   // E2E runtime safety requires local provider fakes. Keep diagnostic mail in
   // test artifacts so a MIME mismatch can be distinguished from no delivery.
-  await mkdir("test-results", { recursive: true });
+  await mkdir("artifacts/e2e/mailhog", { recursive: true });
   await writeFile(
-    `test-results/mailhog-timeout-${randomUUID()}.json`,
+    `artifacts/e2e/mailhog/timeout-${randomUUID()}.json`,
     JSON.stringify(lastMessages, null, 2),
     { mode: 0o600 },
   );
