@@ -1,0 +1,56 @@
+{
+  "name": "stonegate-synthetic-validation",
+  "main": "worker.ts",
+  "account_id": "78ed83c6e3947c93763acef3a48a5561",
+  "compatibility_date": "2026-11-15",
+  "compatibility_flags": ["nodejs_compat"],
+  "workers_dev": true,
+  "preview_urls": false,
+  "observability": {
+    "enabled": true,
+    "head_sampling_rate": 1,
+  },
+  "containers": [
+    {
+      "class_name": "SyntheticApi",
+      "scheduling_policy": "durable_object",
+      "images": {
+        "base": {
+          "image": "registry.cloudflare.com/78ed83c6e3947c93763acef3a48a5561/stonegate-migration-api@sha256:37bce0ede509aa98b62e82ff76f19fae65ef01bf702d1ad812ee99f57e5e3e85",
+        },
+      },
+    },
+    {
+      "class_name": "SyntheticOutbox",
+      "scheduling_policy": "durable_object",
+      "images": {
+        "base": {
+          "image": "registry.cloudflare.com/78ed83c6e3947c93763acef3a48a5561/stonegate-migration-outbox@sha256:a4e050fc281bdb593875bc3a34f5b511ff4a289d6abaa79482010edf23a30306",
+        },
+      },
+    },
+  ],
+  "durable_objects": {
+    "code_update_strategy": { "mode": "immediate" },
+    "bindings": [
+      {
+        "name": "API",
+        "class_name": "SyntheticApi",
+      },
+      {
+        "name": "OUTBOX",
+        "class_name": "SyntheticOutbox",
+      },
+    ],
+  },
+  "exports": {
+    "SyntheticApi": {
+      "type": "durable-object",
+      "storage": "sqlite",
+    },
+    "SyntheticOutbox": {
+      "type": "durable-object",
+      "storage": "sqlite",
+    },
+  },
+}
