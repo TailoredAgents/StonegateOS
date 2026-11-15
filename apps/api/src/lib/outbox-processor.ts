@@ -239,6 +239,8 @@ export interface OutboxBatchStats {
 
 export interface ProcessOutboxBatchOptions {
   limit?: number;
+  /** A draining worker finishes its current event but admits no next event. */
+  shouldContinue?: () => boolean;
   /** Optional internal worker/test scope; an explicit empty scope processes nothing. */
   eventTypes?: readonly string[];
 }
@@ -8067,7 +8069,11 @@ export async function processOutboxBatch(
     errors: 0,
   };
 
-  for (const event of events) {
+  for (const [index, event] of events.entries()) {
+    if (options.shouldContinue?.() === false) {
+      stats.skipped += events.length - index;
+      break;
+    }
     const dispatchBlock = getOutboxDispatchBlock(event.type);
     if (dispatchBlock) {
       // Operational containment must not consume the event's retry budget.

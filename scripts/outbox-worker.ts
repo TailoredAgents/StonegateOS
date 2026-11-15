@@ -34,11 +34,11 @@ function logWorkerEvent(
   }
 }
 
-async function runOnce(limit: number, options: { logIdle?: boolean } = {}) {
+async function runOnce(limit: number, options: { logIdle?: boolean; shouldContinue?: () => boolean } = {}) {
   const { processOutboxBatch } = await import(
     "../apps/api/src/lib/outbox-processor"
   );
-  const stats = await processOutboxBatch({ limit });
+  const stats = await processOutboxBatch({ limit, ...(options.shouldContinue ? { shouldContinue: options.shouldContinue } : {}) });
   if (options.logIdle || shouldLogOutboxBatch(stats)) {
     logWorkerEvent(
       stats.errors > 0 ? "error" : "info",
@@ -335,7 +335,7 @@ async function main() {
     try {
       // Continuous polling loop
       while (!drain.stopping) {
-        const stats = await runOnce(batchSize);
+        const stats = await runOnce(batchSize, { shouldContinue: () => !drain.stopping });
         if (!drain.stopping && Date.now() >= nextSeoAt) {
           try {
             await runSeoOnce();

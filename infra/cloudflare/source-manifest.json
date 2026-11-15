@@ -24,11 +24,11 @@
     },
     {
       "path": "infra/cloudflare/patches/outbox-graceful-drain.patch",
-      "sha256": "44c0fc2b52642b0cc9042cce2f3871faf6a380c2936110926299b60e3741afef",
+      "sha256": "7604a2f93de983f3d9030193a80c00c47a5bda2171a3582658ff3848a58ca234",
       "services": [
         "outbox"
       ],
-      "purpose": "Drain in-flight worker work on SIGTERM, skip new schedulers and release the database pool before exit"
+      "purpose": "Finish the current event on SIGTERM, admit no next event or scheduler, and release the database pool before exit"
     },
     {
       "path": "infra/cloudflare/patches/inbox-booking-directory.patch",
