@@ -8,9 +8,16 @@ on:
   schedule:
     - cron: "17 8 * * *"
   workflow_dispatch:
+    inputs:
+      suite:
+        description: Run a specific validation lane
+        type: choice
+        default: all
+        options: [all, quote, expense, browser]
 
 jobs:
   quote-v2-postgres:
+    if: github.event_name != 'workflow_dispatch' || inputs.suite == '' || inputs.suite == 'all' || inputs.suite == 'quote'
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     env:
@@ -58,6 +65,8 @@ jobs:
         run: pnpm db:migrate
 
       - name: Typecheck Quote V2 applications
+        env:
+          NODE_OPTIONS: --max-old-space-size=6144
         run: |
           pnpm --filter api typecheck
           pnpm --filter site typecheck
@@ -78,6 +87,7 @@ jobs:
           test/quote-action-services.test.ts
 
   expense-v2-postgres:
+    if: github.event_name != 'workflow_dispatch' || inputs.suite == '' || inputs.suite == 'all' || inputs.suite == 'expense'
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     env:
@@ -151,6 +161,7 @@ jobs:
           src/__tests__/management-commission-rates.integration.test.ts
 
   playwright-e2e:
+    if: github.event_name != 'workflow_dispatch' || inputs.suite == '' || inputs.suite == 'all' || inputs.suite == 'browser'
     runs-on: ubuntu-24.04
     timeout-minutes: 60
 
@@ -184,6 +195,8 @@ jobs:
           mkdir -p artifacts/e2e/logs
 
       - name: Typecheck changed applications
+        env:
+          NODE_OPTIONS: --max-old-space-size=6144
         run: pnpm typecheck
 
       - name: Enforce lint debt ratchet
