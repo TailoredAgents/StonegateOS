@@ -15,7 +15,7 @@ async function check(service,route,method='GET') {
   const response=await fetch(`${origin}/${service}/${route}`,{method,headers:{authorization:`Bearer ${token}`},signal:AbortSignal.timeout(90000)});
   const body=await response.json();
   const result={service,route,method,status:response.status,ms:Math.round(performance.now()-start),body,pass:response.ok};
-  if(route==='api/healthz' || route==='native-check')result.pass&&=body.source===manifest.services[service];
+  if(route==='api/healthz' || route==='native-check')result.pass&&=body.source===manifest.services[service]&&JSON.stringify(body.compatibilityPatches)===JSON.stringify(manifest.compatibilityPatches);
   if(route==='native-check')result.pass&&=body.argon2===true&&body.sharpBytes>0&&body.pdfBytes>0&&body.node==='v'+manifest.runtimeByService[service]&&body.cloudflared?.includes('2026.11.0');
   if(route==='image') {
     const binding=config.durable_objects.bindings.find(x=>x.name===service.toUpperCase());

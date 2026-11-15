@@ -3,6 +3,7 @@ type DatabaseSslEnvironment = {
   DATABASE_SSL?: string;
   DATABASE_SSL_CA?: string;
   DATABASE_SSL_CA_BASE64?: string;
+  DATABASE_SSL_SERVERNAME?: string;
   DATABASE_SSL_ALLOW_INSECURE?: string;
 };
 
@@ -11,6 +12,7 @@ export type DatabaseSslOptions =
   | {
       rejectUnauthorized: boolean;
       ca?: string;
+      servername?: string;
     };
 
 function enabled(value: string | undefined): boolean {
@@ -67,8 +69,13 @@ export function resolveDatabaseSslOptions(
   }
 
   const ca = readCertificateAuthority(environment);
+  // A local authenticated TCP relay changes the socket address, not the
+  // database's certificate identity. Keep verification enabled against that
+  // explicitly configured identity instead of the loopback relay address.
+  const servername = environment.DATABASE_SSL_SERVERNAME?.trim();
   return {
     rejectUnauthorized: !allowInsecure,
     ...(ca ? { ca } : {}),
+    ...(servername ? { servername } : {}),
   };
 }

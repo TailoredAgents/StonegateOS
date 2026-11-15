@@ -15,5 +15,12 @@
     "api": "24.21.0",
     "outbox": "24.21.0",
     "discord": "24.21.0"
-  }
+  },
+  "compatibilityPatches": [
+    {
+      "path": "infra/cloudflare/patches/database-tls-servername.patch",
+      "sha256": "ad18beef443666465cd28c7802b9a3c099083be0e81b0309807b276df65b5756",
+      "purpose": "Verify the database certificate identity when the TCP socket terminates at a local authenticated relay; defaults unchanged"
+    }
+  ]
 }

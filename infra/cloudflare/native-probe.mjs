@@ -6,6 +6,7 @@ import { readFile } from 'node:fs/promises';
 const requireApi = createRequire(new URL('../../apps/api/package.json', import.meta.url));
 const execute = promisify(execFile);
 const source = (await readFile(new URL('./source-revision', import.meta.url),'utf8')).trim();
+const compatibilityPatches = JSON.parse(await readFile(new URL('./compatibility-patches.json', import.meta.url),'utf8'));
 async function nativeChecks() {
   const sharp = requireApi('sharp');
   const argon = requireApi('@node-rs/argon2');
@@ -20,7 +21,7 @@ async function nativeChecks() {
   const pdf=await import(requireApi.resolve('@react-pdf/renderer'));
   const document=React.createElement(pdf.Document,null,React.createElement(pdf.Page,null,React.createElement(pdf.Text,null,'Synthetic migration validation')));
   const documentBytes=await pdf.renderToBuffer(document);
-  return {ok:true,source,node:process.version,sharpBytes:image.length,argon2:true,ffmpeg:stdout.split('\n')[0],cloudflared:tunnelVersion.trim(),pdfBytes:documentBytes.length};
+  return {ok:true,source,compatibilityPatches,node:process.version,sharpBytes:image.length,argon2:true,ffmpeg:stdout.split('\n')[0],cloudflared:tunnelVersion.trim(),pdfBytes:documentBytes.length};
 }
 if (process.argv.includes('--self-test')) {
   console.log(JSON.stringify(await nativeChecks()));
@@ -29,7 +30,7 @@ if (process.argv.includes('--self-test')) {
     response.setHeader('content-type','application/json');
     response.setHeader('cache-control','no-store');
     try {
-      if(request.method==='GET' && request.url==='/api/healthz') response.end(JSON.stringify({ok:true,source,node:process.version,mode:'probe'}));
+      if(request.method==='GET' && request.url==='/api/healthz') response.end(JSON.stringify({ok:true,source,compatibilityPatches,node:process.version,mode:'probe'}));
       else if(request.method==='POST' && request.url==='/native-check') response.end(JSON.stringify(await nativeChecks()));
       else {response.statusCode=404;response.end('{}');}
     } catch {response.statusCode=503;response.end(JSON.stringify({ok:false,error:'native_check_failed'}));}

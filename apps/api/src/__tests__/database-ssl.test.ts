@@ -41,6 +41,15 @@ describe("database TLS configuration", () => {
     ).toThrow("cannot be enabled in production");
   });
 
+  it("verifies the database identity when connecting through a local relay", () => {
+    expect(resolveDatabaseSslOptions("postgres://user:pass@127.0.0.1:6543/db", {
+      NODE_ENV: "production",
+      DATABASE_SSL: "true",
+      DATABASE_SSL_CA: "pinned-ca",
+      DATABASE_SSL_SERVERNAME: " database.example.test ",
+    })).toEqual({rejectUnauthorized: true, ca: "pinned-ca", servername: "database.example.test"});
+  });
+
   it("allows an explicit local-development compatibility escape hatch", () => {
     expect(
       resolveDatabaseSslOptions(
