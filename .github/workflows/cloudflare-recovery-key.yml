@@ -1,5 +1,8 @@
 name: Recovery key escrow
 on:
+  push:
+    branches: [codex/cloudflare-migration]
+    paths: [.github/workflows/cloudflare-recovery-key.yml]
   workflow_dispatch:
     inputs:
       recipient_public_key:
@@ -10,7 +13,7 @@ permissions:
   contents: read
 jobs:
   wrap:
-    if: github.ref == 'refs/heads/codex/cloudflare-migration' || github.ref == 'refs/heads/main'
+    if: github.event_name == 'workflow_dispatch' && (github.ref == 'refs/heads/codex/cloudflare-migration' || github.ref == 'refs/heads/main')
     runs-on: ubuntu-24.04
     timeout-minutes: 3
     steps:
