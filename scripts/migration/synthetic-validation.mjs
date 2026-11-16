@@ -19,25 +19,40 @@ const directory = process.argv[2];
 if (!directory) throw Error("Private evidence directory required");
 const mode = process.argv[3] ?? "api";
 if (
-  !["api", "outbox", "booking", "delivery", "site", "webhooks"].includes(mode)
+  ![
+    "api",
+    "outbox",
+    "booking",
+    "delivery",
+    "site",
+    "webhooks",
+    "journal",
+  ].includes(mode)
 )
-  throw Error("Select api, outbox, booking, delivery, site or webhooks");
+  throw Error(
+    "Select api, outbox, booking, delivery, site, webhooks or journal",
+  );
 const service =
-  mode === "booking" || mode === "site" || mode === "webhooks"
+  mode === "booking" ||
+  mode === "site" ||
+  mode === "webhooks" ||
+  mode === "journal"
     ? "api"
     : mode === "delivery"
       ? "outbox"
       : mode;
 const route =
-  mode === "webhooks"
-    ? "/api/webhook-check"
-    : mode === "site"
-      ? "/api/site-check"
-      : mode === "booking"
-        ? "/api/booking-check"
-        : mode === "delivery"
-          ? "/outbox/delivery-check"
-          : `/${service}/check`;
+  mode === "journal"
+    ? "/api/journal-check"
+    : mode === "webhooks"
+      ? "/api/webhook-check"
+      : mode === "site"
+        ? "/api/site-check"
+        : mode === "booking"
+          ? "/api/booking-check"
+          : mode === "delivery"
+            ? "/outbox/delivery-check"
+            : `/${service}/check`;
 const token = (
   await readFile(path.join(directory, "probe-token"), "utf8")
 ).trim();

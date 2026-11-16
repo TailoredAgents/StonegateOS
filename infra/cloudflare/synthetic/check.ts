@@ -25,7 +25,7 @@ const environment={PATH:'/usr/local/bin:/usr/bin:/bin',NODE_ENV:'production',DOT
   ADMIN_API_KEY:adminKey,TEAM_AUTH_RATE_LIMIT_SECRET:randomBytes(32).toString('hex'),SITE_URL:'https://synthetic.invalid',
   TEAM_KILL_EXTERNAL_SENDS:'true',TEAM_KILL_OUTBOX_DISPATCH:'true',TEAM_KILL_FINANCIAL_MUTATIONS:'true',
   TEAM_KILL_ADVERTISING_CHANGES:'true',TEAM_KILL_PUBLISHING:'true',TEAM_KILL_DESTRUCTIVE_MUTATIONS:'true'};
-if(process.env.MIGRATION_MODE==='webhooks')Object.assign(environment,{
+if(['webhooks','journal'].includes(process.env.MIGRATION_MODE))Object.assign(environment,{
  E2E_RUN_ID:'cloudflare-webhook-rehearsal',TEAM_CRM_AUDIT_MODE:'1',
  TWILIO_ACCOUNT_SID:'AC00000000000000000000000000000000',TWILIO_AUTH_TOKEN:'synthetic-webhook-rehearsal-token',
  TWILIO_FROM:'+15555550123',TWILIO_API_BASE_URL:'http://127.0.0.1:4010',TWILIO_WEBHOOK_PUBLIC_BASE_URL:'http://127.0.0.1:8082'});
@@ -41,7 +41,7 @@ function start(args,extra={}) {
 }
 async function stop(){if(!application||application.exitCode!==null)return;application.kill('SIGTERM');for(let i=0;i<50&&application.exitCode===null;i++)await wait(100);if(application.exitCode===null)application.kill('SIGKILL');}
 async function startApi(){
-  start(['apps/api/node_modules/next/dist/bin/next','start','apps/api','--hostname',process.env.MIGRATION_MODE==='site'?'0.0.0.0':'127.0.0.1','--port','8082'],{PORT:'8082'});
+  start(['apps/api/node_modules/next/dist/bin/next','start','apps/api','--hostname',['site','journal'].includes(process.env.MIGRATION_MODE)?'0.0.0.0':'127.0.0.1','--port','8082'],{PORT:'8082'});
   for(let i=0;i<100;i++){
     if(application.exitCode!==null)throw Error('API_STARTUP_FAILED');
     try{const r=await fetch('http://127.0.0.1:8082/api/healthz',{signal:AbortSignal.timeout(500)});await r.body?.cancel();if(r.ok)return;}catch{}
@@ -159,6 +159,68 @@ async function api(path,options={}){const r=await fetch('http://127.0.0.1:8082'+
       }finally{const stop=await fetch(origin+'/site/stop',{method:'POST',headers,signal:AbortSignal.timeout(15000)});await stop.body?.cancel();if(!stop.ok)throw Error('SITE_CLEANUP_FAILED');}
     }
     if(process.env.MIGRATION_MODE==='site')await checkSite();
+    if(process.env.MIGRATION_MODE==='journal') {
+      const used=await sql.unsafe("select phone_e164 from contacts where phone_e164 like '+140455501%'");
+      const phones=new Set(used.map(row=>row.phone_e164));
+      const phone=Array.from({length:100},(_,i)=>'+1404555'+String(100+i).padStart(4,'0')).find(value=>!phones.has(value));
+      if(!phone)throw Error('Synthetic phone range exhausted');
+      await sql.unsafe('update contacts set phone_e164=$1,phone=$1 where id=$2',[phone,contactId]);
+      const journalOrigin='https://stonegate-webhook-application-validation.jeffrey-78e.workers.dev';
+      async function journal(trial,route,options={}) {
+        const r=await fetch(journalOrigin+route,{...options,headers:{'x-migration-journal-key':process.env.MIGRATION_PROBE_TOKEN,'x-migration-trial-id':trial,...options.headers},signal:AbortSignal.timeout(30000)});
+        const body=await r.text();let parsed;try{parsed=JSON.parse(body);}catch{}
+        return {status:r.status,body:parsed??body,id:r.headers.get('x-migration-journal-id')};
+      }
+      function signed(route,fields,reverse=false) {
+        const entries=Object.entries(fields);if(reverse)entries.reverse();
+        const body=new URLSearchParams(entries).toString();
+        const signature=createHmac('sha1',environment.TWILIO_AUTH_TOKEN).update(environment.TWILIO_WEBHOOK_PUBLIC_BASE_URL+route+Object.keys(fields).sort().map(k=>k+fields[k]).join('')).digest('base64');
+        return {method:'POST',body,headers:{'content-type':'application/x-www-form-urlencoded','x-twilio-signature':signature}};
+      }
+      async function messageState(sid) {
+        const rows=await sql.unsafe("select m.id,m.body,(select count(*)::int from message_delivery_events e where e.message_id=m.id) as deliveries,(select count(*)::int from outbox_events o where o.type='message.received' and o.payload->>'messageId'=m.id::text) as queued from conversation_messages m where m.provider_message_id=$1",[sid]);
+        return rows;
+      }
+      const trial=randomUUID();const route='/api/webhooks/twilio/sms?preserve=%2F&next=one&next=two';
+      const sid='SM'+randomBytes(16).toString('hex');
+      const fields={MessageSid:sid,From:phone,To:'+15555550123',Body:'Synthetic journal ☃ '+runId,SmsStatus:'received',NumMedia:'0'};
+      const input=signed(route,fields);
+      const denied=await journal(trial,route,{...input,headers:{...input.headers,'x-twilio-signature':'invalid'}});
+      check('application-journal-invalid-signature-not-stored',denied.status===403&&(await journal(trial,'/__journal/status')).body.rows.length===0);
+      const unauthorized=await fetch('https://stonegate-synthetic-validation.jeffrey-78e.workers.dev/callback/api/webhooks/twilio/sms',input);await unauthorized.body?.cancel();
+      check('application-callback-relay-requires-private-auth',unauthorized.status===401);
+      await stop();check('real-api-stopped-during-ingest',application.exitCode===0);
+      const accepted=await Promise.all(Array.from({length:20},()=>journal(trial,route,input)));
+      check('journal-acks-concurrent-sms-with-api-stopped',accepted.every(r=>r.status===200&&r.id===accepted[0].id));
+      const callSid='CA'+randomBytes(16).toString('hex');const callRoute='/api/webhooks/twilio/call-status?leg=inbound&mode=inbound';
+      const callFields={CallSid:callSid,From:phone,To:'+15555550123',CallStatus:'completed',CallDuration:'45',Direction:'inbound',AnsweredBy:'human'};
+      const callAck=await journal(trial,callRoute,signed(callRoute,callFields));
+      let rows=(await journal(trial,'/__journal/status')).body.rows;
+      check('sms-and-call-durable-before-api-restart',callAck.status===200&&rows.length===2&&rows.every(row=>row.state==='pending'&&row.attempts===0)&&rows[0].body_sha===createHash('sha256').update(input.body).digest('hex'));
+      check('journal-ingest-has-no-application-write',!(await messageState(sid)).length&&(await sql.unsafe('select count(*)::int as n from call_records where call_sid=$1',[callSid]))[0].n===0);
+      await startApi();
+      const replay=await journal(trial,'/__journal/replay',{method:'POST'});
+      rows=(await journal(trial,'/__journal/status')).body.rows;
+      check('journal-replays-original-signature-to-real-api',replay.status===200&&replay.body.processed===2&&rows.every(row=>row.state==='delivered'&&row.upstream_status===200&&row.attempts===1),{replayStatus:replay.status,replay:replay.body,rows});
+      let messages=await messageState(sid);
+      check('journal-sms-commits-one-message-delivery-and-job',messages.length===1&&messages[0].body===fields.Body&&messages[0].deliveries===1&&messages[0].queued===1);
+      check('journal-call-status-commits-once',(await sql.unsafe('select count(*)::int as n from call_records where call_sid=$1',[callSid]))[0].n===1);
+      await stop();await startApi();
+      const retry=await journal(trial,route,signed(route,fields,true));
+      const repeated=await journal(trial,'/__journal/replay',{method:'POST'});messages=await messageState(sid);
+      check('reencoded-journal-retry-after-api-restart-keeps-one-effect',retry.status===200&&retry.id!==accepted[0].id&&repeated.body.processed===1&&messages.length===1&&messages[0].deliveries===1&&messages[0].queued===1);
+      const interrupted=randomUUID();const uncertainSid='SM'+randomBytes(16).toString('hex');const laterSid='SM'+randomBytes(16).toString('hex');
+      await journal(interrupted,route,signed(route,{...fields,MessageSid:uncertainSid}));
+      await journal(interrupted,route,signed(route,{...fields,MessageSid:laterSid}));
+      const crash=await journal(interrupted,'/__journal/replay',{method:'POST',headers:{'x-migration-interrupt-after-commit':'1'}});
+      check('journal-crash-after-real-api-commit-not-acknowledged',crash.status===503);
+      rows=(await journal(interrupted,'/__journal/status')).body.rows;
+      messages=await messageState(uncertainSid);
+      check('interrupted-real-commit-preserved-as-uncertain',rows[0].state==='uncertain'&&rows[0].attempts===1&&rows[0].reason==='controller_restarted_during_dispatch'&&messages.length===1&&messages[0].deliveries===1&&messages[0].queued===1);
+      check('later-journal-event-remains-durable-and-unapplied',rows[1].state==='pending'&&rows[1].attempts===0&&!(await messageState(laterSid)).length);
+      const blocked=await journal(interrupted,'/__journal/replay',{method:'POST'});
+      check('real-uncertain-delivery-is-not-automatically-replayed',blocked.status===409&&blocked.body.error==='reconciliation_required'&&(await messageState(uncertainSid))[0].queued===1);
+    }
     if(process.env.MIGRATION_MODE==='webhooks') {
       const used=await sql.unsafe("select phone_e164 from contacts where phone_e164 like '+140455501%'");
       const phones=new Set(used.map(row=>row.phone_e164));

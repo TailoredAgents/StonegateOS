@@ -7,6 +7,8 @@ interface JournalEnv {
   RECEIVER: DurableObjectNamespace<ReplayFixture>;
   MIGRATION_PROBE_TOKEN: string;
   SYNTHETIC_TWILIO_TOKEN: string;
+  RECEIVER_KIND?: "fixture" | "synthetic-api";
+  REAL_API?: Fetcher;
 }
 const originalOrigin = "https://migration-provider.invalid";
 const expiresAt = Date.parse("2026-11-22T22:00:00Z");
@@ -43,7 +45,8 @@ function allowed(request: Request, token: string) {
 }
 
 // No production callbacks reach this deployment. It accepts a synthetic signing
-// secret and replays only to an in-account fixture binding, never the network.
+// secret and replays only to fixed in-account bindings: either the fault fixture
+// or the real application connected exclusively to synthetic staging data.
 export class WebhookJournal extends DurableObject<JournalEnv> {
   private replaying = false;
   constructor(ctx: DurableObjectState, env: JournalEnv) {
@@ -73,7 +76,9 @@ export class WebhookJournal extends DurableObject<JournalEnv> {
   private async ingest(request: Request) {
     const entry = await verifiedForm(
       request,
-      originalOrigin,
+      this.env.RECEIVER_KIND === "synthetic-api"
+        ? "http://127.0.0.1:8082"
+        : originalOrigin,
       this.env.SYNTHETIC_TWILIO_TOKEN,
     );
     if (entry.error) return reply({ error: "invalid_callback" }, entry.error);
@@ -130,21 +135,41 @@ export class WebhookJournal extends DurableObject<JournalEnv> {
         );
         let response: Response;
         try {
-          response = await this.env.RECEIVER.getByName(
-            request.headers.get("x-migration-trial-id")!,
-          ).fetch(
-            new Request(row.external_url, {
-              method: "POST",
-              body: row.body,
-              headers: {
-                "content-type": "application/x-www-form-urlencoded",
-                "x-twilio-signature": row.signature,
-                "x-migration-journal-id": row.id,
-              },
-              redirect: "manual",
-              signal: AbortSignal.timeout(10000),
-            }),
-          );
+          const original = new URL(row.external_url);
+          const application = this.env.RECEIVER_KIND === "synthetic-api";
+          if (
+            application &&
+            (!this.env.REAL_API ||
+              ![
+                "/api/webhooks/twilio/sms",
+                "/api/webhooks/twilio/call-status",
+              ].includes(original.pathname))
+          )
+            throw Error("Unsupported synthetic application callback");
+          const target = application
+            ? "https://stonegate-synthetic-validation.jeffrey-78e.workers.dev/callback" +
+              original.pathname +
+              original.search
+            : row.external_url;
+          const outgoing = new Request(target, {
+            method: "POST",
+            body: row.body,
+            headers: {
+              "content-type": "application/x-www-form-urlencoded",
+              "x-twilio-signature": row.signature,
+              "x-migration-journal-id": row.id,
+              ...(application
+                ? { "x-migration-proxy-key": this.env.MIGRATION_PROBE_TOKEN }
+                : {}),
+            },
+            redirect: "manual",
+            signal: AbortSignal.timeout(10000),
+          });
+          response = application
+            ? await this.env.REAL_API!.fetch(outgoing)
+            : await this.env.RECEIVER.getByName(
+                request.headers.get("x-migration-trial-id")!,
+              ).fetch(outgoing);
           await response.body?.cancel();
         } catch {
           this.ctx.storage.sql.exec(
@@ -239,6 +264,15 @@ export default {
       "/__journal/replay",
       "/__fixture/status",
     ].includes(url.pathname);
+    if (
+      !control &&
+      env.RECEIVER_KIND === "synthetic-api" &&
+      ![
+        "/api/webhooks/twilio/sms",
+        "/api/webhooks/twilio/call-status",
+      ].includes(url.pathname)
+    )
+      return reply({ error: "unsupported_application_callback" }, 404);
     if (
       control
         ? !!url.search ||

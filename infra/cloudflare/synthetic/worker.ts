@@ -22,6 +22,26 @@ class SyntheticContainer extends DurableObject<Env> {
   private busy = false;
   async fetch(request: Request): Promise<Response> {
     const relayUrl = new URL(request.url);
+    if (relayUrl.pathname.startsWith("/callback/")) {
+      if (!this.ctx.container!.running)
+        return Response.json({ error: "api_unavailable" }, { status: 503 });
+      const headers = new Headers(request.headers);
+      headers.delete("x-migration-proxy-key");
+      headers.delete("host");
+      return this.ctx
+        .container!.getTcpPort(8082)
+        .fetch(
+          "http://container" +
+            relayUrl.pathname.slice("/callback".length) +
+            relayUrl.search,
+          {
+            method: "POST",
+            headers,
+            body: request.body,
+            signal: AbortSignal.timeout(10000),
+          },
+        );
+    }
     if (relayUrl.pathname.startsWith("/site/gateway/")) {
       if (!this.ctx.container!.running)
         return Response.json({ error: "site_unavailable" }, { status: 503 });
@@ -129,15 +149,17 @@ class SyntheticContainer extends DurableObject<Env> {
             "/etc/cloudflare/certs/cloudflare-containers-ca.crt",
           MIGRATION_MODE: url.pathname.endsWith("/delivery-check")
             ? "delivery"
-            : url.pathname.startsWith("/outbox/")
-              ? "outbox"
-              : url.pathname.endsWith("/webhook-check")
-                ? "webhooks"
-                : url.pathname.endsWith("/booking-check")
-                  ? "booking"
-                  : url.pathname.endsWith("/site-check")
-                    ? "site"
-                    : "api",
+            : url.pathname.endsWith("/journal-check")
+              ? "journal"
+              : url.pathname.startsWith("/outbox/")
+                ? "outbox"
+                : url.pathname.endsWith("/webhook-check")
+                  ? "webhooks"
+                  : url.pathname.endsWith("/booking-check")
+                    ? "booking"
+                    : url.pathname.endsWith("/site-check")
+                      ? "site"
+                      : "api",
         },
         signal: AbortSignal.timeout(
           url.pathname === "/api/site-check" ? 180000 : 110000,
@@ -171,7 +193,9 @@ export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     const route = new URL(request.url).pathname;
     const authorization =
-      route.startsWith("/relay/") || route.startsWith("/site/gateway/")
+      route.startsWith("/relay/") ||
+      route.startsWith("/site/gateway/") ||
+      route.startsWith("/callback/")
         ? `Bearer ${request.headers.get("x-migration-proxy-key") ?? ""}`
         : (request.headers.get("authorization") ?? "");
     if (
@@ -186,6 +210,13 @@ export default {
     )
       return Response.json({ error: "unauthorized" }, { status: 401 });
     if (
+      !(
+        request.method === "POST" &&
+        [
+          "/callback/api/webhooks/twilio/sms",
+          "/callback/api/webhooks/twilio/call-status",
+        ].includes(route)
+      ) &&
       !(
         (request.method === "GET" ||
           (request.method === "POST" &&
@@ -205,6 +236,7 @@ export default {
           /^\/(api|outbox|site)\/(check|stop)$/.test(route) ||
           route === "/api/booking-check" ||
           route === "/api/webhook-check" ||
+          route === "/api/journal-check" ||
           route === "/api/site-check" ||
           route === "/outbox/delivery-check"
         ))
