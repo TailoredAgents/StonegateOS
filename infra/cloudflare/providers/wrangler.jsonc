@@ -1,0 +1,28 @@
+{
+  "name": "stonegate-provider-validation",
+  "main": "worker.ts",
+  "account_id": "78ed83c6e3947c93763acef3a48a5561",
+  "compatibility_date": "2026-11-16",
+  "compatibility_flags": ["nodejs_compat"],
+  "workers_dev": true,
+  "preview_urls": false,
+  "observability": { "enabled": false },
+  "containers": [
+    {
+      "class_name": "ProviderTrial",
+      "scheduling_policy": "durable_object",
+      "images": {
+        "base": {
+          "image": "registry.cloudflare.com/78ed83c6e3947c93763acef3a48a5561/stonegate-migration-outbox@sha256:ab8248f23ee0004059f77de66b88958e5b03d86153f4f002c90833d85bb2cbb4"
+        }
+      }
+    }
+  ],
+  "durable_objects": {
+    "code_update_strategy": { "mode": "immediate" },
+    "bindings": [{ "name": "TRIAL", "class_name": "ProviderTrial" }]
+  },
+  "exports": {
+    "ProviderTrial": { "type": "durable-object", "storage": "sqlite" }
+  }
+}
