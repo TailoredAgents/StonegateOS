@@ -1,5 +1,39 @@
 // Shared by the live gateway and its transport regression tests. Never retry a
 // forwarded request: a lost response can follow a successfully committed write.
+import { createHash, timingSafeEqual } from "node:crypto";
+import { isIP } from "node:net";
+
+// The legacy proxy has its own credential: it cannot warm, drain or reconfigure
+// the gateway. Only that authenticated hop may attest the original client IP.
+export function legacyForwardedRequest(request, token) {
+  const supplied = request.headers.get("x-migration-legacy-key") ?? "";
+  const url = new URL(request.url);
+  const ip = request.headers.get("x-migration-legacy-client-ip") ?? "";
+  if (
+    !token ||
+    token.length < 32 ||
+    supplied.length > 256 ||
+    !timingSafeEqual(
+      createHash("sha256").update(supplied).digest(),
+      createHash("sha256").update(token).digest(),
+    ) ||
+    !url.pathname.startsWith("/api/") ||
+    !isIP(ip)
+  )
+    return null;
+  url.host = "stonegate-api.onrender.com";
+  const headers = new Headers(request.headers);
+  headers.set("cf-connecting-ip", ip);
+  return new Request(url, {
+    method: request.method,
+    headers,
+    body: request.body,
+    redirect: "manual",
+    signal: request.signal,
+    ...(request.body ? { duplex: "half" } : {}),
+  });
+}
+
 const hopHeaders = [
   "connection",
   "keep-alive",

@@ -1,12 +1,17 @@
 import { DurableObject } from "cloudflare:workers";
 import { createHash, timingSafeEqual } from "node:crypto";
-import { upstreamRequest, trackedResponse } from "./proxy.mjs";
+import {
+  upstreamRequest,
+  trackedResponse,
+  legacyForwardedRequest,
+} from "./proxy.mjs";
 import { fixture } from "./fixture";
 import { sourceApiRuntime } from "./source-api-runtime";
 
 interface GatewayEnv {
   HTTP: DurableObjectNamespace<HttpGateway>;
   MIGRATION_PROBE_TOKEN: string;
+  LEGACY_FORWARDER_TOKEN?: string;
   SERVICE_KIND:
     | "fixture"
     | "site"
@@ -507,6 +512,11 @@ export default {
   async fetch(request: Request, env: GatewayEnv): Promise<Response> {
     const url = new URL(request.url);
     const control = url.pathname.startsWith("/__gateway/");
+    const legacy = ["fixture", "target-api", "source-api-readonly"].includes(
+      env.SERVICE_KIND,
+    )
+      ? legacyForwardedRequest(request, env.LEGACY_FORWARDER_TOKEN)
+      : null;
     const production = env.OPERATION_MODE === "production";
     if (production && env.SERVICE_KIND !== "source-site")
       return unavailable("invalid_production_service");
@@ -517,7 +527,8 @@ export default {
       );
     if (
       (!publicHost || control) &&
-      !authorized(request, env.MIGRATION_PROBE_TOKEN)
+      !authorized(request, env.MIGRATION_PROBE_TOKEN) &&
+      !legacy
     )
       return unavailable("unauthorized", 401);
     if (
@@ -573,7 +584,7 @@ export default {
     try {
       return await env.HTTP.getByName("http-gateway-v1", {
         locationHint: "enam",
-      }).fetch(request);
+      }).fetch(legacy ?? request);
     } catch {
       return unavailable();
     }

@@ -6,6 +6,9 @@ const {createHash}=require('node:crypto');
 let mutations=0;let slowWrites=0;let accepting=true;
 const server=createServer(async(req,res)=>{
  const url=new URL(req.url,'http://container');
+ // /api aliases let the legacy-origin forwarder exercise the same fixture;
+ // the echoed raw request URL remains unchanged for signed-byte assertions.
+ if(url.pathname.startsWith('/api/')&&url.pathname!=='/api/healthz')url.pathname=url.pathname.slice(4);
  if(!accepting){res.writeHead(503);res.end();return;}
  if(url.pathname==='/api/healthz'){res.end('ok');return;}
  if(url.pathname==='/crash'){process.exit(23);return;}
