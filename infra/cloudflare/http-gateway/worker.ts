@@ -84,6 +84,78 @@ export class HttpGateway extends DurableObject<GatewayEnv> {
   private async save() {
     await this.ctx.storage.put("state", this.state);
   }
+  private async businessReadCheck() {
+    if (
+      this.env.SERVICE_KIND !== "source-api-standby" ||
+      this.state.phase !== "ready" ||
+      !this.validLease() ||
+      !this.ctx.container!.running
+    )
+      return unavailable("standby_not_ready", 409);
+    const environment = JSON.parse(
+      this.env.SOURCE_API_ENV_1! + this.env.SOURCE_API_ENV_2!,
+    );
+    const probes = [
+      { path: "/api/admin/schedule/summary?range=this_week", authorized: true },
+      {
+        path: "/api/admin/appointments/source-summary?rangeDays=90",
+        authorized: true,
+      },
+      {
+        path: "/api/admin/schedule/summary?range=this_week",
+        authorized: false,
+      },
+    ];
+    const checks = [];
+    for (const probe of probes) {
+      const started = Date.now();
+      try {
+        const response = await this.ctx
+          .container!.getTcpPort(8080)
+          .fetch("http://container" + probe.path, {
+            method: "GET",
+            headers: {
+              "x-api-key": probe.authorized
+                ? environment.ADMIN_API_KEY
+                : "deliberately-invalid-application-key",
+              "x-actor-type": "worker",
+              "x-actor-label": "sales-draft-prep",
+            },
+            signal: AbortSignal.timeout(10000),
+          });
+        // These pinned GET handlers only read. Customer response fields never
+        // leave the private Container/Worker path or enter logs and receipts.
+        const body = (await response.json()) as { ok?: boolean };
+        checks.push({
+          path: probe.path,
+          authorized: probe.authorized,
+          status: response.status,
+          pass: probe.authorized
+            ? response.status === 200 && body.ok === true
+            : response.status === 401,
+          ms: Date.now() - started,
+        });
+      } catch {
+        checks.push({
+          path: probe.path,
+          authorized: probe.authorized,
+          status: 0,
+          pass: false,
+          ms: Date.now() - started,
+        });
+      }
+      if (!checks.at(-1)!.pass) break;
+    }
+    return Response.json(
+      {
+        checks,
+        pass:
+          checks.length === probes.length &&
+          checks.every((check) => check.pass),
+      },
+      { headers: { "cache-control": "no-store" } },
+    );
+  }
   private validLease() {
     return (
       Date.now() <
@@ -519,6 +591,8 @@ export class HttpGateway extends DurableObject<GatewayEnv> {
       if (this.controlling) return unavailable("control_in_progress", 409);
       this.controlling = true;
       try {
+        if (url.pathname === "/__gateway/business-read-check")
+          return await this.businessReadCheck();
         if (url.pathname === "/__gateway/warm") return await this.warm();
         if (url.pathname === "/__gateway/drain") return await this.drain();
         if (url.pathname === "/__gateway/activate") {
@@ -656,6 +730,9 @@ export default {
               "/__gateway/drain",
               ...(env.SERVICE_KIND === "source-api-readonly"
                 ? ["/__gateway/interrupt-relay"]
+                : []),
+              ...(env.SERVICE_KIND === "source-api-standby"
+                ? ["/__gateway/business-read-check"]
                 : []),
             ].includes(url.pathname))
         ))

@@ -35,6 +35,16 @@ const snapshot = JSON.parse(
 );
 const environment = snapshot.configured;
 if (
+  !snapshot.runningProcess ||
+  snapshot.runningProcess.node !== "v20.20.2" ||
+  compareRuntimeSettings(environment, snapshot.runningProcess.environment)
+    .differingKeys.length ||
+  Object.entries(snapshot.runningProcess.commandOverrides).some(
+    ([key, value]) => key !== "NODE_ENV" || value !== "production",
+  )
+)
+  throw Error("Running API process settings or startup overrides changed");
+if (
   compareRuntimeSettings(environment, snapshot.effective).unexplainedDifferences
     .length
 )
@@ -135,6 +145,8 @@ const receipt = {
   sourceRevision: item.revision,
   environmentSha256,
   configuredCount: Object.keys(environment).length,
+  observedSourceProcessNode: snapshot.runningProcess.node,
+  candidateNode: "v24.21.0",
   settingsAudit: inventory.filename,
   sessionIdentityAudit: identity.filename,
   privateSecretsFile: filename,

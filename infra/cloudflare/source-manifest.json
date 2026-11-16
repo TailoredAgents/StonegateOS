@@ -8,7 +8,7 @@
     "discord": "5a90cf86608c76cd85773dbd2362b7fa07d5019c"
   },
   "runtime": "24.21.0",
-  "runtimeEvidence": "All four services observed using node --version over authenticated SSH with pinned Render host key on 2026-11-15",
+  "runtimeEvidence": "Candidate Node versions were selected from authenticated Render SSH shell observations. Direct /proc executable checks on 2026-11-16 showed the existing website/API/outbox processes still use Node 20.20.2; candidate runtime is an upgrade covered by native, integration and full regression tests.",
   "pnpm": "9.15.9",
   "runtimeByService": {
     "site": "24.22.1",
@@ -54,5 +54,10 @@
       ],
       "purpose": "Serialize concurrent inbound retries of the same provider message ID inside the existing database transaction; avoid duplicate committed messages and side effects during callback replay"
     }
-  ]
+  ],
+  "observedSourceProcessRuntimeByService": {
+    "site": "20.20.2",
+    "api": "20.20.2",
+    "outbox": "20.20.2"
+  }
 }

@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { spawn } from "node:child_process";
+import { spawn, execFileSync } from "node:child_process";
 import { mkdtemp, writeFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -14,11 +14,17 @@ async function runOnce(){const id=++count; console.log('started:'+id); await new
 async function main(){while(true){const stats=await runOnce(batchSize);console.log('schedulers-finished');}}
 main();
 `;
+const legacyNode = process.env.MIGRATION_LEGACY_NODE ?? process.execPath;
+if (process.env.MIGRATION_LEGACY_NODE)
+  assert.equal(
+    execFileSync(legacyNode, ["--version"], { encoding: "utf8" }).trim(),
+    "v20.20.2",
+  );
 async function fixture(run) {
   const dir = await mkdtemp(path.join(tmpdir(), "stonegate-legacy-boundary-"));
   const filename = path.join(dir, "outbox-worker.cjs");
   await writeFile(filename, source);
-  const child = spawn(process.execPath, ["--inspect=127.0.0.1:0", filename], {
+  const child = spawn(legacyNode, ["--inspect=127.0.0.1:0", filename], {
     stdio: ["ignore", "pipe", "pipe"],
   });
   let output = "",

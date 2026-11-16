@@ -1,5 +1,5 @@
-// Capture configured settings and the pinned running container's launch
-// environment privately. This does not inspect mutable JavaScript process state.
+// Capture dashboard, SSH launch and actual Linux process-start environments
+// privately. This does not inspect mutable JavaScript process memory.
 import { readFile, writeFile } from "node:fs/promises";
 import { spawn } from "node:child_process";
 import { once } from "node:events";
@@ -34,7 +34,23 @@ const definitions = [
     revision: "0c0026b4cd0e26d65c93480e1aeb7e62596ffb0b",
   },
 ];
-const code = `const fs=require('node:fs');const config=JSON.parse(fs.readFileSync(0,'utf8'));if(process.env.RENDER_SERVICE_ID!==config.service||process.env.RENDER_GIT_COMMIT!==config.revision)process.exit(42);const environment={};for(const key of config.keys)if(process.env[key]!==undefined)environment[key]=process.env[key];process.stdout.write(JSON.stringify({service:process.env.RENDER_SERVICE_ID,revision:process.env.RENDER_GIT_COMMIT,node:process.version,environment}));`;
+const code = String.raw`const fs=require('node:fs');const {execFileSync}=require('node:child_process');const config=JSON.parse(fs.readFileSync(0,'utf8'));
+if(process.env.RENDER_SERVICE_ID!==config.service||process.env.RENDER_GIT_COMMIT!==config.revision)process.exit(42);
+const environment={};for(const key of config.keys)if(process.env[key]!==undefined)environment[key]=process.env[key];
+const candidates=[];for(const pid of fs.readdirSync('/proc').filter(x=>/^\d+$/.test(x))){try{
+const args=fs.readFileSync('/proc/'+pid+'/cmdline','utf8').split('\0').filter(Boolean);const exe=fs.readlinkSync('/proc/'+pid+'/exe');const cwd=fs.readlinkSync('/proc/'+pid+'/cwd');
+if(!exe.endsWith('/node')||args.includes('-e'))continue;
+const selected=config.name==='api'?args[0]?.startsWith('next-server')&&cwd==='/opt/render/project/src/apps/api':args.includes('--import')&&args.includes('scripts/outbox-worker.ts')&&cwd==='/opt/render/project/src';
+if(!selected)continue;
+const all={};for(const part of fs.readFileSync('/proc/'+pid+'/environ','utf8').split('\0')){const index=part.indexOf('=');if(index>0)all[part.slice(0,index)]=part.slice(index+1);}
+if(all.RENDER_SERVICE_ID!==config.service||all.RENDER_GIT_COMMIT!==config.revision)process.exit(43);
+const values={};for(const key of config.keys)if(all[key]!==undefined)values[key]=all[key];
+const commandOverrides={};for(const key of ['NODE_ENV','NODE_OPTIONS','OUTBOX_POLL_INTERVAL_MS','OUTBOX_BATCH_SIZE'])if(all[key]!==undefined)commandOverrides[key]=all[key];
+candidates.push({pid:Number(pid),executable:exe,node:execFileSync('/proc/'+pid+'/exe',['--version'],{encoding:'utf8',timeout:3000}).trim(),environment:values,commandOverrides});
+}catch{}}
+if(candidates.length!==1)process.exit(44);
+process.stdout.write(JSON.stringify({service:process.env.RENDER_SERVICE_ID,revision:process.env.RENDER_GIT_COMMIT,node:process.version,environment,process:candidates[0]}));`;
+
 const canonical = (values) =>
   JSON.stringify(Object.entries(values).sort(([a], [b]) => a.localeCompare(b)));
 const hash = (values) =>
@@ -113,6 +129,7 @@ for (const definition of definitions) {
     JSON.stringify({
       service: definition.service,
       revision: definition.revision,
+      name: definition.name,
       keys: Object.keys(configured),
     }),
   );
@@ -135,10 +152,21 @@ for (const definition of definitions) {
   const changedSinceSnapshot = [
     ...new Set([...Object.keys(previous), ...Object.keys(configured)]),
   ].filter((key) => previous[key] !== configured[key]);
+  const processComparison = compareRuntimeSettings(
+    configured,
+    effective.process.environment,
+  );
   const entry = {
     ...definition,
     at: new Date().toISOString(),
     node: effective.node,
+    processNode: effective.process.node,
+    processId: effective.process.pid,
+    processEnvironmentSha256: hash(effective.process.environment),
+    processDifferingKeys: processComparison.differingKeys,
+    processPaddingEquivalentKeys: processComparison.paddingEquivalentKeys,
+    processUnexplainedDifferences: processComparison.unexplainedDifferences,
+    commandOverrides: effective.process.commandOverrides,
     configuredCount: Object.keys(configured).length,
     effectiveCount: Object.keys(effective.environment).length,
     configuredSha256: hash(configured),
@@ -147,14 +175,21 @@ for (const definition of definitions) {
     paddingEquivalentKeys,
     unexplainedDifferences,
     changedSinceSnapshot,
-    matches: unexplainedDifferences.length === 0,
+    matches:
+      unexplainedDifferences.length === 0 &&
+      processComparison.unexplainedDifferences.length === 0,
   };
   const filename =
     definition.name + "-effective-environment-" + Date.now() + ".json";
   await writeFile(
     path.join(directory, filename),
     JSON.stringify(
-      { ...entry, configured, effective: effective.environment },
+      {
+        ...entry,
+        configured,
+        effective: effective.environment,
+        runningProcess: effective.process,
+      },
       null,
       2,
     ),

@@ -33,10 +33,13 @@ jobs:
           const matrix=Object.entries(m.services).map(([service,revision])=>({service,revision,node:m.runtimeByService[service]}));
           if(matrix.length!==4 || matrix.some(x=>!['site','api','outbox','discord'].includes(x.service) || !/^[a-f0-9]{40}$/.test(x.revision) || !/^24\.\d+\.\d+$/.test(x.node)))throw Error('Invalid pinned source manifest');
           appendFileSync(process.env.GITHUB_OUTPUT,'matrix='+JSON.stringify(matrix)+'\n');
-          const buildPaths=new Set(['infra/cloudflare/Dockerfile','infra/cloudflare/build-site.mjs','infra/cloudflare/native-probe.mjs','infra/cloudflare/source-manifest.json','apps/api/src/__tests__/database-ssl.test.ts']);
+          const buildPaths=new Set(['infra/cloudflare/Dockerfile','infra/cloudflare/build-site.mjs','infra/cloudflare/native-probe.mjs','apps/api/src/__tests__/database-ssl.test.ts']);
           const before=process.env.BEFORE_SHA;
           const changed=process.env.GITHUB_EVENT_NAME==='push' && before && !/^0+$/.test(before)?execFileSync('git',['diff','--name-only',before,process.env.GITHUB_SHA],{encoding:'utf8'}).trim().split('\n'):[];
-          const build=process.env.GITHUB_EVENT_NAME==='workflow_dispatch' || !before || /^0+$/.test(before) || changed.some(p=>buildPaths.has(p)||p.startsWith('infra/cloudflare/patches/'));
+          // Evidence-only manifest edits do not change the Container build inputs.
+          const buildManifest = value => JSON.stringify([value.services,value.runtime,value.runtimeByService,value.pnpm,value.compatibilityPatches]);
+          const manifestChanged=changed.includes('infra/cloudflare/source-manifest.json') && buildManifest(JSON.parse(execFileSync('git',['show',before+':infra/cloudflare/source-manifest.json'],{encoding:'utf8'})))!==buildManifest(m);
+          const build=process.env.GITHUB_EVENT_NAME==='workflow_dispatch' || !before || /^0+$/.test(before) || manifestChanged || changed.some(p=>buildPaths.has(p)||p.startsWith('infra/cloudflare/patches/'));
           appendFileSync(process.env.GITHUB_OUTPUT,'build='+build+'\n');
           JS
   recovery-tool-tests:
@@ -50,6 +53,21 @@ jobs:
       - run: npm ci --ignore-scripts --prefix scripts/migration
       - run: npm ci --ignore-scripts --prefix infra/cloudflare/webhook-journal
       - run: node --test scripts/migration/*.test.mjs
+  legacy-boundary-node20:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20.20.2'
+      - name: Record the observed source runtime executable
+        run: echo "MIGRATION_LEGACY_NODE=$(command -v node)" >> "$GITHUB_ENV"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24.21.0'
+      - name: Exercise a Node 24 controller against the Node 20 worker fixture
+        run: node --test scripts/migration/legacy-outbox-boundary.test.mjs
   container-build:
     needs: source-manifest
     if: needs.source-manifest.outputs.build == 'true'

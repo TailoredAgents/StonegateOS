@@ -91,6 +91,10 @@ try {
       blocked.status === 503 &&
         blocked.body.error === "standby_traffic_disabled",
     );
+    check(
+      "private-business-read-check-requires-ready-instance",
+      (await control("business-read-check")).status === 409,
+    );
     const start = performance.now();
     state = await control("warm");
     check(
@@ -146,6 +150,20 @@ try {
         runtimeState.body.relayRunning &&
         runtimeState.body.relayRestarts === 0 &&
         !runtimeState.body.stopping,
+    );
+    check(
+      "business-read-check-rejects-anonymous-callers",
+      (await call("/__gateway/business-read-check", { method: "POST" }, null))
+        .status === 401,
+    );
+    const business = await control("business-read-check");
+    check(
+      "actual-source-business-reads-and-application-authentication",
+      business.status === 200 &&
+        business.body.pass === true &&
+        business.body.checks?.length === 3 &&
+        business.body.checks.every((check) => check.pass),
+      { probes: business.body.checks },
     );
     blocked = await control("activate", generation);
     check(
@@ -222,7 +240,14 @@ try {
         check.name === "actual-application-role-and-verified-source-scope" &&
         check.pass,
     ),
-    applicationTrafficAdmitted: false,
+    publicApplicationTrafficAdmitted: false,
+    businessMutationsInvoked: false,
+    privateBusinessReadChecks: checks.filter(
+      (check) =>
+        check.name ===
+          "actual-source-business-reads-and-application-authentication" &&
+        check.pass,
+    ).length,
     outboxConsumerStarted: false,
     providerSendInvoked: false,
     sourceSettingsChanged: false,
