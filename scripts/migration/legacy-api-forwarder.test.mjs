@@ -26,6 +26,7 @@ test("public ingress fixture requires its separate admission key before forwardi
   );
   for (const headers of [{}, { "x-migration-ingress-key": "wrong" }])
     assert.equal(await rawCall(proxy.origin, "/api/test", headers), 401);
+  assert.equal(await rawCall(proxy.origin, "/_forwarder/ingress"), 401);
   assert.equal(count, 0);
   assert.equal(await rawCall(proxy.origin, "/_forwarder/healthz"), 200);
   assert.equal(count, 0);

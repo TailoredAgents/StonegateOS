@@ -116,6 +116,21 @@ export function createForwarder({
           reject(response, 401, "unauthorized_ingress_fixture");
           return;
         }
+        if (request.method === "GET" && request.url === "/_forwarder/ingress") {
+          response.writeHead(200, {
+            "content-type": "application/json",
+            "cache-control": "no-store",
+          });
+          response.end(
+            JSON.stringify({
+              cfConnectingIp: request.headers["cf-connecting-ip"] ?? null,
+              forwardedFor: request.headers["x-forwarded-for"] ?? null,
+              realIp: request.headers["x-real-ip"] ?? null,
+              socketAddress: request.socket.remoteAddress,
+            }),
+          );
+          return;
+        }
       }
       if (!accepting) {
         reject(response, 503, "forwarder_draining");
