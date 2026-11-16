@@ -5,13 +5,10 @@ import { tmpdir } from "node:os";
 import { resolve, join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { createRequire } from "node:module";
-import {
-  safeTeamReturnPath,
-  teamLoginHref,
-  teamPasswordSetupHref,
-} from "../packages/sdk/src/team-return-path";
 
 const require = createRequire(import.meta.url);
+const { safeTeamReturnPath, teamLoginHref, teamPasswordSetupHref } =
+  require("../packages/sdk/src/team-return-path") as typeof import("../packages/sdk/src/team-return-path");
 const { build } = createRequire(require.resolve("tsx"))("esbuild");
 
 const requestPath =
