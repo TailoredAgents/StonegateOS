@@ -40,11 +40,11 @@
     },
     {
       "path": "infra/cloudflare/patches/discord-graceful-drain.patch",
-      "sha256": "6e8427ed5cbcdf1675a3e29e2b1e350cd2ff65afbced3563c63f56a0f33eea37",
+      "sha256": "00df2305df44707ed7f6050a3fc9793505f747e2fdcadfa9cc408ceaca2f8153",
       "services": [
         "discord"
       ],
-      "purpose": "Stop admitting Discord events and scheduled ticks, finish accepted tasks, then disconnect the gateway and close the database pool"
+      "purpose": "Declare the direct Luxon dependency and drain accepted Discord tasks before gateway/database shutdown"
     }
   ]
 }

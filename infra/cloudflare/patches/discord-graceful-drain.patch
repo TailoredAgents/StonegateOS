@@ -36,6 +36,32 @@ index 82b06dd5..0ccf3d55 100644
    cachedDb = undefined;
    globalThis.__mystDrizzle = undefined;
    globalThis.__mystDbClient = undefined;
+diff --git a/package.json b/package.json
+index 351c7c86..85106337 100644
+--- a/package.json
++++ b/package.json
+@@ -126,6 +126,7 @@
+   "dependencies": {
+     "@types/nanoid": "^3.0.0",
+     "discord.js": "^14.22.1",
++    "luxon": "^3.5.0",
+     "tsx": "^4.19.2"
+   },
+   "pnpm": {
+diff --git a/pnpm-lock.yaml b/pnpm-lock.yaml
+index dfb32721..673487de 100644
+--- a/pnpm-lock.yaml
++++ b/pnpm-lock.yaml
+@@ -22,6 +22,9 @@ importers:
+       discord.js:
+         specifier: ^14.22.1
+         version: 14.25.1
++      luxon:
++        specifier: ^3.5.0
++        version: 3.7.2
+       tsx:
+         specifier: ^4.19.2
+         version: 4.20.6
 diff --git a/scripts/discord-agent-bot.ts b/scripts/discord-agent-bot.ts
 index 2e33e035..2bb142f6 100644
 --- a/scripts/discord-agent-bot.ts

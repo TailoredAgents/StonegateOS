@@ -22,6 +22,9 @@ importers:
       discord.js:
         specifier: ^14.22.1
         version: 14.25.1
+      luxon:
+        specifier: ^3.5.0
+        version: 3.7.2
       tsx:
         specifier: ^4.19.2
         version: 4.20.6
