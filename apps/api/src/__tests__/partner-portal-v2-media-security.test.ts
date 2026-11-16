@@ -62,9 +62,15 @@ describe("partner location secret envelope", () => {
     expect(encrypted.ciphertext).not.toContain("1942");
     expect(decryptPartnerLocationSecret(encrypted)).toBe("Gate code 1942#");
 
+    // Replacing a Base64 character can leave the decoded bytes unchanged (or
+    // replace an existing A). Flip an actual ciphertext bit deterministically.
+    const parts = encrypted.ciphertext.split(".");
+    const ciphertext = Buffer.from(parts[3]!, "base64url");
+    ciphertext[0] = ciphertext[0]! ^ 1;
+    parts[3] = ciphertext.toString("base64url");
     const tampered = {
       ...encrypted,
-      ciphertext: `${encrypted.ciphertext.slice(0, -1)}A`,
+      ciphertext: parts.join("."),
     };
     expect(() => decryptPartnerLocationSecret(tampered)).toThrow();
   });
