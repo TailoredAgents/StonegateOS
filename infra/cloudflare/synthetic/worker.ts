@@ -3,6 +3,14 @@ import { createHash, timingSafeEqual } from "node:crypto";
 import { syntheticCheck } from "./check";
 import { syntheticSiteCheck } from "./site-check";
 
+interface Env {
+  MIGRATION_SYNTHETIC_CONNECTION: string;
+  MIGRATION_PROBE_TOKEN: string;
+  API: DurableObjectNamespace<SyntheticApi>;
+  OUTBOX: DurableObjectNamespace<SyntheticOutbox>;
+  SITE: DurableObjectNamespace<SyntheticSite>;
+}
+
 const relayPaths = new Set([
   "/api/public/team/session",
   "/api/admin/team/directory",
@@ -107,11 +115,13 @@ class SyntheticContainer extends DurableObject<Env> {
             ? "delivery"
             : url.pathname.startsWith("/outbox/")
               ? "outbox"
-              : url.pathname.endsWith("/booking-check")
-                ? "booking"
-                : url.pathname.endsWith("/site-check")
-                  ? "site"
-                  : "api",
+              : url.pathname.endsWith("/webhook-check")
+                ? "webhooks"
+                : url.pathname.endsWith("/booking-check")
+                  ? "booking"
+                  : url.pathname.endsWith("/site-check")
+                    ? "site"
+                    : "api",
         },
         signal: AbortSignal.timeout(
           url.pathname === "/api/site-check" ? 180000 : 110000,
@@ -168,6 +178,7 @@ export default {
         !(
           /^\/(api|outbox|site)\/(check|stop)$/.test(route) ||
           route === "/api/booking-check" ||
+          route === "/api/webhook-check" ||
           route === "/api/site-check" ||
           route === "/outbox/delivery-check"
         ))

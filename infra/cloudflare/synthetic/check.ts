@@ -3,7 +3,7 @@
 export const syntheticCheck = String.raw`
 const {spawn}=require('node:child_process');
 const {createRequire}=require('node:module');
-const {randomUUID,randomBytes,createHash}=require('node:crypto');
+const {randomUUID,randomBytes,createHash,createHmac}=require('node:crypto');
 const {existsSync,mkdtempSync,writeFileSync,readFileSync,rmSync}=require('node:fs');
 const {rootCertificates}=require('node:tls');
 const {setTimeout:wait}=require('node:timers/promises');
@@ -25,6 +25,10 @@ const environment={PATH:'/usr/local/bin:/usr/bin:/bin',NODE_ENV:'production',DOT
   ADMIN_API_KEY:adminKey,TEAM_AUTH_RATE_LIMIT_SECRET:randomBytes(32).toString('hex'),SITE_URL:'https://synthetic.invalid',
   TEAM_KILL_EXTERNAL_SENDS:'true',TEAM_KILL_OUTBOX_DISPATCH:'true',TEAM_KILL_FINANCIAL_MUTATIONS:'true',
   TEAM_KILL_ADVERTISING_CHANGES:'true',TEAM_KILL_PUBLISHING:'true',TEAM_KILL_DESTRUCTIVE_MUTATIONS:'true'};
+if(process.env.MIGRATION_MODE==='webhooks')Object.assign(environment,{
+ E2E_RUN_ID:'cloudflare-webhook-rehearsal',TEAM_CRM_AUDIT_MODE:'1',
+ TWILIO_ACCOUNT_SID:'AC00000000000000000000000000000000',TWILIO_AUTH_TOKEN:'synthetic-webhook-rehearsal-token',
+ TWILIO_FROM:'+15555550123',TWILIO_API_BASE_URL:'http://127.0.0.1:4010',TWILIO_WEBHOOK_PUBLIC_BASE_URL:'http://127.0.0.1:8082'});
 let application;let stdout='';let stderr='';let sessionId;const simulators=[];
 const checks=[];
 function check(name,pass,extra={}){checks.push({name,pass,...extra});if(!pass)throw Error('CHECK_FAILED:'+name);}
@@ -148,6 +152,52 @@ async function api(path,options={}){const r=await fetch('http://127.0.0.1:8082'+
       }finally{const stop=await fetch(origin+'/site/stop',{method:'POST',headers,signal:AbortSignal.timeout(15000)});await stop.body?.cancel();if(!stop.ok)throw Error('SITE_CLEANUP_FAILED');}
     }
     if(process.env.MIGRATION_MODE==='site')await checkSite();
+    if(process.env.MIGRATION_MODE==='webhooks') {
+      const used=await sql.unsafe("select phone_e164 from contacts where phone_e164 like '+140455501%'");
+      const phones=new Set(used.map(row=>row.phone_e164));
+      const phone=Array.from({length:100},(_,i)=>'+1404555'+String(100+i).padStart(4,'0')).find(value=>!phones.has(value));
+      if(!phone)throw Error('Synthetic phone range exhausted');
+      await sql.unsafe('update contacts set phone_e164=$1,phone=$1 where id=$2',[phone,contactId]);
+      async function callback(route,fields,{valid=true,reverse=false,signedRoute=route}={}) {
+        const entries=Object.entries(fields);if(reverse)entries.reverse();
+        const body=new URLSearchParams(entries).toString();
+        const signed=environment.TWILIO_WEBHOOK_PUBLIC_BASE_URL+signedRoute+Object.keys(fields).sort().map(k=>k+fields[k]).join('');
+        const signature=valid?createHmac('sha1',environment.TWILIO_AUTH_TOKEN).update(signed).digest('base64'):'invalid';
+        const r=await fetch('http://127.0.0.1:8082'+route,{method:'POST',headers:{'content-type':'application/x-www-form-urlencoded','x-twilio-signature':signature},body,signal:AbortSignal.timeout(20000)});
+        return {status:r.status,body:await r.text(),type:r.headers.get('content-type')};
+      }
+      const smsRoute='/api/webhooks/twilio/sms';
+      const messageSid='SM'+randomBytes(16).toString('hex');
+      const fields={MessageSid:messageSid,From:phone,To:'+15555550123',Body:'Synthetic callback persistence '+runId,SmsStatus:'received',NumMedia:'0'};
+      const denied=await callback(smsRoute,fields,{valid:false});
+      check('invalid-signature-rejected-before-persistence',denied.status===403&&(await sql.unsafe('select count(*)::int as n from conversation_messages where provider_message_id=$1',[messageSid]))[0].n===0);
+      const accepted=await callback(smsRoute,fields);
+      check('signed-sms-acknowledged-with-twiml',accepted.status===200&&accepted.type?.includes('xml')&&accepted.body.includes('<Response'));
+      const first=await sql.unsafe('select id,body from conversation_messages where provider_message_id=$1',[messageSid]);
+      check('signed-sms-durably-recorded',first.length===1&&first[0].body===fields.Body);
+      await stop();await startApi();
+      const replay=await callback(smsRoute,fields,{reverse:true});
+      check('sms-reencoded-retry-after-restart-keeps-one-record',replay.status===200&&(await sql.unsafe('select count(*)::int as n from conversation_messages where provider_message_id=$1',[messageSid]))[0].n===1);
+      const callSid='CA'+randomBytes(16).toString('hex');
+      const callRoute='/api/webhooks/twilio/call-status?leg=inbound&mode=inbound';
+      const callFields={CallSid:callSid,From:phone,To:'+15555550123',CallStatus:'completed',CallDuration:'45',Direction:'inbound',AnsweredBy:'human'};
+      const wrongQuery=await callback(callRoute,callFields,{signedRoute:'/api/webhooks/twilio/call-status?mode=inbound&leg=inbound'});
+      check('signature-binds-exact-callback-query-order',wrongQuery.status===403);
+      const called=await callback(callRoute,callFields);
+      check('signed-call-status-durably-recorded',called.status===200&&(await sql.unsafe('select count(*)::int as n from call_records where call_sid=$1',[callSid]))[0].n===1);
+      const queued=await sql.unsafe("select count(*)::int as n from outbox_events where payload->>'callSid'=$1",[callSid]);
+      await stop();await startApi();
+      const callReplay=await callback(callRoute,callFields,{reverse:true});
+      check('call-status-retry-keeps-one-record-and-queue',callReplay.status===200&&(await sql.unsafe('select count(*)::int as n from call_records where call_sid=$1',[callSid]))[0].n===1&&(await sql.unsafe("select count(*)::int as n from outbox_events where payload->>'callSid'=$1",[callSid]))[0].n===queued[0].n);
+      const dialRoute='/api/webhooks/twilio/dial-action?leg=inbound&mode=inbound';
+      const dialFields={...callFields,DialCallSid:'CA'+randomBytes(16).toString('hex'),DialCallStatus:'completed',DialCallDuration:'45',DialBridged:'true'};
+      const dial=await callback(dialRoute,dialFields);const dialReplay=await callback(dialRoute,dialFields,{reverse:true});
+      check('studio-dial-completion-and-retry-preserve-twiml',dial.status===200&&dialReplay.status===200&&dial.body.includes('<Hangup')&&dial.body===dialReplay.body);
+      const concurrentSid='SM'+randomBytes(16).toString('hex');
+      const concurrent=await Promise.all(Array.from({length:5},(_,i)=>callback(smsRoute,{...fields,MessageSid:concurrentSid},{reverse:i%2===0})));
+      const [duplicates]=await sql.unsafe('select count(*)::int as n from conversation_messages where provider_message_id=$1',[concurrentSid]);
+      check('concurrent-new-sms-retries-create-one-message',concurrent.every(r=>r.status===200)&&duplicates.n===1,{responses:concurrent.map(r=>r.status),persistedMessages:duplicates.n});
+    }
     if(process.env.MIGRATION_MODE==='booking') {
       const used=await sql.unsafe("select phone_e164 from contacts where phone_e164 like '+140455501%'");
       const phones=new Set(used.map(row=>row.phone_e164));

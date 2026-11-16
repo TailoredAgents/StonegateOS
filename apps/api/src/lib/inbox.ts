@@ -729,6 +729,10 @@ export async function recordInboundMessage(input: InboundMessageInput): Promise<
 
   const result = await db.transaction(async (tx) => {
     if (input.providerMessageId) {
+      // Provider retries can arrive together before either transaction inserts.
+      // Serialize the same identity before reading it; the transaction releases
+      // this lock on commit or rollback, including a crashed API process.
+      await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtextextended(${`inbound-message:${input.providerMessageId}`}, 0))`);
       const [existing] = await tx
         .select({
           id: conversationMessages.id,

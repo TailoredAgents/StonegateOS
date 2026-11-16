@@ -45,6 +45,14 @@
         "discord"
       ],
       "purpose": "Declare the direct Luxon dependency and drain accepted Discord tasks before gateway/database shutdown"
+    },
+    {
+      "path": "infra/cloudflare/patches/inbound-provider-retry-lock.patch",
+      "sha256": "cc47e3ac230c2dba4b5d5fcfdfdef2ef5b2a8341dcfefeb1eb9f35b6241e6542",
+      "services": [
+        "api"
+      ],
+      "purpose": "Serialize concurrent inbound retries of the same provider message ID inside the existing database transaction; avoid duplicate committed messages and side effects during callback replay"
     }
   ]
 }
