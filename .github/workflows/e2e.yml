@@ -17,17 +17,17 @@ on:
       node_version:
         description: Node runtime for this validation run
         type: choice
-        default: '24.21.0'
-        options: ['24.21.0', '20']
+        default: "24.21.0"
+        options: ["24.21.0", "20"]
       postgres_version:
         description: PostgreSQL version for disposable databases
         type: choice
-        default: '17'
-        options: ['17', '16']
+        default: "17"
+        options: ["17", "16"]
       browser_grep:
         description: Optional Playwright title filter for a focused browser rerun
         type: string
-        default: ''
+        default: ""
 
 jobs:
   quote-v2-postgres:
@@ -43,7 +43,7 @@ jobs:
 
     services:
       postgres:
-        image: postgres:${{ inputs.postgres_version || '16' }}
+        image: postgres:${{ inputs.postgres_version || '17' }}
         env:
           POSTGRES_DB: mystos
           POSTGRES_USER: myst
@@ -69,7 +69,7 @@ jobs:
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
-          node-version: ${{ inputs.node_version || '20' }}
+          node-version: ${{ inputs.node_version || '24.21.0' }}
           cache: "pnpm"
 
       - name: Install dependencies
@@ -112,7 +112,7 @@ jobs:
 
     services:
       postgres:
-        image: postgres:${{ inputs.postgres_version || '16' }}
+        image: postgres:${{ inputs.postgres_version || '17' }}
         env:
           POSTGRES_DB: mystos
           POSTGRES_USER: myst
@@ -138,7 +138,7 @@ jobs:
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
-          node-version: ${{ inputs.node_version || '20' }}
+          node-version: ${{ inputs.node_version || '24.21.0' }}
           cache: "pnpm"
 
       - name: Install dependencies
@@ -182,7 +182,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     env:
-      E2E_POSTGRES_IMAGE: postgres:${{ inputs.postgres_version || '16' }}
+      E2E_POSTGRES_IMAGE: postgres:${{ inputs.postgres_version || '17' }}
 
     steps:
       - name: Checkout repo
@@ -199,7 +199,7 @@ jobs:
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
-          node-version: ${{ inputs.node_version || '20' }}
+          node-version: ${{ inputs.node_version || '24.21.0' }}
           cache: "pnpm"
 
       - name: Install dependencies
@@ -219,6 +219,8 @@ jobs:
         run: pnpm typecheck
 
       - name: Enforce lint debt ratchet
+        env:
+          NODE_OPTIONS: --max-old-space-size=6144
         run: pnpm lint:ratchet
 
       - name: Verify generated system documentation
