@@ -24,13 +24,14 @@ if (
     "outbox",
     "booking",
     "delivery",
+    "legacy-delivery",
     "site",
     "webhooks",
     "journal",
   ].includes(mode)
 )
   throw Error(
-    "Select api, outbox, booking, delivery, site, webhooks or journal",
+    "Select api, outbox, booking, delivery, legacy-delivery, site, webhooks or journal",
   );
 const service =
   mode === "booking" ||
@@ -38,26 +39,35 @@ const service =
   mode === "webhooks" ||
   mode === "journal"
     ? "api"
-    : mode === "delivery"
+    : ["delivery", "legacy-delivery"].includes(mode)
       ? "outbox"
       : mode;
 const route =
-  mode === "journal"
-    ? "/api/journal-check"
-    : mode === "webhooks"
-      ? "/api/webhook-check"
-      : mode === "site"
-        ? "/api/site-check"
-        : mode === "booking"
-          ? "/api/booking-check"
-          : mode === "delivery"
-            ? "/outbox/delivery-check"
-            : `/${service}/check`;
+  mode === "legacy-delivery"
+    ? "/outbox/legacy-delivery-check"
+    : mode === "journal"
+      ? "/api/journal-check"
+      : mode === "webhooks"
+        ? "/api/webhook-check"
+        : mode === "site"
+          ? "/api/site-check"
+          : mode === "booking"
+            ? "/api/booking-check"
+            : mode === "delivery"
+              ? "/outbox/delivery-check"
+              : `/${service}/check`;
 const token = (
   await readFile(path.join(directory, "probe-token"), "utf8")
 ).trim();
 const origin = "https://stonegate-synthetic-validation.jeffrey-78e.workers.dev";
 const checks = [];
+const expectedLegacyHash =
+  "41aab28704b8d965ff81a58878019d6e2d4d621ebc4a4e6819e667178160229e";
+const expectedBoundaryHash = createHash("sha256")
+  .update(
+    await readFile(new URL("./legacy-outbox-boundary.mjs", import.meta.url)),
+  )
+  .digest("hex");
 const unauthorized = await fetch(origin + route, { method: "POST" });
 checks.push({
   name: "reject-unauthenticated",
@@ -66,7 +76,7 @@ checks.push({
 await unauthorized.body?.cancel();
 try {
   for (let cycle = 0; cycle < 2; cycle++) {
-    if (mode === "delivery") {
+    if (["delivery", "legacy-delivery"].includes(mode)) {
       try {
         const prep = await fetch(origin + "/api/booking-check", {
           method: "POST",
@@ -117,6 +127,14 @@ try {
       status: response.status,
       ms: Math.round(performance.now() - start),
       probeHash: response.headers.get("x-stonegate-probe-sha256"),
+      ...(mode === "legacy-delivery"
+        ? {
+            legacyHash: response.headers.get(
+              "x-stonegate-legacy-worker-sha256",
+            ),
+            boundaryHash: response.headers.get("x-stonegate-boundary-sha256"),
+          }
+        : {}),
       ...(await response.json()),
     };
     checks.push({
@@ -124,7 +142,10 @@ try {
       pass:
         response.ok &&
         result.ok === true &&
-        result.probeHash === expectedProbeHash,
+        result.probeHash === expectedProbeHash &&
+        (mode !== "legacy-delivery" ||
+          (result.legacyHash === expectedLegacyHash &&
+            result.boundaryHash === expectedBoundaryHash)),
     });
     console.log(JSON.stringify(result));
     const stop = await fetch(origin + `/${service}/stop`, {

@@ -3,11 +3,16 @@
   "main": "worker.ts",
   "account_id": "78ed83c6e3947c93763acef3a48a5561",
   "compatibility_date": "2026-11-15",
-  "compatibility_flags": [
-    "nodejs_compat"
-  ],
+  "compatibility_flags": ["nodejs_compat"],
   "workers_dev": true,
   "preview_urls": false,
+  "rules": [
+    {
+      "type": "Text",
+      "globs": ["**/legacy-outbox-boundary.mjs"],
+      "fallthrough": true
+    }
+  ],
   "observability": {
     "enabled": true,
     "head_sampling_rate": 1

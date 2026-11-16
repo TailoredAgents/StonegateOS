@@ -2,6 +2,10 @@ import { DurableObject } from "cloudflare:workers";
 import { createHash, timingSafeEqual } from "node:crypto";
 import { syntheticCheck } from "./check";
 import { syntheticSiteCheck } from "./site-check";
+// Wrangler Text modules: exact deployed entrypoint and unbundled Inspector helper.
+import legacyWorkerSource from "./legacy-outbox-worker.ts.txt";
+// The synthetic Wrangler config imports this module as Text.
+import legacyBoundarySource from "../../../scripts/migration/legacy-outbox-boundary.mjs";
 import { upstreamRequest, trackedResponse } from "../http-gateway/proxy.mjs";
 
 interface Env {
@@ -145,21 +149,30 @@ class SyntheticContainer extends DurableObject<Env> {
           MIGRATION_SITE_PROBE_HASH: createHash("sha256")
             .update(syntheticSiteCheck)
             .digest("hex"),
+          ...(url.pathname === "/outbox/legacy-delivery-check"
+            ? {
+                MIGRATION_LEGACY_SOURCE: legacyWorkerSource,
+                MIGRATION_BOUNDARY_SOURCE: legacyBoundarySource,
+              }
+            : {}),
           NODE_EXTRA_CA_CERTS:
             "/etc/cloudflare/certs/cloudflare-containers-ca.crt",
-          MIGRATION_MODE: url.pathname.endsWith("/delivery-check")
-            ? "delivery"
-            : url.pathname.endsWith("/journal-check")
-              ? "journal"
-              : url.pathname.startsWith("/outbox/")
-                ? "outbox"
-                : url.pathname.endsWith("/webhook-check")
-                  ? "webhooks"
-                  : url.pathname.endsWith("/booking-check")
-                    ? "booking"
-                    : url.pathname.endsWith("/site-check")
-                      ? "site"
-                      : "api",
+          MIGRATION_MODE:
+            url.pathname === "/outbox/legacy-delivery-check"
+              ? "legacy-delivery"
+              : url.pathname.endsWith("/delivery-check")
+                ? "delivery"
+                : url.pathname.endsWith("/journal-check")
+                  ? "journal"
+                  : url.pathname.startsWith("/outbox/")
+                    ? "outbox"
+                    : url.pathname.endsWith("/webhook-check")
+                      ? "webhooks"
+                      : url.pathname.endsWith("/booking-check")
+                        ? "booking"
+                        : url.pathname.endsWith("/site-check")
+                          ? "site"
+                          : "api",
         },
         signal: AbortSignal.timeout(
           url.pathname === "/api/site-check" ? 180000 : 110000,
@@ -179,6 +192,16 @@ class SyntheticContainer extends DurableObject<Env> {
           "x-stonegate-probe-sha256": createHash("sha256")
             .update(code)
             .digest("hex"),
+          ...(url.pathname === "/outbox/legacy-delivery-check"
+            ? {
+                "x-stonegate-legacy-worker-sha256": createHash("sha256")
+                  .update(legacyWorkerSource)
+                  .digest("hex"),
+                "x-stonegate-boundary-sha256": createHash("sha256")
+                  .update(legacyBoundarySource)
+                  .digest("hex"),
+              }
+            : {}),
         },
       });
     } finally {
@@ -238,7 +261,8 @@ export default {
           route === "/api/webhook-check" ||
           route === "/api/journal-check" ||
           route === "/api/site-check" ||
-          route === "/outbox/delivery-check"
+          route === "/outbox/delivery-check" ||
+          route === "/outbox/legacy-delivery-check"
         ))
     )
       return Response.json({ error: "not_found" }, { status: 404 });

@@ -29,7 +29,7 @@ if(['webhooks','journal'].includes(process.env.MIGRATION_MODE))Object.assign(env
  E2E_RUN_ID:'cloudflare-webhook-rehearsal',TEAM_CRM_AUDIT_MODE:'1',
  TWILIO_ACCOUNT_SID:'AC00000000000000000000000000000000',TWILIO_AUTH_TOKEN:'synthetic-webhook-rehearsal-token',
  TWILIO_FROM:'+15555550123',TWILIO_API_BASE_URL:'http://127.0.0.1:4010',TWILIO_WEBHOOK_PUBLIC_BASE_URL:'http://127.0.0.1:8082'});
-let application;let stdout='';let stderr='';let sessionId;const simulators=[];
+let application;let stdout='';let stderr='';let sessionId;let legacyHold;const simulators=[];
 const checks=[];
 function check(name,pass,extra={}){checks.push({name,pass,...extra});if(!pass)throw Error('CHECK_FAILED:'+name);}
 function start(args,extra={}) {
@@ -39,7 +39,8 @@ function start(args,extra={}) {
   application.stderr.on('data',chunk=>{if(stderr.length<65536)stderr+=chunk.toString().slice(0,65536-stderr.length);});
   application.on('error',()=>{});
 }
-async function stop(){if(!application||application.exitCode!==null)return;application.kill('SIGTERM');for(let i=0;i<50&&application.exitCode===null;i++)await wait(100);if(application.exitCode===null)application.kill('SIGKILL');}
+function running(){return application&&application.exitCode===null&&application.signalCode===null;}
+async function stop(){if(!running())return;application.kill('SIGTERM');for(let i=0;i<50&&running();i++)await wait(100);if(running())application.kill('SIGKILL');}
 async function startApi(){
   start(['apps/api/node_modules/next/dist/bin/next','start','apps/api','--hostname',['site','journal'].includes(process.env.MIGRATION_MODE)?'0.0.0.0':'127.0.0.1','--port','8082'],{PORT:'8082'});
   for(let i=0;i<100;i++){
@@ -55,7 +56,15 @@ async function api(path,options={}){const r=await fetch('http://127.0.0.1:8082'+
   await wait(750);
   const [state]=await sql.unsafe("select current_database() as database,current_user as role,(select ssl from pg_stat_ssl where pid=pg_backend_pid()) as tls,(select count(*)::int from contacts where email is null or email not like '%@migration.invalid') as unexpected_contacts");
   check('synthetic-target-and-verified-tls',state.database===config.database&&state.role===config.user&&state.tls&&state.unexpected_contacts===0);
-  if(process.env.MIGRATION_MODE==='delivery') {
+  if(['delivery','legacy-delivery'].includes(process.env.MIGRATION_MODE)) {
+    const legacy=process.env.MIGRATION_MODE==='legacy-delivery';
+    const legacyFilename='/app/scripts/migration-legacy-outbox.ts';
+    const legacySha='41aab28704b8d965ff81a58878019d6e2d4d621ebc4a4e6819e667178160229e';
+    if(legacy){
+      check('legacy-entrypoint-matches-deployed-commit',createHash('sha256').update(process.env.MIGRATION_LEGACY_SOURCE??'').digest('hex')===legacySha);
+      writeFileSync(legacyFilename,process.env.MIGRATION_LEGACY_SOURCE,{mode:0o600});
+      writeFileSync(directory+'/boundary.mjs',process.env.MIGRATION_BOUNDARY_SOURCE,{mode:0o600});
+    }
     const [pending]=await sql.unsafe("select count(*)::int as count from outbox_events where processed_at is null and quarantined_at is null and type='estimate.requested'");
     check('synthetic-booking-events-awaiting-delivery',pending.count>0);
     const [baseline]=await sql.unsafe('select count(*)::int as count from external_message_dispatches');
@@ -74,7 +83,7 @@ async function api(path,options={}){const r=await fetch('http://127.0.0.1:8082'+
       TWILIO_ACCOUNT_SID:'AC00000000000000000000000000000000',TWILIO_AUTH_TOKEN:'twilio-test-token',TWILIO_FROM:'+15555550123',
       TWILIO_API_BASE_URL:'http://127.0.0.1:4010',TWILIO_WEBHOOK_PUBLIC_BASE_URL:'http://127.0.0.1:8082',
       SMTP_HOST:'127.0.0.1',SMTP_PORT:'1025',SMTP_USER:'synthetic',SMTP_PASS:'synthetic',SMTP_FROM:'migration@migration.invalid',SMTP_TIMEOUT_MS:'10000'};
-    start(['--import','tsx','scripts/outbox-worker.ts'],fakeEnvironment);
+    start(legacy?['--inspect=127.0.0.1:9229','--import','tsx',legacyFilename]:['--import','tsx','scripts/outbox-worker.ts'],{...fakeEnvironment,...(legacy?{OUTBOX_BATCH_SIZE:'1'}:{})});
     let inFlight;
     const deliveryStartedAt=new Date();
     for(let i=0;i<400;i++) {
@@ -82,15 +91,36 @@ async function api(path,options={}){const r=await fetch('http://127.0.0.1:8082'+
       if(inFlight||application.exitCode!==null)break;await wait(100);
     }
     check('real-outbox-has-in-flight-email',Boolean(inFlight));
-    const [boundary]=await sql.unsafe('select clock_timestamp() as at');
-    const started=performance.now();application.kill('SIGTERM');
-    await wait(100);check('shutdown-waits-for-in-flight-delivery',application.exitCode===null);
-    for(let i=0;i<250&&application.exitCode===null;i++)await wait(100);
-    check('in-flight-outbox-drains-cleanly',application.exitCode===0&&stdout.includes('outbox.worker.drained'),{ms:Math.round(performance.now()-started)});
+    let boundary;
+    if(legacy){
+      const endpoint=(await (await fetch('http://127.0.0.1:9229/json/list')).json())[0]?.webSocketDebuggerUrl;
+      const {holdLegacyOutboxBoundary}=await import('file://'+directory+'/boundary.mjs');
+      const started=performance.now();
+      legacyHold=await holdLegacyOutboxBoundary({websocket:endpoint,pid:application.pid,filename:legacyFilename,sha256:legacySha,timeoutMs:30000,holdMs:30000});
+      const [settledAtHold]=await sql.unsafe('select state from external_message_dispatches where id=$1',[inFlight.id]);
+      check('legacy-hold-waits-for-provider-commit',legacyHold.paused&&settledAtHold.state==='succeeded',{ms:Math.round(performance.now()-started)});
+      [boundary]=await sql.unsafe('select clock_timestamp() as at');
+      await wait(1000);
+      check('legacy-process-remains-held-before-next-batch',legacyHold.paused&&running());
+      application.kill('SIGTERM');
+      for(let i=0;i<50&&running();i++)await wait(100);
+      check('old-consumer-terminated-before-replacement',!running()&&application.signalCode==='SIGTERM');
+      await legacyHold.release();legacyHold=undefined;
+    }else{
+      [boundary]=await sql.unsafe('select clock_timestamp() as at');
+      const started=performance.now();application.kill('SIGTERM');
+      await wait(100);check('shutdown-waits-for-in-flight-delivery',application.exitCode===null);
+      for(let i=0;i<250&&application.exitCode===null;i++)await wait(100);
+      check('in-flight-outbox-drains-cleanly',application.exitCode===0&&stdout.includes('outbox.worker.drained'),{ms:Math.round(performance.now()-started)});
+    }
     const [settled]=await sql.unsafe('select state from external_message_dispatches where id=$1',[inFlight.id]);
     check('in-flight-email-committed-before-exit',settled.state==='succeeded');
     const [admittedAfterStop]=await sql.unsafe('select count(*)::int as count from external_message_dispatches where created_at > $1',[boundary.at]);
     check('no-provider-dispatch-admitted-after-stop',admittedAfterStop.count===0);
+    if(legacy){
+      const [left]=await sql.unsafe("select count(*)::int as count from outbox_events where processed_at is null and quarantined_at is null and (next_attempt_at is null or next_attempt_at<=now())");
+      check('legacy-handoff-retains-work-for-new-consumer',left.count>0);
+    }
     // Restart against the same durable queue and the same local provider records.
     await local(4016,'/__control/scenario',{method:'PUT',headers:{'content-type':'application/json'},body:JSON.stringify({operation:'send_email',scenario:'success',delayMs:0})});
     start(['--import','tsx','scripts/outbox-worker.ts'],{...fakeEnvironment,OUTBOX_BATCH_SIZE:'50'});
@@ -301,9 +331,10 @@ async function api(path,options={}){const r=await fetch('http://127.0.0.1:8082'+
  } catch(error) {
   console.log(JSON.stringify({ok:false,checks,code:/^[A-Z0-9_]+$/.test(error.code??'')?error.code:'SYNTHETIC_CHECK_FAILED',
     failedCheck:error.message?.startsWith('CHECK_FAILED:')?error.message.slice(13):null,
+    boundaryFailure:['Worker process or source identity mismatch','Expected one loaded legacy worker script','Loaded worker source differs from pinned source','Legacy batch boundary differs from reviewed source','No executable call boundary before next batch','Legacy batch boundary timeout','Paused outside the reviewed batch boundary'].includes(error.message)?error.message:null,
     processExit:application?.exitCode,stderrFlags:['certificate','ECONNREFUSED','heap out of memory'].filter(x=>stderr.includes(x))}));process.exitCode=1;
  } finally {
-  await stop();for(const child of simulators)child.kill('SIGTERM');if(sessionId)await sql.unsafe('update team_sessions set revoked_at=coalesce(revoked_at,now()) where id=$1',[sessionId]).catch(()=>{});
+  await stop();await legacyHold?.release();for(const child of simulators)child.kill('SIGTERM');if(sessionId)await sql.unsafe('update team_sessions set revoked_at=coalesce(revoked_at,now()) where id=$1',[sessionId]).catch(()=>{});
   await sql.end({timeout:2});relay.kill('SIGTERM');await wait(250);if(relay.exitCode===null)relay.kill('SIGKILL');rmSync(directory,{recursive:true,force:true});
  }
 })();
