@@ -5,6 +5,12 @@ on:
     paths: [.github/workflows/cloudflare-recovery-key.yml]
   workflow_dispatch:
     inputs:
+      backup_id:
+        description: Exact backup whose independent escrowed key should be recovered
+        type: choice
+        default: recovery-20261115-v2
+        options: [recovery-20261115-v2, recovery-20261116-timed-v2]
+        required: true
       recipient_public_key:
         description: Base64 of a fresh RSA 4096-bit public PEM; keep its private key locally
         type: string
@@ -21,9 +27,18 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '24.21.0'
-      - name: Encrypt escrowed key for the requesting operator
+      - name: Encrypt original backup key for the requesting operator
+        if: inputs.backup_id == 'recovery-20261115-v2'
         env:
           BACKUP_KEY_BASE64: ${{ secrets.STONEGATE_MIGRATION_BACKUP_KEY_20261115 }}
+          BACKUP_ID: ${{ inputs.backup_id }}
+          RECIPIENT_PUBLIC_KEY: ${{ inputs.recipient_public_key }}
+        run: node scripts/migration/wrap-recovery-key.mjs
+      - name: Encrypt timed rehearsal key for the requesting operator
+        if: inputs.backup_id == 'recovery-20261116-timed-v2'
+        env:
+          BACKUP_KEY_BASE64: ${{ secrets.STONEGATE_MIGRATION_BACKUP_KEY_20261116 }}
+          BACKUP_ID: ${{ inputs.backup_id }}
           RECIPIENT_PUBLIC_KEY: ${{ inputs.recipient_public_key }}
         run: node scripts/migration/wrap-recovery-key.mjs
       - uses: actions/upload-artifact@v4

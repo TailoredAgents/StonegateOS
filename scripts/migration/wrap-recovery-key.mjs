@@ -4,6 +4,8 @@ import { createPublicKey, publicEncrypt, createHash, constants } from 'node:cryp
 import { mkdir, writeFile } from 'node:fs/promises';
 const encodedKey = process.env.BACKUP_KEY_BASE64 ?? '';
 const recipient = process.env.RECIPIENT_PUBLIC_KEY ?? '';
+const backupId = process.env.BACKUP_ID || 'recovery-20261115-v2';
+if (!['recovery-20261115-v2', 'recovery-20261116-timed-v2'].includes(backupId)) throw Error('Unknown backup identity');
 delete process.env.BACKUP_KEY_BASE64;
 if (!/^[A-Za-z0-9+/]{43}=$/.test(encodedKey)) throw Error('Recovery key unavailable');
 if (recipient.length > 16384 || !/^[A-Za-z0-9+/]+={0,2}$/.test(recipient)) throw Error('Invalid recipient encoding');
@@ -17,7 +19,7 @@ try {
   const publicDer = publicKey.export({type:'spki',format:'der'});
   await mkdir('artifacts/recovery-key',{recursive:true,mode:0o700});
   await writeFile('artifacts/recovery-key/wrapped-key.json',JSON.stringify({
-    backupId:'recovery-20261115-v2',algorithm:'RSA-OAEP-SHA256',
+    backupId,algorithm:'RSA-OAEP-SHA256',
     recipientSha256:createHash('sha256').update(publicDer).digest('hex'),
     ciphertext:ciphertext.toString('base64'),
   },null,2),{flag:'wx',mode:0o600});

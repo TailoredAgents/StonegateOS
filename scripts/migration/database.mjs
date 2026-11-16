@@ -1,6 +1,6 @@
 import postgres from 'postgres';
 import { createCipheriv, createDecipheriv, createHash, randomBytes } from 'node:crypto';
-import { createReadStream, createWriteStream } from 'node:fs';
+import { createReadStream, createWriteStream, readFileSync } from 'node:fs';
 import { chmod, mkdir, readFile, rename, stat, writeFile } from 'node:fs/promises';
 import { spawn } from 'node:child_process';
 import { pipeline } from 'node:stream/promises';
@@ -15,15 +15,30 @@ const connection = () => {
   if (!process.env.DATABASE_URL) throw new Error('DATABASE_URL is required; never pass credentials as arguments');
   return process.env.DATABASE_URL;
 };
-const sqlClient = () => postgres(connection(), {
+function verifiedRelay() {
+  const hostaddr = process.env.MIGRATION_HOSTADDR;
+  const servername = process.env.MIGRATION_TLS_SERVERNAME;
+  const caFile = process.env.MIGRATION_TLS_CA_FILE;
+  if (!hostaddr && !servername && !caFile) return null;
+  if (!['127.0.0.1','::1'].includes(hostaddr) || !servername || !caFile)
+    throw Error('Verified relay requires loopback address, pinned server identity and CA file');
+  return {hostaddr,servername,caFile};
+}
+const sqlClient = () => {
+  const relay=verifiedRelay();
+  return postgres(connection(), {
   max: 1, prepare: false, onnotice: () => {},
+  ...(relay ? {host:relay.hostaddr,ssl:{ca:readFileSync(relay.caFile,'utf8'),servername:relay.servername,rejectUnauthorized:true}} : {}),
   connection: { application_name: 'stonegate-migration-verifier', statement_timeout: 300000, lock_timeout: 5000 },
-});
+  });
+};
 function pgEnvironment() {
   const url = new URL(connection());
+  const relay=verifiedRelay();
   return { ...process.env, PGHOST:url.hostname, PGPORT:url.port || '5432',
     PGUSER:decodeURIComponent(url.username), PGPASSWORD:decodeURIComponent(url.password),
-    PGDATABASE:decodeURIComponent(url.pathname.slice(1)), PGSSLMODE:url.searchParams.get('sslmode') || 'require' };
+    PGDATABASE:decodeURIComponent(url.pathname.slice(1)), PGSSLMODE:url.searchParams.get('sslmode') || 'require',
+    ...(relay ? {PGHOST:relay.servername,PGHOSTADDR:relay.hostaddr,PGSSLROOTCERT:relay.caFile,PGSSLMODE:'verify-full'} : {}) };
 }
 export function isIsolatedRestoreTarget(target, record, now = Date.now()) {
   const local = ['127.0.0.1','localhost','[::1]'].includes(target.hostname);

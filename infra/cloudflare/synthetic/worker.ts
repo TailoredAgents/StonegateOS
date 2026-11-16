@@ -2,6 +2,7 @@ import { DurableObject } from "cloudflare:workers";
 import { createHash, timingSafeEqual } from "node:crypto";
 import { syntheticCheck } from "./check";
 import { syntheticSiteCheck } from "./site-check";
+import { upstreamRequest, trackedResponse } from "../http-gateway/proxy.mjs";
 
 interface Env {
   MIGRATION_SYNTHETIC_CONNECTION: string;
@@ -21,10 +22,23 @@ class SyntheticContainer extends DurableObject<Env> {
   private busy = false;
   async fetch(request: Request): Promise<Response> {
     const relayUrl = new URL(request.url);
+    if (relayUrl.pathname.startsWith("/site/gateway/")) {
+      if (!this.ctx.container!.running)
+        return Response.json({ error: "site_unavailable" }, { status: 503 });
+      relayUrl.pathname = relayUrl.pathname.slice("/site/gateway".length);
+      const forwarded = upstreamRequest(new Request(relayUrl, request));
+      const response = await this.ctx
+        .container!.getTcpPort(8081)
+        .fetch(forwarded);
+      return trackedResponse(response, () => {});
+    }
     if (relayUrl.pathname.startsWith("/relay/")) {
       const pathname = relayUrl.pathname.slice(6);
       if (
-        request.method !== "GET" ||
+        !(
+          request.method === "GET" ||
+          (request.method === "POST" && pathname === "/api/admin/contacts")
+        ) ||
         !relayPaths.has(pathname) ||
         !this.ctx.container!.running
       )
@@ -35,7 +49,9 @@ class SyntheticContainer extends DurableObject<Env> {
       return this.ctx
         .container!.getTcpPort(8082)
         .fetch("http://container" + pathname + relayUrl.search, {
+          method: request.method,
           headers,
+          body: request.body,
           signal: AbortSignal.timeout(10000),
         });
     }
@@ -154,9 +170,10 @@ export class SyntheticSite extends SyntheticContainer {}
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     const route = new URL(request.url).pathname;
-    const authorization = route.startsWith("/relay/")
-      ? `Bearer ${request.headers.get("x-migration-proxy-key") ?? ""}`
-      : (request.headers.get("authorization") ?? "");
+    const authorization =
+      route.startsWith("/relay/") || route.startsWith("/site/gateway/")
+        ? `Bearer ${request.headers.get("x-migration-proxy-key") ?? ""}`
+        : (request.headers.get("authorization") ?? "");
     if (
       !env.MIGRATION_PROBE_TOKEN ||
       authorization.length > 512 ||
@@ -170,9 +187,18 @@ export default {
       return Response.json({ error: "unauthorized" }, { status: 401 });
     if (
       !(
-        request.method === "GET" &&
+        (request.method === "GET" ||
+          (request.method === "POST" &&
+            route === "/relay/api/admin/contacts")) &&
         route.startsWith("/relay/") &&
         relayPaths.has(route.slice(6))
+      ) &&
+      !(
+        (request.method === "GET" || request.method === "POST") &&
+        [
+          "/site/gateway/api/team/directory",
+          "/site/gateway/api/team/contacts",
+        ].includes(route)
       ) &&
       (request.method !== "POST" ||
         !(

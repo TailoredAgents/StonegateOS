@@ -149,6 +149,13 @@ async function api(path,options={}){const r=await fetch('http://127.0.0.1:8082'+
         const result=await response.json();
         check('site-probe-version-matches',response.headers.get('x-stonegate-probe-sha256')===process.env.MIGRATION_SITE_PROBE_HASH);
         checks.push(...(result.checks??[]));check('coupled-site-api-check',response.ok&&result.ok===true,{status:response.status,...(result.proxyRequests?{proxyRequests:result.proxyRequests}:{})});
+        if(!expectedRevoked){
+          const [committed]=await sql.unsafe("select count(*)::int as count,(select count(*)::int from audit_logs where entity_id=$1::text and action='contact.created') as audits from contacts where id=$1::uuid and email=$2",[result.createdContactId,result.createdEmail]);
+          check('site-gateway-write-and-audit-committed-once',committed.count===1&&committed.audits===1);
+          await stop();await startApi();
+          const afterGateway=await api('/api/admin/contacts?contactId='+result.createdContactId,{headers:{'x-api-key':adminKey,authorization:'Bearer '+token}});
+          check('site-gateway-write-survives-api-restart',afterGateway.status===200&&afterGateway.body.contacts?.some(row=>row.id===result.createdContactId&&row.email===result.createdEmail));
+        }
       }finally{const stop=await fetch(origin+'/site/stop',{method:'POST',headers,signal:AbortSignal.timeout(15000)});await stop.body?.cancel();if(!stop.ok)throw Error('SITE_CLEANUP_FAILED');}
     }
     if(process.env.MIGRATION_MODE==='site')await checkSite();

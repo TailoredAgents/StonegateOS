@@ -17,7 +17,12 @@ if (
   !config.host.endsWith(".psdb.cloud")
 )
   throw Error("Wrong replacement target");
-const database = "stonegate_restore_20261116";
+if (process.argv[3] && process.argv[3] !== "--timed")
+  throw Error("Unknown rehearsal mode");
+const timed = process.argv[3] === "--timed";
+const database = timed
+  ? "stonegate_restore_20261116_timed"
+  : "stonegate_restore_20261116";
 async function handshake(servername) {
   return new Promise((resolve, reject) => {
     const socket = net.connect({ host: config.host, port: config.port });
@@ -91,9 +96,7 @@ try {
     throw Error(
       "Rehearsal database already exists; inspect it instead of resetting it",
     );
-  await admin.unsafe(
-    'CREATE DATABASE "stonegate_restore_20261116" TEMPLATE template0',
-  );
+  await admin.unsafe(`CREATE DATABASE "${database}" TEMPLATE template0`);
 } finally {
   await admin.end({ timeout: 2 });
 }
@@ -120,7 +123,12 @@ try {
     extensions,
   };
   await writeFile(
-    path.join(directory, "planetscale-restore-target.json"),
+    path.join(
+      directory,
+      timed
+        ? "planetscale-timed-restore-target.json"
+        : "planetscale-restore-target.json",
+    ),
     JSON.stringify(record, null, 2),
     { mode: 0o600, flag: "wx" },
   );
