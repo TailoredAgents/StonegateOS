@@ -51,7 +51,9 @@ const actual = Object.keys(built.node ?? {}).sort();
 const expected = [...prior.actionIds].sort();
 const missing = expected.filter((id) => !actual.includes(id));
 const added = actual.filter((id) => !expected.includes(id));
-if (built.encryptionKey !== prior.actionKey || missing.length || added.length)
+// New pages may add actions. Compatibility requires every existing action and
+// the encryption key to survive; additions do not invalidate open forms.
+if (built.encryptionKey !== prior.actionKey || missing.length)
   throw Error(
     `Server action compatibility failed: missing=${missing.length}, added=${added.length}`,
   );
@@ -97,6 +99,8 @@ writeFileSync(
     ok: true,
     existingActionCount: expected.length,
     actionIdsMatch: true,
+    existingActionsPreserved: true,
+    addedActionCount: added.length,
     encryptionKeyMatches: true,
     legacyAssets: prior.staticInventory.length,
     copiedAssets: copied,

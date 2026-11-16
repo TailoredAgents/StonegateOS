@@ -105,7 +105,10 @@ export async function readAgentRecords(input: z.infer<typeof RecordsSchema>) {
   const conditions = [sql`true`];
   if (input.id) conditions.push(sql`id=${input.id}::uuid`);
   if (input.contactId) {
-    if(input.resource === "properties") conditions.push(sql`(contact_id=${input.contactId}::uuid or id in (select property_id from contact_properties where contact_id=${input.contactId}::uuid))`);
+    if (input.resource === "properties")
+      conditions.push(
+        sql`(contact_id=${input.contactId}::uuid or id in (select property_id from contact_properties where contact_id=${input.contactId}::uuid))`,
+      );
     else if (spec.contact)
       conditions.push(sql`${sql.raw(spec.contact)}=${input.contactId}::uuid`);
     else

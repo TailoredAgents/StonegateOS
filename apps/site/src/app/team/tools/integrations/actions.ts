@@ -10,7 +10,10 @@ export async function integrationAction(
   const principal = await requireCurrentTeamPrincipal();
   if (principal.roleSlug !== "owner")
     return { message: "Owner access required" };
-  const field = (name:string):string => { const value=form.get(name); return typeof value === "string" ? value : ""; };
+  const field = (name: string): string => {
+    const value = form.get(name);
+    return typeof value === "string" ? value : "";
+  };
   const action = field("action");
   const command =
     action === "create"
@@ -28,7 +31,10 @@ export async function integrationAction(
       "/api/admin/agent-integrations",
       { method: "POST", body: JSON.stringify(command) },
     );
-    const result = await response.json() as {token?:unknown;error?:unknown};
+    const result = (await response.json()) as {
+      token?: unknown;
+      error?: unknown;
+    };
     revalidatePath("/team/tools/integrations");
     return response.ok
       ? {
@@ -40,7 +46,10 @@ export async function integrationAction(
                 : "Updated.",
           ...(typeof result.token === "string" ? { token: result.token } : {}),
         }
-      : { message: typeof result.error === "string" ? result.error : "Action failed" };
+      : {
+          message:
+            typeof result.error === "string" ? result.error : "Action failed",
+        };
   } catch {
     return {
       message:
