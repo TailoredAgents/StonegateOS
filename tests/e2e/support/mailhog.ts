@@ -1,6 +1,7 @@
 import { getOptionalEnvVar } from "./env";
 import { mkdir, writeFile } from "node:fs/promises";
 import { randomUUID } from "node:crypto";
+import { decodeMailBody } from "./mailhog-body";
 
 const mailhogBase = (
   getOptionalEnvVar("MAILHOG_UI", "http://localhost:8025") ??
@@ -22,13 +23,23 @@ type MailHogResponse = {
   items: MailHogItem[];
 };
 
+function decodedMessage(item: MailHogItem): MailHogItem {
+  return {
+    ...item,
+    Content: {
+      ...item.Content,
+      Body: decodeMailBody(item.Content.Body, item.Content.Headers),
+    },
+  };
+}
+
 export async function fetchLatestMail(): Promise<MailHogItem | null> {
   const response = await fetch(`${mailhogBase}/api/v2/messages`);
   if (!response.ok) {
     throw new Error(`Failed to read MailHog messages (${response.status})`);
   }
   const body = (await response.json()) as MailHogResponse;
-  return body.items[0] ?? null;
+  return body.items[0] ? decodedMessage(body.items[0]) : null;
 }
 
 export async function clearMailhog(): Promise<void> {
@@ -56,8 +67,9 @@ export async function waitForMailhogMessage(
       lastMessages = body;
       // Check ALL messages, not just the latest
       for (const item of body.items) {
-        if (matcher(item)) {
-          return item;
+        const decoded = decodedMessage(item);
+        if (matcher(decoded)) {
+          return decoded;
         }
       }
     }
