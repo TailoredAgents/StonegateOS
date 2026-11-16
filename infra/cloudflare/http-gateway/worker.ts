@@ -6,8 +6,9 @@ import { fixture } from "./fixture";
 interface GatewayEnv {
   HTTP: DurableObjectNamespace<HttpGateway>;
   MIGRATION_PROBE_TOKEN: string;
-  SERVICE_KIND: "fixture" | "site";
+  SERVICE_KIND: "fixture" | "site" | "target-api";
   SITE_RUNTIME_ENV?: string;
+  MIGRATION_TARGET_CONNECTION?: string;
   GATEWAY_HOST: string;
 }
 type State = {
@@ -61,9 +62,28 @@ export class HttpGateway extends DurableObject<GatewayEnv> {
     try {
       const r = await this.ctx
         .container!.getTcpPort(8080)
-        .fetch("http://container/api/healthz", {
-          signal: AbortSignal.timeout(2000),
-        });
+        .fetch(
+          this.env.SERVICE_KIND === "target-api"
+            ? "http://container/api/readyz"
+            : "http://container/api/healthz",
+          {
+            signal: AbortSignal.timeout(2000),
+          },
+        );
+      if (this.env.SERVICE_KIND === "target-api") {
+        // This isolated API has no providers or consumer. Its readiness gate
+        // requires the actual database and migration journal before activation.
+        const body = (await r.json()) as {
+          checks?: {
+            database?: { state?: string };
+            migrations?: { state?: string };
+          };
+        };
+        return (
+          body.checks?.database?.state === "ok" &&
+          body.checks?.migrations?.state === "ok"
+        );
+      }
       await r.body?.cancel();
       return r.ok;
     } catch {
@@ -77,6 +97,56 @@ export class HttpGateway extends DurableObject<GatewayEnv> {
         env: {},
         enableInternet: false,
       };
+    if (this.env.SERVICE_KIND === "target-api") {
+      const config = JSON.parse(this.env.MIGRATION_TARGET_CONNECTION ?? "{}");
+      if (
+        config.purpose !== "target-readiness-read-only" ||
+        config.database !== "stonegate_restore_20261116" ||
+        config.sqlRole !== "stonegate_target_probe_ro" ||
+        !config.host?.endsWith(".psdb.cloud") ||
+        !config.user?.startsWith(config.sqlRole + ".") ||
+        !(Date.parse(config.expiresAt) > Date.now())
+      )
+        throw Error("Invalid read-only target configuration");
+      const url = new URL(
+        `postgres://${config.host}:${config.port}/${config.database}`,
+      );
+      url.username = config.user;
+      url.password = config.password;
+      return {
+        entrypoint: [
+          "node",
+          "/app/apps/api/node_modules/next/dist/bin/next",
+          "start",
+          "/app/apps/api",
+          "--hostname",
+          "0.0.0.0",
+          "--port",
+          "8080",
+        ],
+        env: {
+          DATABASE_URL: url.href,
+          DATABASE_SSL: "true",
+          DATABASE_SSL_SERVERNAME: config.host,
+          ADMIN_API_KEY: "isolated-target-gateway-synthetic-key-only",
+          TEAM_AUTH_RATE_LIMIT_SECRET:
+            "isolated-target-gateway-synthetic-rate-limit-key",
+          SITE_URL: `https://${this.env.GATEWAY_HOST}`,
+          CORS_ALLOW_ORIGINS: `https://${this.env.GATEWAY_HOST}`,
+          TEAM_KILL_EXTERNAL_SENDS: "true",
+          TEAM_KILL_OUTBOX_DISPATCH: "true",
+          TEAM_KILL_FINANCIAL_MUTATIONS: "true",
+          TEAM_KILL_ADVERTISING_CHANGES: "true",
+          TEAM_KILL_PUBLISHING: "true",
+          TEAM_KILL_DESTRUCTIVE_MUTATIONS: "true",
+          NODE_ENV: "production",
+          PORT: "8080",
+          DOTENV_CONFIG_PATH: "/dev/null",
+          NEXT_TELEMETRY_DISABLED: "1",
+        },
+        enableInternet: true,
+      };
+    }
     if (this.env.SERVICE_KIND !== "site" || !this.env.SITE_RUNTIME_ENV)
       throw Error("Invalid service configuration");
     const values: unknown = JSON.parse(this.env.SITE_RUNTIME_ENV);
