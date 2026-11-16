@@ -7,6 +7,7 @@ import {
 } from "./proxy.mjs";
 import { fixture } from "./fixture";
 import { sourceApiRuntime } from "./source-api-runtime";
+import { productionApiRuntime } from "./production-api-runtime";
 
 interface GatewayEnv {
   HTTP: DurableObjectNamespace<HttpGateway>;
@@ -17,10 +18,14 @@ interface GatewayEnv {
     | "site"
     | "source-site"
     | "target-api"
-    | "source-api-readonly";
+    | "source-api-readonly"
+    | "source-api-standby";
   SITE_RUNTIME_ENV?: string;
   MIGRATION_TARGET_CONNECTION?: string;
   MIGRATION_SOURCE_CONNECTION?: string;
+  SOURCE_API_RUNTIME_CONFIG?: string;
+  SOURCE_API_ENV_1?: string;
+  SOURCE_API_ENV_2?: string;
   GATEWAY_HOST: string;
   AUTO_RECOVER?: string;
   OPERATION_MODE?: "rehearsal" | "production";
@@ -64,6 +69,8 @@ export class HttpGateway extends DurableObject<GatewayEnv> {
     error?: string;
     siteMs?: number;
     apiMs?: number;
+    apiChecks?: Record<string, string>;
+    startupFailure?: Record<string, unknown>;
   } = {};
   private inFlight = new Set<Promise<void>>();
   constructor(ctx: DurableObjectState, env: GatewayEnv) {
@@ -93,30 +100,49 @@ export class HttpGateway extends DurableObject<GatewayEnv> {
       const r = await this.ctx
         .container!.getTcpPort(8080)
         .fetch(
-          ["target-api", "source-api-readonly"].includes(this.env.SERVICE_KIND)
+          ["target-api", "source-api-readonly", "source-api-standby"].includes(
+            this.env.SERVICE_KIND,
+          )
             ? "http://container/api/readyz"
             : "http://container/api/healthz",
           {
             signal: AbortSignal.timeout(
               this.env.SERVICE_KIND === "source-site"
                 ? 10000
-                : this.env.SERVICE_KIND === "source-api-readonly"
+                : ["source-api-readonly", "source-api-standby"].includes(
+                      this.env.SERVICE_KIND,
+                    )
                   ? 5000
                   : 2000,
             ),
           },
         );
       if (
-        ["target-api", "source-api-readonly"].includes(this.env.SERVICE_KIND)
+        ["target-api", "source-api-readonly", "source-api-standby"].includes(
+          this.env.SERVICE_KIND,
+        )
       ) {
-        // This isolated API has no providers or consumer. Its readiness gate
-        // requires the actual database and migration journal before activation.
+        // Read-only rehearsals require database and journal readiness. The
+        // production standby additionally requires every readiness check and
+        // unconditionally rejects application traffic and activation.
         const body = (await r.json()) as {
+          ok?: boolean;
           checks?: {
+            [name: string]: { state?: string } | undefined;
             database?: { state?: string };
             migrations?: { state?: string };
           };
         };
+        if (this.env.SERVICE_KIND === "source-api-standby") {
+          this.readiness.apiStatus = r.status;
+          this.readiness.apiChecks = Object.fromEntries(
+            Object.entries(body.checks ?? {}).map(([name, check]) => [
+              name,
+              check?.state ?? "unknown",
+            ]),
+          );
+          return r.ok && body.ok === true;
+        }
         return (
           body.checks?.database?.state === "ok" &&
           body.checks?.migrations?.state === "ok"
@@ -165,6 +191,37 @@ export class HttpGateway extends DurableObject<GatewayEnv> {
         entrypoint: ["node", "-e", sourceApiRuntime],
         env: {
           MIGRATION_SOURCE_CONNECTION: this.env.MIGRATION_SOURCE_CONNECTION!,
+          MIGRATION_PROBE_TOKEN: this.env.MIGRATION_PROBE_TOKEN,
+        },
+        enableInternet: true,
+      };
+    }
+    if (this.env.SERVICE_KIND === "source-api-standby") {
+      const envelope = JSON.parse(this.env.SOURCE_API_RUNTIME_CONFIG ?? "{}");
+      const config = envelope.connection;
+      if (
+        this.env.OPERATION_MODE === "production" ||
+        envelope.purpose !== "source-api-production-standby" ||
+        envelope.environmentParts !== 2 ||
+        !this.env.SOURCE_API_ENV_1 ||
+        !this.env.SOURCE_API_ENV_2 ||
+        envelope.service !== "srv-d43o7k0dl3ps73a4rhu0" ||
+        envelope.sourceRevision !==
+          "0e66a789ea1c33b297aa5f1324571904c3fa2894" ||
+        config?.purpose !== "source-production-connection" ||
+        config.user !== "stonegate_rot_20260921" ||
+        config.database !== "stonegate" ||
+        config.host !== "dpg-d43o7c0dl3ps73a4rb4g-a" ||
+        config.rejectUnauthorized !== true ||
+        !(Date.parse(config.expiresAt) > Date.now())
+      )
+        throw Error("Invalid production API standby");
+      return {
+        entrypoint: ["node", "-e", productionApiRuntime],
+        env: {
+          SOURCE_API_RUNTIME_CONFIG: this.env.SOURCE_API_RUNTIME_CONFIG!,
+          SOURCE_API_ENV_1: this.env.SOURCE_API_ENV_1!,
+          SOURCE_API_ENV_2: this.env.SOURCE_API_ENV_2!,
           MIGRATION_PROBE_TOKEN: this.env.MIGRATION_PROBE_TOKEN,
         },
         enableInternet: true,
@@ -300,11 +357,34 @@ export class HttpGateway extends DurableObject<GatewayEnv> {
           image: await this.ctx.container!.inspect(),
         });
       }
+      if (
+        this.env.SERVICE_KIND === "source-api-standby" &&
+        this.ctx.container!.running
+      ) {
+        try {
+          const response = await this.ctx
+            .container!.getTcpPort(8084)
+            .fetch("http://container/state", {
+              headers: { "x-runtime-key": this.env.MIGRATION_PROBE_TOKEN },
+              signal: AbortSignal.timeout(1000),
+            });
+          const diagnostic = (await response.json()) as Record<string, unknown>;
+          if (response.ok && diagnostic.failure) {
+            this.readiness.startupFailure = diagnostic;
+            break;
+          }
+        } catch {
+          /* The private diagnostic server may still be starting. */
+        }
+      }
       await scheduler.wait(500);
     }
     this.state.phase = "failed";
     await this.save();
-    return unavailable("readiness_timeout");
+    return Response.json(
+      { error: "readiness_failed", readiness: this.readiness },
+      { status: 503, headers: { "cache-control": "no-store" } },
+    );
   }
   private async drain() {
     this.state.desiredActive = false;
@@ -395,12 +475,21 @@ export class HttpGateway extends DurableObject<GatewayEnv> {
     const url = new URL(request.url);
     if (url.pathname.startsWith("/__gateway/")) {
       if (
+        this.env.SERVICE_KIND === "source-api-standby" &&
+        url.pathname === "/__gateway/activate"
+      )
+        return unavailable("standby_promotion_disabled", 409);
+      if (
         ["/__gateway/runtime-status", "/__gateway/interrupt-relay"].includes(
           url.pathname,
         )
       ) {
         if (
-          this.env.SERVICE_KIND !== "source-api-readonly" ||
+          !["source-api-readonly", "source-api-standby"].includes(
+            this.env.SERVICE_KIND,
+          ) ||
+          (url.pathname === "/__gateway/interrupt-relay" &&
+            this.env.SERVICE_KIND !== "source-api-readonly") ||
           !this.ctx.container!.running
         )
           return unavailable("runtime_control_unavailable", 409);
@@ -536,6 +625,8 @@ export default {
       url.protocol !== "https:"
     )
       return unavailable("unknown_host", 421);
+    if (env.SERVICE_KIND === "source-api-standby" && !control)
+      return unavailable("standby_traffic_disabled");
     // Preserve the existing Render custom-domain canonical redirect.
     if (
       publicHost &&
@@ -554,7 +645,9 @@ export default {
         !(
           (request.method === "GET" &&
             (url.pathname === "/__gateway/status" ||
-              (env.SERVICE_KIND === "source-api-readonly" &&
+              (["source-api-readonly", "source-api-standby"].includes(
+                env.SERVICE_KIND,
+              ) &&
                 url.pathname === "/__gateway/runtime-status"))) ||
           (request.method === "POST" &&
             [
