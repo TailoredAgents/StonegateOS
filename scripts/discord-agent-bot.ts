@@ -3,6 +3,7 @@ import Module from "node:module";
 import path from "node:path";
 import { Client, Events, GatewayIntentBits, Partials } from "discord.js";
 import { DateTime } from "luxon";
+import { createWorkerTaskDrain } from "./lib/worker-task-drain";
 
 function registerAliases() {
   const originalResolve = (Module as unknown as { _resolveFilename: Module["_resolveFilename"] })._resolveFilename;
@@ -609,7 +610,34 @@ async function main() {
     return false;
   }
 
+  const tasks = createWorkerTaskDrain();
+  let reportTimer: ReturnType<typeof setInterval> | undefined;
+  let reportRunning = false;
+  let shutdown: Promise<void> | undefined;
+  function requestDrain() {
+    if (shutdown) return;
+    tasks.stop();
+    if (reportTimer) clearInterval(reportTimer);
+    console.log(JSON.stringify({ event: "discord.worker.draining" }));
+    shutdown = (async () => {
+      await tasks.drained();
+      await client.destroy();
+      const { closeDbForWorkerShutdown } = await import("../apps/api/src/db");
+      await closeDbForWorkerShutdown();
+      process.off("SIGTERM", requestDrain);
+      process.off("SIGINT", requestDrain);
+      console.log(JSON.stringify({ event: "discord.worker.drained" }));
+    })();
+    void shutdown.catch(() => {
+      console.error(JSON.stringify({ event: "discord.worker.drain_failed" }));
+      process.exitCode = 1;
+    });
+  }
+  process.on("SIGTERM", requestDrain);
+  process.on("SIGINT", requestDrain);
+
   client.once(Events.ClientReady, () => {
+    if (tasks.stopping) return;
     console.log(
       JSON.stringify(
         {
@@ -630,7 +658,7 @@ async function main() {
       const cooldownMs =
         Number.isFinite(monitorCooldownMin) && monitorCooldownMin >= 5 ? Math.floor(monitorCooldownMin * 60_000) : 30 * 60_000;
       let nextMonitorAt = Date.now() + 10_000;
-      setInterval(async () => {
+      async function reportTick() {
         try {
           const subs = await listEnabledDiscordReportSubscriptions("daily_ops");
           if (!subs.length) return;
@@ -734,12 +762,19 @@ async function main() {
           }
         } catch (error) {
           console.warn("[discord-agent] report_tick_failed", String(error));
+        } finally {
+          reportRunning = false;
         }
+      }
+      reportTimer = setInterval(() => {
+        if (tasks.stopping || reportRunning) return;
+        reportRunning = true;
+        void tasks.run(reportTick).catch(() => console.warn("[discord-agent] report_task_failed"));
       }, interval);
     }
   });
 
-  client.on(Events.MessageCreate, async (message) => {
+  async function handleMessage(message: any) {
     try {
       if (!(await isAuthorized(message))) return;
 
@@ -1233,9 +1268,19 @@ async function main() {
         await message.reply("Something went wrong on my side. Try again in a minute.");
       } catch {}
     }
+  }
+  client.on(Events.MessageCreate, (message) => {
+    void tasks.run(() => handleMessage(message)).catch(() => console.warn("[discord-agent] message_task_failed"));
   });
 
-  await client.login(discordToken);
+  try {
+    await client.login(discordToken);
+  } catch (error) {
+    const stopping = tasks.stopping;
+    requestDrain();
+    await shutdown;
+    if (!stopping) throw error;
+  }
 }
 
 main().catch((error) => {

@@ -94,6 +94,7 @@ jobs:
           cp migration/apps/api/src/__tests__/database-ssl.test.ts source/apps/api/src/__tests__/database-ssl.test.ts
           mkdir -p source/scripts/migration
           cp migration/scripts/migration/worker-drain.test.mjs source/scripts/migration/
+          cp migration/scripts/migration/discord-drain.test.mjs migration/scripts/migration/discord-drain-integration.mjs source/scripts/migration/
           cat > source/.dockerignore <<'EOF'
           .git
           **/node_modules

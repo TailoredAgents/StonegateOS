@@ -37,6 +37,14 @@
         "site"
       ],
       "purpose": "Load the authenticated team directory on booking drawer open, with failure and retry states"
+    },
+    {
+      "path": "infra/cloudflare/patches/discord-graceful-drain.patch",
+      "sha256": "6e8427ed5cbcdf1675a3e29e2b1e350cd2ff65afbced3563c63f56a0f33eea37",
+      "services": [
+        "discord"
+      ],
+      "purpose": "Stop admitting Discord events and scheduled ticks, finish accepted tasks, then disconnect the gateway and close the database pool"
     }
   ]
 }

@@ -20,6 +20,7 @@ async function check(service,route,method='GET') {
   const result={service,route,method,status:response.status,ms:Math.round(performance.now()-start),body,pass:response.ok};
   if(route==='api/healthz' || route==='native-check')result.pass&&=body.source===manifest.services[service]&&JSON.stringify(body.compatibilityPatches)===JSON.stringify(manifest.compatibilityPatches.filter(p=>!p.services||p.services.includes(service)));
   if(route==='native-check')result.pass&&=body.argon2===true&&body.sharpBytes>0&&body.pdfBytes>0&&body.node==='v'+manifest.runtimeByService[service]&&body.cloudflared?.includes('2026.11.0');
+  if(route==='discord-runtime-check')result.pass&&=body.ok===true&&body.realHandler===true&&body.inFlightCompleted===true&&body.newEventRejected===true&&body.disconnectedAfterDrain===true&&body.exitCode===0;
   if(route==='image') {
     const binding=config.durable_objects.bindings.find(x=>x.name===service.toUpperCase());
     const image=config.containers.find(x=>x.class_name===binding.class_name).images.base.image;
@@ -34,10 +35,12 @@ const settled=await Promise.allSettled(Object.keys(manifest.services).map(async 
   await check(service,'api/healthz');
   await check(service,'image');
   await check(service,'native-check','POST');
+  if(service==='discord')await check(service,'discord-runtime-check','POST');
   // Only diagnostic processes run in these containers; killing them cannot dispatch jobs.
   await check(service,'stop','POST');
   await check(service,'api/healthz');
   await check(service,'native-check','POST');
+  if(service==='discord')await check(service,'discord-runtime-check','POST');
   await check(service,'stop','POST');
   } finally {
     const response=await fetch(`${origin}/${service}/stop`,{method:'POST',headers:{authorization:`Bearer ${token}`},signal:AbortSignal.timeout(15000)});

@@ -11,6 +11,7 @@ COPY . .
 RUN pnpm install --frozen-lockfile --prod=false
 RUN pnpm --filter api test -- --runInBand --runTestsByPath src/__tests__/database-ssl.test.ts
 RUN if [ "$SERVICE" = outbox ]; then node --test scripts/migration/worker-drain.test.mjs; fi
+RUN if [ "$SERVICE" = discord ]; then node --test scripts/migration/discord-drain.test.mjs && node scripts/migration/discord-drain-integration.mjs; fi
 RUN --mount=type=secret,id=site_build_env case "$SERVICE" in \
       site) node infra/cloudflare/build-site.mjs ;; \
       api) pnpm --filter api build ;; \

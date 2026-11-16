@@ -50,6 +50,11 @@ class ValidationContainer extends DurableObject<Env> {
       const result=await process.output();
       return new Response(result.stdout,{status:result.exitCode===0?200:503,headers:{'content-type':'application/json','cache-control':'no-store'}});
     }
+    if(request.method==='POST' && url.pathname==='/discord-runtime-check') {
+      const process=await this.ctx.container!.exec(['node','scripts/migration/discord-drain-integration.mjs'],{cwd:'/app',stdout:'pipe',stderr:'ignore',signal:AbortSignal.timeout(30000)});
+      const result=await process.output();
+      return new Response(result.stdout,{status:result.exitCode===0?200:503,headers:{'content-type':'application/json','cache-control':'no-store'}});
+    }
     if(url.pathname==='/image') return Response.json(await this.ctx.container!.inspect(),{headers:{'cache-control':'no-store'}});
     return this.ctx.container!.getTcpPort(8080).fetch(new Request(`http://container${url.pathname}`,request));
   }
@@ -70,7 +75,7 @@ export default {
     const [,service,...parts]=url.pathname.split('/');
     const route='/'+parts.join('/');
     const namespace=service==='site'?env.SITE:service==='api'?env.API:service==='outbox'?env.OUTBOX:service==='discord'?env.DISCORD:null;
-    const valid=(request.method==='GET' && ['/api/healthz','/image'].includes(route)) || (request.method==='POST' && ['/native-check','/stop'].includes(route)) || (service==='site' && request.method==='POST' && route==='/site-runtime-check');
+    const valid=(request.method==='GET' && ['/api/healthz','/image'].includes(route)) || (request.method==='POST' && ['/native-check','/stop'].includes(route)) || (service==='site' && request.method==='POST' && route==='/site-runtime-check') || (service==='discord' && request.method==='POST' && route==='/discord-runtime-check');
     if(!namespace || !valid)return Response.json({error:'not_found'},{status:404});
     try {
       return await namespace.getByName('validation-v1',{locationHint:'enam'}).fetch(new Request(`https://validation.internal${route}`,request));
