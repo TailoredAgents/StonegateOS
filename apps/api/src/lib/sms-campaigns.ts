@@ -219,7 +219,8 @@ export async function campaignAudience(
           ? "Invalid phone number"
           : reserved.has(phone)
             ? "Staff or test number"
-            : !c.pastCustomer
+            : !c.pastCustomer &&
+                campaign.terms.audience !== "customers_and_leads"
               ? "No completed customer job"
               : consent?.status === "revoked"
                 ? "Opted out"

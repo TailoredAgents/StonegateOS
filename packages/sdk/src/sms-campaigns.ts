@@ -19,6 +19,7 @@ export const WinterSaleSnapshotSchema = z
 export type WinterSaleSnapshot = z.infer<typeof WinterSaleSnapshotSchema>;
 export const CampaignTermsSchema = z
   .object({
+    audience: z.enum(["past_customers", "customers_and_leads"]).optional(),
     name: z.string().trim().min(1).max(100),
     expiresAt: z.string().datetime({ offset: true }).nullable(),
     serviceThrough: z

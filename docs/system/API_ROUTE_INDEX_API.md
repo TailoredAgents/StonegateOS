@@ -1,13 +1,14 @@
 # API Route Index (apps/api)
 
-Generated from source. Fingerprint: `26f467a5750ea5a1`.
+Generated from source. Fingerprint: `7fd0e01561c9b130`.
 
-Routes discovered: 488
+Routes discovered: 492
 
 This index inventories exported HTTP handlers. It does not replace endpoint authentication, request-schema, response-schema, or side-effect documentation.
 
 | Method(s) | Path | Handler |
 | --- | --- | --- |
+| GET, POST | `/api/admin/agent-integrations` | `apps/api/app/api/admin/agent-integrations/route.ts` |
 | POST | `/api/admin/agent/action-approvals` | `apps/api/app/api/admin/agent/action-approvals/route.ts` |
 | POST | `/api/admin/agent/action-executions` | `apps/api/app/api/admin/agent/action-executions/route.ts` |
 | GET | `/api/admin/appointments/source-summary` | `apps/api/app/api/admin/appointments/source-summary/route.ts` |
@@ -300,6 +301,9 @@ This index inventories exported HTTP handlers. It does not replace endpoint auth
 | POST, OPTIONS | `/api/junk-quote/book` | `apps/api/app/api/junk-quote/book/route.ts` |
 | POST, OPTIONS | `/api/junk-quote/hold` | `apps/api/app/api/junk-quote/hold/route.ts` |
 | POST, OPTIONS | `/api/junk-quote` | `apps/api/app/api/junk-quote/route.ts` |
+| GET | `/api/mcp/media/[messageId]/[index]` | `apps/api/app/api/mcp/media/[messageId]/[index]/route.ts` |
+| GET | `/api/mcp/recordings/[id]` | `apps/api/app/api/mcp/recordings/[id]/route.ts` |
+| GET, POST | `/api/mcp` | `apps/api/app/api/mcp/route.ts` |
 | POST | `/api/mobile/offline-media-queue-health` | `apps/api/app/api/mobile/offline-media-queue-health/route.ts` |
 | POST | `/api/payments/[id]/attach` | `apps/api/app/api/payments/[id]/attach/route.ts` |
 | POST | `/api/payments/[id]/detach` | `apps/api/app/api/payments/[id]/detach/route.ts` |

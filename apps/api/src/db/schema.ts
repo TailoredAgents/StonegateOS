@@ -13,6 +13,7 @@ import {
   pgEnum,
   index,
   uniqueIndex,
+  unique,
   jsonb,
   bigint,
   integer,
@@ -15298,6 +15299,87 @@ export const partnerOwnerAlertMembers = pgTable(
       columns: [t.partnerAccountId, t.partnerBookingId],
       foreignColumns: [partnerBookings.partnerAccountId, partnerBookings.id],
     }).onDelete("restrict"),
+  }),
+);
+
+export const agentIntegrations = pgTable("agent_integrations", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  name: text("name").notNull(),
+  ownerId: uuid("owner_id")
+    .notNull()
+    .references(() => teamMembers.id),
+  tokenHash: text("token_hash").notNull().unique(),
+  tools: jsonb("tools").$type<string[]>().notNull().default([]),
+  expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+  revokedAt: timestamp("revoked_at", { withTimezone: true }),
+  lastUsedAt: timestamp("last_used_at", { withTimezone: true }),
+  createdAt: timestamp("created_at", { withTimezone: true })
+    .notNull()
+    .defaultNow(),
+});
+
+export const agentOperations = pgTable(
+  "agent_operations",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    integrationId: uuid("integration_id")
+      .notNull()
+      .references(() => agentIntegrations.id),
+    requestKey: text("request_key").notNull(),
+    tool: text("tool").notNull(),
+    payload: jsonb("payload").$type<Record<string, unknown>>().notNull(),
+    payloadHash: text("payload_hash").notNull(),
+    status: text("status").notNull(),
+    approvedBy: uuid("approved_by").references(() => teamMembers.id),
+    approvedAt: timestamp("approved_at", { withTimezone: true }),
+    expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+    result: jsonb("result").$type<Record<string, unknown>>(),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (table) => ({
+    requestKey: unique("agent_operations_integration_id_request_key_key").on(
+      table.integrationId,
+      table.requestKey,
+    ),
+    statusCreated: index("agent_operations_status_created_idx").on(
+      table.status,
+      table.createdAt,
+    ),
+    statusCheck: check(
+      "agent_operations_status_check",
+      sql`${table.status} in ('pending','approved','executing','succeeded','failed','uncertain','rejected')`,
+    ),
+  }),
+);
+
+export const agentAccessEvents = pgTable(
+  "agent_access_events",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    integrationId: uuid("integration_id")
+      .notNull()
+      .references(() => agentIntegrations.id),
+    tool: text("tool").notNull(),
+    operationId: uuid("operation_id").references(() => agentOperations.id),
+    outcome: text("outcome").notNull(),
+    recordRefs: jsonb("record_refs")
+      .$type<Record<string, unknown>>()
+      .notNull()
+      .default({}),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (table) => ({
+    integrationCreated: index("agent_access_events_integration_created_idx").on(
+      table.integrationId,
+      table.createdAt,
+    ),
   }),
 );
 

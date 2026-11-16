@@ -1,4 +1,5 @@
 import React from "react";
+import Link from "next/link";
 import { requireCurrentTeamPrincipal } from "@/lib/team-principal";
 import { TeamChatClient } from "./TeamChatClient";
 import { callAdminApiAs } from "../lib/api";
@@ -55,6 +56,14 @@ export async function ChatSection(): Promise<React.ReactElement> {
 
   return (
     <section className="space-y-6">
+      {principal.roleSlug === "owner" && (
+        <Link
+          href="/team/tools/integrations"
+          className="inline-flex rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-slate-700"
+        >
+          Manage agent connections and approvals →
+        </Link>
+      )}
       <TeamChatClient contacts={contacts} actorId={principal.memberId} />
     </section>
   );

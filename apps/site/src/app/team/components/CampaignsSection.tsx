@@ -18,8 +18,17 @@ import {
 
 const CAMPAIGN_INPUT = `${TEAM_INPUT} min-w-0 w-full max-w-full`;
 
-const errorText = (error: unknown) => error instanceof Error ? error.message : "Could not reach the campaign service.";
-type CampaignResponse = { ok: boolean; message?: string; error?: string; retryable?: boolean; data?: { campaignId?: string; review?: CampaignReview } };
+const errorText = (error: unknown) =>
+  error instanceof Error
+    ? error.message
+    : "Could not reach the campaign service.";
+type CampaignResponse = {
+  ok: boolean;
+  message?: string;
+  error?: string;
+  retryable?: boolean;
+  data?: { campaignId?: string; review?: CampaignReview };
+};
 const initialTerms: CampaignTerms = {
   name: "Winter cleanout sale",
   expiresAt: null,
@@ -83,7 +92,10 @@ export function CampaignsSection() {
       const response = await fetch(`/api/team/sms-campaigns?${params}`, {
         cache: "no-store",
       });
-      const data = await response.json() as CampaignWorkspace & { message?: string; error?: string };
+      const data = (await response.json()) as CampaignWorkspace & {
+        message?: string;
+        error?: string;
+      };
       if (!response.ok)
         throw new Error(
           data.message ?? data.error ?? "Could not load campaigns.",
@@ -117,7 +129,7 @@ export function CampaignsSection() {
         },
         body,
       });
-      const result = await response.json() as CampaignResponse;
+      const result = (await response.json()) as CampaignResponse;
       if (!response.ok || !result.ok || !result.data) {
         if (!result.retryable) requestRef.current = null;
         throw new Error(
@@ -209,7 +221,8 @@ export function CampaignsSection() {
           <button
             className={teamButtonClass()}
             disabled={busy || !workspace}
-            onClick={() => void execute(
+            onClick={() =>
+              void execute(
                 { action: "create", terms: initialTerms },
                 "Draft created. Nothing has been sent.",
               )
@@ -229,7 +242,8 @@ export function CampaignsSection() {
             <button
               className={teamButtonClass("danger")}
               disabled={busy}
-              onClick={() => void execute(
+              onClick={() =>
+                void execute(
                   { action: "pause", ...base },
                   "Campaign paused. Texts already submitted cannot be recalled.",
                 )
@@ -254,7 +268,8 @@ export function CampaignsSection() {
           <button
             className="ml-3 underline"
             disabled={busy}
-            onClick={() => void load(campaign?.id, query, true)
+            onClick={() =>
+              void load(campaign?.id, query, true)
                 .then(() => setError(""))
                 .catch((e) => setError(errorText(e)))
             }
@@ -308,6 +323,34 @@ export function CampaignsSection() {
               }}
             >
               <h2 className={TEAM_SECTION_TITLE}>1. Set the offer</h2>
+              <label className="grid min-w-0 gap-1 text-sm">
+                Audience
+                <select
+                  className={CAMPAIGN_INPUT}
+                  disabled={frozen || busy}
+                  value={terms.audience ?? "past_customers"}
+                  onChange={(e) => {
+                    setTerms({
+                      ...terms,
+                      audience: e.target.value as
+                        | "past_customers"
+                        | "customers_and_leads",
+                    });
+                    setReview(null);
+                  }}
+                >
+                  <option value="past_customers">
+                    Past customers with completed jobs
+                  </option>
+                  <option value="customers_and_leads">
+                    Customers and previous inquiries
+                  </option>
+                </select>
+                <span className="text-xs text-slate-500">
+                  Both audiences require verified marketing permission. Opt-outs
+                  remain excluded.
+                </span>
+              </label>
               <label className="grid min-w-0 gap-1 text-sm">
                 Campaign name
                 <input
@@ -572,7 +615,8 @@ export function CampaignsSection() {
             <button
               className={`${teamButtonClass("primary")} mt-4`}
               disabled={busy || !selected.length || changed}
-              onClick={() => void execute(
+              onClick={() =>
+                void execute(
                   { action: "review", ...base, contactIds: selected },
                   "Review prepared. No messages have been sent.",
                 )
@@ -591,8 +635,9 @@ export function CampaignsSection() {
               Record existing consent evidence
             </summary>
             <p className="mt-3 text-sm">
-              Record a customer&apos;s documented marketing permission or withdrawal.
-              This does not request consent or override Do Not Contact.
+              Record a customer&apos;s documented marketing permission or
+              withdrawal. This does not request consent or override Do Not
+              Contact.
             </p>
             <form
               className="mt-4 grid gap-3 sm:grid-cols-2"
@@ -681,7 +726,8 @@ export function CampaignsSection() {
                   consentSource.length < 3 ||
                   !consentDate
                 }
-                onClick={() => void execute(
+                onClick={() =>
+                  void execute(
                     {
                       action: "consent",
                       contactId: consentContact,
@@ -727,7 +773,8 @@ export function CampaignsSection() {
                   !testPhone ||
                   !!workspace.readiness.blockers.length
                 }
-                onClick={() => void execute(
+                onClick={() =>
+                  void execute(
                     { action: "test", ...base, testPhone },
                     "Owner test queued. Check its delivery and appearance before launch.",
                   )
@@ -792,7 +839,8 @@ export function CampaignsSection() {
                   !!workspace.readiness.blockers.length ||
                   changed
                 }
-                onClick={() => void execute(
+                onClick={() =>
+                  void execute(
                     {
                       action: "release",
                       ...base,
@@ -814,7 +862,8 @@ export function CampaignsSection() {
                 <button
                   className={teamButtonClass()}
                   disabled={busy}
-                  onClick={() => void load(campaign.id, query, true).catch((e) =>
+                  onClick={() =>
+                    void load(campaign.id, query, true).catch((e) =>
                       setError(errorText(e)),
                     )
                   }
@@ -825,7 +874,8 @@ export function CampaignsSection() {
                   <button
                     className={teamButtonClass("danger")}
                     disabled={busy}
-                    onClick={() => void execute(
+                    onClick={() =>
+                      void execute(
                         { action: "pause", ...base },
                         "Campaign paused. Texts already submitted cannot be recalled.",
                       )
@@ -838,7 +888,8 @@ export function CampaignsSection() {
                   <button
                     className={teamButtonClass()}
                     disabled={busy}
-                    onClick={() => void execute(
+                    onClick={() =>
+                      void execute(
                         { action: "resume", ...base },
                         "Released messages can resume. Additional batches still require your action.",
                       )
@@ -851,7 +902,8 @@ export function CampaignsSection() {
                   <button
                     className={teamButtonClass()}
                     disabled={busy}
-                    onClick={() => void execute(
+                    onClick={() =>
+                      void execute(
                         { action: "end", ...base },
                         "Campaign ended. Remaining promotional messages are suppressed.",
                       )

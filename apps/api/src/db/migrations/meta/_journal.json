@@ -1275,6 +1275,13 @@
       "when": 1796774400000,
       "tag": "0184_sms_campaigns",
       "breakpoints": true
+    },
+    {
+      "idx": 182,
+      "version": "7",
+      "when": 1796860800000,
+      "tag": "0185_agent_integrations",
+      "breakpoints": true
     }
   ]
 }

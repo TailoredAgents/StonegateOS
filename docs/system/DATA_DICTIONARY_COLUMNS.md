@@ -1,10 +1,60 @@
 # Data Dictionary (Generated Columns)
 
-Generated from `apps/api/src/db/schema.ts`. Fingerprint: `aeafc8ba62bd2241`.
+Generated from `apps/api/src/db/schema.ts`. Fingerprint: `52eda8b918852dbd`.
 
-Parsed tables: 228
+Parsed tables: 231
 
 This is a structural inventory, not a relationship or data-retention specification. Use `DATA_DICTIONARY.md` for curated domain guidance and verify both against schema and migrations before operational changes.
+
+## agent_access_events
+
+Schema export: `agentAccessEvents`
+
+Columns (7):
+
+- `id`
+- `integrationId`
+- `tool`
+- `operationId`
+- `outcome`
+- `recordRefs`
+- `createdAt`
+
+## agent_integrations
+
+Schema export: `agentIntegrations`
+
+Columns (9):
+
+- `id`
+- `name`
+- `ownerId`
+- `tokenHash`
+- `tools`
+- `expiresAt`
+- `revokedAt`
+- `lastUsedAt`
+- `createdAt`
+
+## agent_operations
+
+Schema export: `agentOperations`
+
+Columns (13):
+
+- `id`
+- `integrationId`
+- `requestKey`
+- `tool`
+- `payload`
+- `payloadHash`
+- `status`
+- `approvedBy`
+- `approvedAt`
+- `expiresAt`
+- `result`
+- `createdAt`
+- `updatedAt`
 
 ## appointment_attachments
 

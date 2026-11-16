@@ -1,6 +1,7 @@
 import type { ActionPolicy, MutationErrorCode } from "@myst-os/sdk";
 import type { NextRequest } from "next/server";
 import type { VerifiedRequestActor } from "@/lib/verified-actor-context";
+import { bindIntegrationContext } from "@/lib/agent-integration-context";
 
 const mockRequirePermission = jest.fn<
   Promise<Response | null>,
@@ -89,6 +90,63 @@ describe("shared /team mutation boundary", () => {
     mockRequirePermission.mockReset().mockResolvedValue(null);
     mockGetTeamOperationKillSwitchForRisk.mockReset().mockReturnValue(null);
     mockGetVerifiedRequestActor.mockReset().mockReturnValue(humanActor());
+  });
+
+  it("allows only a request-local delegated mutation and retains the worker identity", async () => {
+    const request = teamRequest();
+    mockGetVerifiedRequestActor.mockReturnValue({
+      type: "worker",
+      id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+      label: "agent:verified",
+      authMethod: "service",
+    });
+    const denied = await beginTeamMutation(request, HUMAN_DESTRUCTIVE_POLICY);
+    expect(denied.ok).toBe(false);
+    bindIntegrationContext(request, {
+      integrationId: "verified",
+      ownerId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+      label: "test",
+      permissions: ["quotes.delete"],
+      mutationAllowed: true,
+    });
+    const allowed = await beginTeamMutation(request, HUMAN_DESTRUCTIVE_POLICY);
+    expect(allowed.ok).toBe(true);
+    if (allowed.ok) expect(allowed.mutation.actor.type).toBe("worker");
+  });
+
+  it("does not turn read context or delegation into recent human authentication", async () => {
+    const request = teamRequest();
+    mockGetVerifiedRequestActor.mockReturnValue({
+      type: "worker",
+      id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+      label: "agent:verified",
+      authMethod: "service",
+    });
+    bindIntegrationContext(request, {
+      integrationId: "verified",
+      ownerId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+      label: "test",
+      permissions: ["quotes.delete"],
+      mutationAllowed: false,
+    });
+    expect(
+      (await beginTeamMutation(request, HUMAN_DESTRUCTIVE_POLICY)).ok,
+    ).toBe(false);
+    bindIntegrationContext(request, {
+      integrationId: "verified",
+      ownerId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+      label: "test",
+      permissions: ["quotes.delete"],
+      mutationAllowed: true,
+    });
+    expect(
+      (
+        await beginTeamMutation(request, {
+          ...HUMAN_DESTRUCTIVE_POLICY,
+          maxAuthenticationAgeSeconds: 300,
+        })
+      ).ok,
+    ).toBe(false);
   });
 
   it("authenticates before touching actor context or parsing input", async () => {

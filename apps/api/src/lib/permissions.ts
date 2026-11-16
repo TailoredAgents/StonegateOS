@@ -19,6 +19,7 @@ import {
   type TeamOperationKillSwitch,
 } from "@/lib/team-operation-kill-switch";
 import { isAdminRequest } from "../../app/api/web/admin";
+import { getIntegrationContext } from "./agent-integration-context";
 
 type PermissionMatchMode = "any" | "all";
 
@@ -373,6 +374,27 @@ function resolveExplicitServiceContext(
 export async function resolvePermissionContext(
   request: NextRequest,
 ): Promise<PermissionContext> {
+  const integration = getIntegrationContext(request);
+  if (integration) {
+    setVerifiedRequestActor(request, {
+      type: "worker",
+      id: integration.ownerId,
+      label: `agent:${integration.integrationId}:${integration.label}`,
+      role: null,
+      sessionId: null,
+      authMethod: "service",
+    });
+    return {
+      authenticated: true,
+      source: "service",
+      role: null,
+      permissions: integration.permissions,
+      principalId: integration.ownerId,
+      principalLabel: `agent:${integration.integrationId}:${integration.label}`,
+      sessionId: null,
+      authenticatedAt: null,
+    };
+  }
   // Admin routes require two independent trust checks: the private site/API
   // credential authenticates the calling service, while the verified session
   // or named service principal authorizes the individual operation. Merely

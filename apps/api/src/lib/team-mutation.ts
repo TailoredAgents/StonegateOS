@@ -1,4 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
+import { getIntegrationContext } from "./agent-integration-context";
 import type {
   ActionPolicy,
   MutationErrorCode,
@@ -739,7 +740,14 @@ export async function beginTeamMutation(
     ),
     expectedVersion: null,
   };
-  if (!policy.principalTypes.includes(principalType)) {
+  // A bounded catalog action may be delegated by the integration dispatcher.
+  // Its request-local context cannot be supplied over HTTP. Sensitive policies
+  // requiring recent human authentication remain human-only.
+  const delegated =
+    principalType === "service" &&
+    getIntegrationContext(request)?.mutationAllowed === true &&
+    policy.maxAuthenticationAgeSeconds === undefined;
+  if (!policy.principalTypes.includes(principalType) && !delegated) {
     await recordTeamMutationFailure(boundaryAuditMutation, {
       outcome: "denied",
       entityType: "team_mutation",
