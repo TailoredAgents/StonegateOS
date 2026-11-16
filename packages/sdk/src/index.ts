@@ -1,5 +1,6 @@
 export * from "./schemas";
 export * from "./team-contracts";
+export * from "./sms-campaigns";
 export * from "./team-return-path";
 export * from "./partner-request-details";
 export * from "./partner-request-inbox";

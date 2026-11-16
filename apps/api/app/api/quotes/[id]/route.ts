@@ -1,4 +1,5 @@
 import type { NextRequest } from "next/server";
+import { activeWinterSale } from "@/lib/winter-sale";
 import { NextResponse } from "next/server";
 import { z } from "zod";
 import { calculateQuoteBreakdown } from "@myst-os/pricing/src/engine/calculate";
@@ -338,6 +339,11 @@ export async function PATCH(
 
     const selectedServices = body.selectedServices;
 
+    if (await activeWinterSale(db))
+      throw new TeamMutationFailure(
+        "invalid",
+        "Revise this legacy offer in the current Quotes workspace to include the winter discount. Existing accepted agreements remain unchanged.",
+      );
     let breakdown: ReturnType<typeof calculateQuoteBreakdown>;
     try {
       breakdown = calculateQuoteBreakdown({

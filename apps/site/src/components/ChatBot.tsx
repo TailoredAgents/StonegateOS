@@ -1,9 +1,13 @@
 ﻿"use client";
 
 import * as React from "react";
+import { MessageCircle, X } from "lucide-react";
 import { Button, cn } from "@myst-os/ui";
 import { usePathname } from "next/navigation";
-import { getOpenAiAdsAttribution, trackOpenAiAdsBooking } from "@/lib/openai-ads";
+import {
+  getOpenAiAdsAttribution,
+  trackOpenAiAdsBooking,
+} from "@/lib/openai-ads";
 
 type BookingSuggestion = {
   startAt: string;
@@ -143,13 +147,21 @@ export function ChatBot() {
       const res = await fetch("/api/chat", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ ...payload, openaiAds: getOpenAiAdsAttribution() }),
+        body: JSON.stringify({
+          ...payload,
+          openaiAds: getOpenAiAdsAttribution(),
+        }),
       });
       const data = (await res
         .json()
         .catch(() => null)) as AssistantPayload | null;
       if (!data) return null;
-      if (res.ok && data.ok && data.booked?.openaiAdsBookingEligible === true && typeof data.booked.appointmentId === "string") {
+      if (
+        res.ok &&
+        data.ok &&
+        data.booked?.openaiAdsBookingEligible === true &&
+        typeof data.booked.appointmentId === "string"
+      ) {
         trackOpenAiAdsBooking(data.booked.appointmentId);
       }
       return data;
@@ -217,9 +229,12 @@ export function ChatBot() {
   };
 
   return (
-    <div className="fixed right-6 bottom-24 md:bottom-6 z-50 flex flex-col items-end gap-3">
+    <div className="public-chat fixed right-4 bottom-24 md:right-6 md:bottom-6 z-50 flex max-w-[calc(100vw-2rem)] flex-col items-end gap-3">
       {isOpen ? (
-        <div className="w-full max-w-sm rounded-xl border border-neutral-300/70 bg-white shadow-xl shadow-primary-900/10 sm:max-w-md">
+        <div
+          id="stonegate-chat-panel"
+          className="w-[min(384px,calc(100vw-2rem))] max-h-[calc(100dvh-12rem)] overflow-y-auto rounded-xl border border-neutral-300/70 bg-white shadow-xl shadow-primary-900/10"
+        >
           <div className="flex items-center justify-between border-b border-neutral-200 px-4 py-3">
             <div>
               <p className="font-semibold text-primary-800">Stonegate Assist</p>
@@ -230,10 +245,10 @@ export function ChatBot() {
             <button
               type="button"
               onClick={() => setIsOpen(false)}
-              className="rounded-md p-1 text-neutral-400 transition hover:bg-neutral-100 hover:text-neutral-600"
+              className="flex h-11 w-11 shrink-0 items-center justify-center rounded-md text-neutral-500 transition hover:bg-neutral-100 hover:text-neutral-700"
               aria-label="Close chat"
             >
-              x
+              <X size={20} aria-hidden="true" />
             </button>
           </div>
           <div
@@ -319,7 +334,7 @@ export function ChatBot() {
                 value={input}
                 onChange={(e) => setInput(e.target.value)}
                 placeholder="Type your question"
-                className="flex-1 rounded-md border border-neutral-300/70 bg-white px-3 py-2 text-sm text-neutral-700 shadow-soft focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent-500"
+                className="min-w-0 flex-1 rounded-md border border-neutral-300/70 bg-white px-3 py-2 text-sm text-neutral-700 shadow-soft focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent-500"
               />
               <Button type="submit" variant="primary" size="sm">
                 Send
@@ -333,9 +348,18 @@ export function ChatBot() {
         type="button"
         variant={isOpen ? "secondary" : "primary"}
         onClick={() => setIsOpen((prev) => !prev)}
-        className="shadow-lg shadow-primary-900/20"
+        aria-expanded={isOpen}
+        aria-controls="stonegate-chat-panel"
+        className="h-12 w-12 rounded-full px-0 shadow-lg shadow-primary-900/20 md:h-11 md:w-auto md:rounded-md md:px-5"
       >
-        {isOpen ? "Hide Assistant" : "Ask Stonegate"}
+        {isOpen ? (
+          <X size={21} aria-hidden="true" />
+        ) : (
+          <MessageCircle size={21} aria-hidden="true" />
+        )}
+        <span className="sr-only md:not-sr-only">
+          {isOpen ? "Hide Assistant" : "Ask Stonegate"}
+        </span>
       </Button>
     </div>
   );

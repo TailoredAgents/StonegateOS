@@ -42,7 +42,7 @@ export function StickyCtaBar({ className }: StickyCtaBarProps) {
     <>
       <div
         className={cn(
-          "fixed inset-x-0 bottom-0 z-50 border-t border-neutral-300/50 bg-white/95 px-4 pt-3 pb-[calc(env(safe-area-inset-bottom,0px)+1rem)] shadow-[0_-10px_24px_rgba(15,23,42,0.10)] md:hidden",
+          "public-sticky-cta fixed inset-x-0 bottom-0 z-50 border-t border-neutral-300/50 bg-white/95 px-4 pt-3 pb-[calc(env(safe-area-inset-bottom,0px)+1rem)] shadow-[0_-10px_24px_rgba(15,23,42,0.10)] md:hidden",
           className,
         )}
       >

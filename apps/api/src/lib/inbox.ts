@@ -16,6 +16,7 @@ import {
 import { recordAuditEvent } from "@/lib/audit";
 import { isMediaAutoImportEnabled } from "@/lib/feature-flags";
 import { getDefaultSalesAssigneeMemberId } from "@/lib/sales-scorecard";
+import { recordCampaignInbound } from "@/lib/sms-campaign-dispatch";
 
 export type InboundChannel = "sms" | "email" | "dm" | "call" | "web";
 
@@ -1065,6 +1066,16 @@ export async function recordInboundMessage(input: InboundMessageInput): Promise<
 
     if (!message?.id) {
       throw new Error("message_create_failed");
+    }
+
+    if (channel === "sms" && process.env["SMS_CAMPAIGNS_ENABLED"] === "true") {
+      await recordCampaignInbound(
+        tx,
+        resolvedFromAddress,
+        contact.id,
+        body,
+        now,
+      );
     }
 
     await tx

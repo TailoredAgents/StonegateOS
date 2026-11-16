@@ -10,6 +10,7 @@ import { SiteStructuredData } from "@/components/StructuredData";
 import { WebAnalyticsClient } from "@/components/WebAnalyticsClient";
 import { CommercialBrandFrame } from "@/components/CommercialBrandFrame";
 import styles from "@/components/CommercialTheme.module.css";
+import "@/components/public-site/public-site.css";
 
 export default function CommercialLayout({
   children,
@@ -19,7 +20,7 @@ export default function CommercialLayout({
   const metaPixelId = process.env["NEXT_PUBLIC_META_PIXEL_ID"] ?? null;
 
   return (
-    <div className={styles["theme"]}>
+    <div className={`public-site public-contractor ${styles["theme"]}`}>
       <PublicMarketingTags />
       <MetaPixel pixelId={metaPixelId} />
       <WebAnalyticsClient />

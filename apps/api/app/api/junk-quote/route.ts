@@ -1,3 +1,4 @@
+import { activeWinterSale, winterSaleEstimate } from "@/lib/winter-sale";
 import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
 import { z } from "zod";
@@ -1056,8 +1057,10 @@ export async function POST(request: NextRequest) {
             getPreDiscountPrice(base.priceHigh, discountPercent),
           )
         : base.priceHigh;
-    const quoteWithDisplayDiscount =
-      discountPercent > 0
+    const promotion = await activeWinterSale();
+    const quoteWithDisplayDiscount = promotion
+      ? winterSaleEstimate(base, promotion)
+      : discountPercent > 0
         ? {
             ...base,
             priceLow: preDiscountLow,

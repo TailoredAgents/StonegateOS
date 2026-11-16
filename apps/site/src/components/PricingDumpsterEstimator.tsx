@@ -7,6 +7,11 @@ import type { Route } from "next";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { Button, cn } from "@myst-os/ui";
 import {
+  WinterSaleSnapshotSchema,
+  winterSalePrice,
+  type WinterSaleSnapshot,
+} from "@myst-os/sdk";
+import {
   COOKIE_CONSENT_EVENT,
   isAdvertisingAllowed,
   isAnalyticsAllowed,
@@ -511,8 +516,32 @@ function PricingDumpsterEstimatorInner({ className }: { className?: string }) {
       parts.push(`${addons.tire} tire${addons.tire === 1 ? "" : "s"}`);
     return parts;
   }, [addons]);
-  const totalMin = tier.min + addonTotal;
-  const totalMax = tier.max + addonTotal;
+  const [winterSale, setWinterSale] = React.useState<WinterSaleSnapshot | null>(
+    null,
+  );
+  React.useEffect(() => {
+    const controller = new AbortController();
+    fetch("/api/winter-sale", { cache: "no-store", signal: controller.signal })
+      .then((response) => response.json())
+      .then((data: unknown) => {
+        const result = WinterSaleSnapshotSchema.safeParse(
+          data && typeof data === "object" && "promotion" in data
+            ? data.promotion
+            : null,
+        );
+        setWinterSale(result.success ? result.data : null);
+      })
+      .catch(() => {});
+    return () => controller.abort();
+  }, []);
+  const normalMin = tier.min + addonTotal;
+  const normalMax = tier.max + addonTotal;
+  const totalMin = winterSale
+    ? winterSalePrice(Math.round(normalMin * 100)).finalCents / 100
+    : normalMin;
+  const totalMax = winterSale
+    ? winterSalePrice(Math.round(normalMax * 100)).finalCents / 100
+    : normalMax;
 
   const ariaSummary = `Estimated price range ${formatUsd(totalMin)} to ${formatUsd(totalMax)} for ${tier.label}.`;
 
@@ -680,10 +709,21 @@ function PricingDumpsterEstimatorInner({ className }: { className?: string }) {
                   role="status"
                   aria-live="polite"
                 >
-                  Pricing: {formatUsd(totalMin)}–{formatUsd(totalMax)}
+                  {winterSale ? "Winter sale: " : "Pricing: "}
+                  {formatUsd(totalMin)}–{formatUsd(totalMax)}
                 </p>
               </div>
 
+              {winterSale && (
+                <p className="mt-3 text-sm text-primary-900">
+                  <strong>40% off all services and add-ons.</strong> Normally{" "}
+                  {formatUsd(normalMin)}–{formatUsd(normalMax)}. Book by{" "}
+                  {new Date(winterSale.expiresAt).toLocaleDateString("en-US", {
+                    timeZone: "America/New_York",
+                  })}{" "}
+                  for service by {winterSale.serviceThrough}.
+                </p>
+              )}
               <label className="sr-only" htmlFor="dumpster-load-slider">
                 Trailer load size
               </label>

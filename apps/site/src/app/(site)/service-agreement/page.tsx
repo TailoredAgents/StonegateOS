@@ -12,7 +12,7 @@ export default function ServiceAgreementPage() {
   const company = getPublicCompanyProfile();
 
   return (
-    <div className="mx-auto max-w-3xl px-6 py-16 md:px-10">
+    <div className="public-legal mx-auto max-w-3xl px-6 py-16 md:px-10">
       <h1 className="font-display text-4xl text-primary-900">
         Service Agreement and Cancellation Policy
       </h1>

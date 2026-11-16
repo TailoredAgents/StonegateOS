@@ -1,8 +1,10 @@
 "use client";
 
 import Link from "next/link";
+import Image from "next/image";
+import { ArrowUpRight, ShieldCheck } from "lucide-react";
 import { useCallback } from "react";
-import { Badge, Button, cn } from "@myst-os/ui";
+import { Button, cn } from "@myst-os/ui";
 import { isAnalyticsAllowed, isPublicTrackingPath } from "@/lib/cookie-consent";
 
 declare global {
@@ -54,147 +56,68 @@ export function HeroV2({
   className?: string;
   variant?: "lean" | "full";
 }) {
-  const isLean = variant === "lean";
-  const trustBadges: Array<{
-    label: string;
-    tone: "highlight" | "default" | "neutral";
-  }> = [
-    {
-      label: `Google ${GOOGLE_REVIEW_RATING} • ${GOOGLE_REVIEW_COUNT} reviews`,
-      tone: "highlight",
-    },
-    { label: "No-Surprise Pricing", tone: "default" },
-    { label: "Licensed & Insured", tone: "default" },
-    { label: "Background-checked", tone: "neutral" },
-    { label: "Same-day available", tone: "neutral" },
-    { label: "<24h response", tone: "neutral" },
-  ];
   const handleSchedule = useCallback(() => trackHeroEvent("schedule"), []);
   const handleCall = useCallback(() => trackHeroEvent("call"), []);
-  const handleText = useCallback(() => trackHeroEvent("text"), []);
+  const phone = process.env["NEXT_PUBLIC_COMPANY_PHONE_E164"] || "+14047772631";
 
   return (
-    <section
-      className={cn(
-        "relative overflow-hidden rounded-3xl bg-gradient-to-br from-neutral-50 via-white to-neutral-100 ring-1 ring-black/5 shadow-xl",
-        className,
-      )}
-    >
-      <div
-        className={cn(
-          "mx-auto grid items-center gap-8 sm:gap-10 px-6 sm:px-10 md:px-12 py-12 sm:py-16 md:py-20 min-h-[60svh] md:min-h-[560px]",
-          isLean
-            ? "max-w-6xl"
-            : "max-w-6xl md:grid-cols-[minmax(0,1.15fr)_minmax(0,0.85fr)]",
-        )}
-      >
-        <div className="space-y-6">
-          <div className="space-y-4">
-            <span className="inline-flex items-center rounded-full bg-neutral-100 px-3 py-1 text-sm font-semibold uppercase tracking-[0.14em] text-neutral-700">
-              Fast junk removal
-            </span>
-            <h1 className="font-display text-3xl tracking-tight text-primary-900 sm:text-5xl md:text-6xl">
-              Junk removal that clears clutter fast and responsibly
-            </h1>
-            <p className="max-w-xl text-base text-neutral-600 sm:text-lg">
-              Book online in under a minute. Licensed and insured crews with
-              same-day availability in Woodstock and nearby North Metro
-              communities.
-            </p>
-            <p className="max-w-xl text-sm text-neutral-500">
-              No travel fees in our core service area. Coverage is up to 25
-              miles for half-load and larger jobs, and up to 15 miles for
-              minimum-pickup and quarter-load jobs.
-            </p>
-          </div>
-
-          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:gap-4">
-            <Button
-              asChild
-              size="lg"
-              className="w-full justify-center shadow-soft sm:w-auto"
-              onClick={handleSchedule}
-            >
-              <Link href="/book">Get Instant Quote</Link>
-            </Button>
-            <Button
-              asChild
-              variant="ghost"
-              size="lg"
-              className="w-full justify-center border border-neutral-300/70 text-primary-800 sm:w-auto"
-              onClick={handleCall}
-            >
-              <a href="tel:+14047772631">Call (404) 777-2631</a>
-            </Button>
-            {isLean ? null : (
-              <Button
-                asChild
-                variant="ghost"
-                size="lg"
-                className="w-full justify-center border border-neutral-300/70 text-primary-800 sm:w-auto"
-                onClick={handleText}
-              >
-                <a href="sms:+14047772631">Text Us</a>
-              </Button>
-            )}
-          </div>
-
-          <div className="flex flex-wrap items-start gap-2 sm:gap-3">
-            {trustBadges.map((badge) => (
-              <Badge
-                key={badge.label}
-                tone={badge.tone}
-                className="max-w-full whitespace-normal text-[0.62rem] leading-tight tracking-[0.14em] sm:text-overline sm:tracking-[0.18em]"
-              >
-                {badge.label}
-              </Badge>
-            ))}
-          </div>
-
-          <div className="rounded-xl border border-neutral-200 bg-white/90 p-4 text-sm text-neutral-600 md:hidden">
-            <p className="font-semibold text-neutral-700">
-              &ldquo;Removed garage contents. On time and professional. Would
-              use their services again!&rdquo;
-            </p>
-            <p className="mt-2 text-[11px] uppercase tracking-[0.18em] text-neutral-500">
-              Sharon Martin • Google Review
-            </p>
+    <section className={cn("public-hero", className)} data-variant={variant}>
+      <div className="public-hero-copy">
+        <p className="public-eyebrow">Junk removal · North Metro Atlanta</p>
+        <h1>
+          Less clutter.
+          <br />
+          <em>More possibility.</em>
+        </h1>
+        <p className="public-hero-description">
+          A garage you can park in. A room you can use again. We do the lifting,
+          loading, and hauling—so you can enjoy your space.
+        </p>
+        <div className="public-hero-actions">
+          <Button
+            asChild
+            size="lg"
+            className="public-hero-primary"
+            onClick={handleSchedule}
+          >
+            <Link href="/book">
+              Get my instant quote <ArrowUpRight size={18} aria-hidden="true" />
+            </Link>
+          </Button>
+          <Button
+            asChild
+            size="lg"
+            variant="ghost"
+            className="public-hero-secondary"
+            onClick={handleCall}
+          >
+            <a href={`tel:${phone}`}>Call the crew</a>
+          </Button>
+        </div>
+        <div className="public-hero-rating">
+          <span className="public-stars" aria-label="5 stars">
+            ★★★★★
+          </span>
+          <span>
+            {GOOGLE_REVIEW_RATING} on Google · {GOOGLE_REVIEW_COUNT} reviews
+          </span>
+        </div>
+      </div>
+      <div className="public-hero-image">
+        <Image
+          src="/images/gallery/trailer_16x9.jpg"
+          alt="Stonegate’s junk removal trailer ready for a local pickup"
+          fill
+          priority
+          sizes="(min-width: 768px) 560px, 100vw"
+        />
+        <div className="public-hero-image-note">
+          <ShieldCheck size={28} strokeWidth={1.5} aria-hidden="true" />
+          <div>
+            <strong>Your space. Our care.</strong>
+            <p>Careful pickup. Clear pricing. A fresh start.</p>
           </div>
         </div>
-
-        {isLean ? null : (
-          <div className="hidden md:block">
-            <div className="rounded-2xl border border-neutral-200/80 bg-white/90 p-6 shadow-soft">
-              <div className="space-y-4">
-                <div>
-                  <p className="text-xs font-semibold uppercase tracking-[0.16em] text-accent-700">
-                    Why homeowners choose Stonegate
-                  </p>
-                  <h2 className="mt-2 text-xl font-semibold text-primary-900">
-                    Clear scope. Clear price. Fast pickup.
-                  </h2>
-                </div>
-                <ul className="space-y-2 text-sm text-neutral-600">
-                  <li>
-                    - Before work begins, we confirm included items and your
-                    total price.
-                  </li>
-                  <li>- Any added items are re-quoted and approved first.</li>
-                  <li>- No travel fees in our core service area.</li>
-                </ul>
-                <div className="rounded-lg bg-neutral-50 p-4 text-sm text-neutral-600">
-                  <p className="font-semibold text-neutral-700">
-                    &ldquo;The two guys who helped me were great! Very polite
-                    and eager to help.&rdquo;
-                  </p>
-                  <p className="mt-2 text-xs uppercase tracking-[0.18em] text-neutral-500">
-                    Ashlyn Hickmon • Google Review
-                  </p>
-                </div>
-              </div>
-            </div>
-          </div>
-        )}
       </div>
     </section>
   );

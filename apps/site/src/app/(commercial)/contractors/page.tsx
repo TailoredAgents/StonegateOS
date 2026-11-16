@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import Image from "next/image";
 import { Droplets, Hammer, Trees, Truck } from "lucide-react";
 import { Card, Section } from "@myst-os/ui";
 import { CommercialContactActions } from "@/components/CommercialContactActions";
@@ -107,6 +108,7 @@ export default function ContractorsPage() {
       <Section
         className={`${styles["hero"]} border-b pb-12 pt-12 md:pb-16 md:pt-20`}
         aria-labelledby="commercial-heading"
+        containerClassName="public-contractor-hero"
       >
         <header className="max-w-5xl">
           <p className="text-xs font-semibold uppercase tracking-[0.18em] text-primary-700">
@@ -133,6 +135,19 @@ export default function ContractorsPage() {
             We’re based in {company.hqCity} and work across North Metro Atlanta.
           </p>
         </header>
+        <div className="public-photo public-contractor-photo">
+          <Image
+            src="/images/gallery/trailer_16x9.jpg"
+            alt="Stonegate trailer ready for property cleanouts and project debris"
+            fill
+            priority
+            sizes="(min-width: 768px) 460px, 100vw"
+          />
+          <div className="public-photo-caption">
+            <strong>Your next project, one step clearer.</strong>
+            <p>Local hauling and cleanup across North Metro Atlanta.</p>
+          </div>
+        </div>
       </Section>
 
       <Section

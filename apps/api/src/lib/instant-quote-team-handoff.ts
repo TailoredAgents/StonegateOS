@@ -1,3 +1,4 @@
+import { WinterSaleSnapshotSchema } from "@myst-os/sdk";
 import { and, eq, isNull } from "drizzle-orm";
 import {
   contactProperties,
@@ -525,8 +526,16 @@ export function resolveInstantQuoteTeamHandoff(
     fullQuotePrefill: {
       propertyId: quote.propertyId,
       serviceIds: mapInstantQuoteServices(quote.jobTypes),
-      priceRangeMinCents: range.minCents,
-      priceRangeMaxCents: range.maxCents,
+      priceRangeMinCents: WinterSaleSnapshotSchema.safeParse(
+        (quote.aiResult as Record<string, unknown> | null)?.["winterSale"],
+      ).success
+        ? (priceDollarsToCents(ai.priceLow) ?? range.minCents)
+        : range.minCents,
+      priceRangeMaxCents: WinterSaleSnapshotSchema.safeParse(
+        (quote.aiResult as Record<string, unknown> | null)?.["winterSale"],
+      ).success
+        ? (priceDollarsToCents(ai.priceHigh) ?? range.maxCents)
+        : range.maxCents,
       notes,
     },
   };

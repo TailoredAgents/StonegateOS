@@ -43,7 +43,11 @@ export function normalizeSystemOutboundDedupeKey(
 
 async function ensureThreadForContactChannel(
   db: DbExecutor,
-  input: { contactId: string; channel: SystemOutboundChannel },
+  input: {
+    contactId: string;
+    channel: SystemOutboundChannel;
+    generalThreadOnly?: boolean;
+  },
 ): Promise<string | null> {
   const [existing] = await db
     .select({ id: conversationThreads.id })
@@ -52,6 +56,9 @@ async function ensureThreadForContactChannel(
       and(
         eq(conversationThreads.contactId, input.contactId),
         eq(conversationThreads.channel, input.channel),
+        input.generalThreadOnly
+          ? eq(conversationThreads.staffScope, "general")
+          : undefined,
       ),
     )
     .orderBy(
@@ -131,6 +138,7 @@ export async function queueSystemOutboundMessage(input: {
   metadata?: Record<string, unknown> | null;
   dedupeKey?: string | null;
   nextAttemptAt?: Date | null;
+  generalThreadOnly?: boolean;
 }): Promise<string | null> {
   if (!input.db) {
     const db = getDb();
@@ -180,6 +188,7 @@ export async function queueSystemOutboundMessage(input: {
   const threadId = await ensureThreadForContactChannel(db, {
     contactId: input.contactId,
     channel: input.channel,
+    generalThreadOnly: input.generalThreadOnly,
   });
   if (!threadId) return null;
 

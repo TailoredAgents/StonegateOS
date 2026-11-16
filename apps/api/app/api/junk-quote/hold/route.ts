@@ -1,4 +1,6 @@
 import type { NextRequest } from "next/server";
+import { WinterSaleSnapshotSchema } from "@myst-os/sdk";
+import { winterServiceDateAllowed } from "@/lib/winter-sale";
 import { NextResponse } from "next/server";
 import { DateTime } from "luxon";
 import { z } from "zod";
@@ -247,6 +249,24 @@ export async function POST(request: NextRequest): Promise<Response> {
         : DEFAULT_TRAVEL_BUFFER_MIN;
 
     const startAt = new Date(body.startAt);
+    const sale = WinterSaleSnapshotSchema.safeParse(
+      (quote.aiResult as Record<string, unknown> | null)?.["winterSale"],
+    );
+    if (
+      sale.success &&
+      (!winterServiceDateAllowed(sale.data, startAt) ||
+        new Date(sale.data.expiresAt) <= new Date())
+    )
+      return corsJson(
+        {
+          ok: false,
+          error: "winter_sale_dates",
+          message:
+            "Choose service within the sale dates, or request a fresh quote.",
+        },
+        requestOrigin,
+        { status: 422 },
+      );
     if (Number.isNaN(startAt.getTime())) {
       return corsJson({ ok: false, error: "invalid_startAt" }, requestOrigin, {
         status: 400,

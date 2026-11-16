@@ -1,3 +1,4 @@
+import { WinterSaleSnapshotSchema, winterSalePrice } from "@myst-os/sdk";
 import { createHash } from "node:crypto";
 import { z } from "zod";
 
@@ -253,6 +254,7 @@ export const QuotePricingInputSchema = z
   .object({
     documentType: QuoteDocumentTypeSchema,
     currency: z.literal(QUOTE_V2_CURRENCY).default(QUOTE_V2_CURRENCY),
+    winterSale: WinterSaleSnapshotSchema.optional(),
     lineItems: z.array(QuoteLineItemSchema).min(1).max(MAX_QUOTE_LINE_ITEMS),
     optionGroups: z
       .array(QuoteOptionGroupSchema)
@@ -566,8 +568,8 @@ export function calculateQuoteV2Totals(
         0,
       );
 
-  const discountMinCents = byKind("discount", "min");
-  const discountMaxCents = byKind("discount", "max");
+  let discountMinCents = byKind("discount", "min");
+  let discountMaxCents = byKind("discount", "max");
   const feeMinCents = byKind("fee", "min") + byKind("travel", "min");
   const feeMaxCents = byKind("fee", "max") + byKind("travel", "max");
   const invalidDiscount = adjustments.some(
@@ -582,6 +584,36 @@ export function calculateQuoteV2Totals(
       "Discounts cannot exceed the eligible subtotal.",
       { adjustments: "Reduce the quote discount." },
     );
+  }
+
+  if (parsed.winterSale) {
+    // Replace competing discounts and include every business-controlled fee.
+
+    for (let index = adjustments.length - 1; index >= 0; index--)
+      if (adjustments[index]?.kind === "discount") adjustments.splice(index, 1);
+
+    const normalMin = subtotalMinCents + feeMinCents;
+
+    const normalMax = subtotalMaxCents + feeMaxCents;
+
+    discountMinCents = winterSalePrice(normalMin).discountCents;
+
+    discountMaxCents = winterSalePrice(normalMax).discountCents;
+
+    adjustments.push({
+      id: "winter-sale",
+      kind: "discount",
+      label: "Winter sale — 40% off all services and fees",
+      calculation: "percentage",
+      basis: "subtotal",
+      eligibleLineItemIds: [],
+      basisPoints: 4000,
+      displayOrder: 10000,
+      eligibleSubtotalMinCents: normalMin,
+      eligibleSubtotalMaxCents: normalMax,
+      amountMinCents: discountMinCents,
+      amountMaxCents: discountMaxCents,
+    });
   }
 
   const totalMinCents = subtotalMinCents - discountMinCents + feeMinCents;

@@ -1,4 +1,5 @@
 import type { LineItem, PartnerServiceLineInput } from "@myst-os/pricing";
+export * from "./sms-campaign-schema";
 
 // existing tables...
 import {

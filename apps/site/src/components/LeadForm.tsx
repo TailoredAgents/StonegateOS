@@ -1728,7 +1728,7 @@ export function LeadForm({
     <div
       ref={containerRef}
       className={cn(
-        "scroll-mt-24 rounded-xl bg-white p-6 shadow-soft shadow-primary-900/10",
+        "public-lead-form scroll-mt-24 rounded-xl bg-white p-6 shadow-soft shadow-primary-900/10",
         className,
       )}
       {...props}

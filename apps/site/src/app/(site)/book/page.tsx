@@ -1,4 +1,4 @@
-import { Badge, Section } from "@myst-os/ui";
+import { Section } from "@myst-os/ui";
 import { LeadForm } from "@/components/LeadForm";
 import { absoluteUrl } from "@/lib/metadata";
 
@@ -18,10 +18,10 @@ export const metadata = {
 
 export default function BookPage() {
   return (
-    <Section>
-      <div className="mx-auto grid max-w-6xl gap-10 lg:grid-cols-[420px_1fr] lg:items-start">
-        <header className="space-y-4">
-          <Badge tone="highlight">Instant Estimate</Badge>
+    <Section className="public-page">
+      <div className="public-booking mx-auto grid w-full max-w-6xl gap-10 lg:grid-cols-[minmax(0,0.8fr)_minmax(0,1.2fr)] lg:items-start">
+        <header className="public-page-intro space-y-4">
+          <p className="public-eyebrow">Your pickup, made simple</p>
           <h1 className="font-display text-display text-primary-800">
             See your junk removal estimate
           </h1>

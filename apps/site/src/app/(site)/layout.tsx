@@ -6,15 +6,23 @@ import { SiteChatBot } from "@/components/SiteChatBot";
 import { SiteStructuredData } from "@/components/StructuredData";
 import { WebAnalyticsClient } from "@/components/WebAnalyticsClient";
 import { PublicMarketingTags } from "@/components/PublicMarketingTags";
+import "@/components/public-site/public-site.css";
 
 export default function SiteLayout({ children }: { children: ReactNode }) {
   return (
-    <div className="flex min-h-screen flex-col bg-gradient-to-b from-white via-neutral-100 to-white">
+    <div className="public-site flex min-h-screen flex-col">
       <PublicMarketingTags includeMetaPixel />
       <WebAnalyticsClient />
       <SiteStructuredData />
+      <a href="#main-content" className="public-skip-link">
+        Skip to content
+      </a>
       <Header />
-      <main className="flex-1 pb-[calc(env(safe-area-inset-bottom,0px)+6rem)] md:pb-0">
+      <main
+        id="main-content"
+        tabIndex={-1}
+        className="public-main flex-1 scroll-mt-28 focus:outline-none"
+      >
         {children}
       </main>
       <Footer />

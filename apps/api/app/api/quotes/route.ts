@@ -1,4 +1,5 @@
 import type { NextRequest } from "next/server";
+import { activeWinterSale } from "@/lib/winter-sale";
 import { NextResponse } from "next/server";
 import { z } from "zod";
 import { calculateQuoteBreakdown } from "@myst-os/pricing/src/engine/calculate";
@@ -603,6 +604,11 @@ export async function POST(request: NextRequest): Promise<Response> {
     const selectedServices = body.selectedServices;
 
     let breakdown: ReturnType<typeof calculateQuoteBreakdown>;
+    if (await activeWinterSale(db))
+      throw new TeamMutationFailure(
+        "invalid",
+        "Create this winter sale offer in the current Quotes workspace so the full 40% discount, deposit and service cutoff are included.",
+      );
     try {
       breakdown = calculateQuoteBreakdown({
         zoneId: body.zoneId,

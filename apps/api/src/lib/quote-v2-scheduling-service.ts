@@ -1,3 +1,4 @@
+import { winterServiceDateAllowed } from "@/lib/winter-sale";
 import { randomUUID } from "node:crypto";
 import { DateTime } from "luxon";
 import {
@@ -969,7 +970,14 @@ export async function getQuoteV2Availability(input: {
   for (let day = 0; day < context.bookingWindowDays; day += 1) {
     const localDay = nowLocal.plus({ days: day }).startOf("day");
     const date = localDay.toISODate();
-    if (!date) continue;
+    if (
+      !date ||
+      !winterServiceDateAllowed(
+        parseDocument(row).pricing.winterSale,
+        localDay.toJSDate(),
+      )
+    )
+      continue;
     const slots: QuoteV2SchedulingSlot[] = [];
     const maxReached =
       context.bookingRules.maxJobsPerDay > 0 &&
@@ -1197,6 +1205,16 @@ export async function createQuoteV2AppointmentHold(input: {
       );
     }
     const context = await scheduleContext(tx, row);
+    if (
+      !winterServiceDateAllowed(
+        parseDocument(row).pricing.winterSale,
+        input.startAt,
+      )
+    )
+      throw new QuoteV2PublicStateError(
+        "conflict",
+        "This date is after the winter sale's last service date.",
+      );
     const localStart = DateTime.fromISO(input.startAt, { setZone: true });
     const candidateStart = localStart.isValid
       ? localStart.toUTC().toJSDate()

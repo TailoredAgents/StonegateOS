@@ -1,3 +1,4 @@
+import { WinterSaleSnapshotSchema } from "@myst-os/sdk";
 import { z } from "zod";
 import {
   QuoteAudienceSchema,
@@ -140,6 +141,7 @@ const QuoteDraftDepositSchema = z.discriminatedUnion("mode", [
 
 export const QuoteDraftPricingSchema = z
   .object({
+    winterSale: WinterSaleSnapshotSchema.optional(),
     documentType: QuoteDocumentTypeSchema,
     currency: z.literal("USD").default("USD"),
     lineItems: z.array(QuoteDraftLineItemSchema).max(100).default([]),
@@ -203,9 +205,15 @@ export const QuoteV2CreateCommandSchema = z
       .object({
         accountId: z.string().uuid(),
         target: z.discriminatedUnion("type", [
-          z.object({ type: z.literal("booking"), id: z.string().uuid() }).strict(),
-          z.object({ type: z.literal("draft"), id: z.string().uuid() }).strict(),
-          z.object({ type: z.literal("location"), id: z.string().uuid() }).strict(),
+          z
+            .object({ type: z.literal("booking"), id: z.string().uuid() })
+            .strict(),
+          z
+            .object({ type: z.literal("draft"), id: z.string().uuid() })
+            .strict(),
+          z
+            .object({ type: z.literal("location"), id: z.string().uuid() })
+            .strict(),
         ]),
       })
       .strict()

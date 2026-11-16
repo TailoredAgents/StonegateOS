@@ -11,6 +11,7 @@ import {
 } from "@/db";
 import { sanitizeAuditMetadata } from "@/lib/audit-metadata";
 import type { SendResult } from "@/lib/messaging";
+import { guardCampaignDispatch } from "@/lib/sms-campaign-dispatch";
 
 export type ExternalMessageChannel = "sms" | "email" | "dm";
 
@@ -462,18 +463,36 @@ export async function claimMessageDispatch(input: {
       .from(conversationMessages)
       .where(eq(conversationMessages.id, dispatch.messageId))
       .limit(1);
+    const campaignRecipientId =
+      typeof messageScope?.metadata?.["smsCampaignRecipientId"] === "string"
+        ? messageScope.metadata["smsCampaignRecipientId"]
+        : null;
+    const campaignGuard = campaignRecipientId
+      ? await guardCampaignDispatch(tx, {
+          recipientId: campaignRecipientId,
+          messageId: dispatch.messageId,
+          contactId: dispatch.contactId,
+          outboxId: dispatch.outboxEventId,
+          now,
+        })
+      : null;
+    if (campaignGuard?.retryAt)
+      return { kind: "in_flight" as const, retryAt: campaignGuard.retryAt };
     const allowDncOverride =
+      !campaignRecipientId &&
       isRecord(messageScope?.metadata) &&
       messageScope.metadata["allowDncOverride"] === true;
     const eligibility = planContactDispatchEligibility(
       contact ?? null,
       allowDncOverride,
     );
-    if (eligibility.kind === "blocked") {
+    if (eligibility.kind === "blocked" || campaignGuard?.block) {
       const detail =
+        campaignGuard?.block ??
+        (eligibility.kind === "blocked" &&
         eligibility.reason === "contact_dnc_before_message_dispatch"
           ? "contact_dnc_before_provider_dispatch"
-          : "contact_unavailable_before_provider_dispatch";
+          : "contact_unavailable_before_provider_dispatch");
       await tx
         .update(externalMessageDispatches)
         .set({

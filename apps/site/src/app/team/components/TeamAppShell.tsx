@@ -518,6 +518,7 @@ function iconForTab(id: string): React.ReactElement {
     case "pipeline":
       return <IconColumns className={className} />;
     case "outbound":
+    case "campaigns":
       return <IconMegaphone className={className} />;
     case "calendar":
       return <IconCalendar className={className} />;

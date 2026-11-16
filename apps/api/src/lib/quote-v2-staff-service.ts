@@ -1,3 +1,4 @@
+import { activeWinterSale } from "@/lib/winter-sale";
 import { randomUUID } from "node:crypto";
 import { and, eq, inArray, notInArray } from "drizzle-orm";
 import { z } from "zod";
@@ -434,6 +435,7 @@ export async function createQuoteV2Draft(
     assumptions: [],
     pricing: {
       documentType: command.documentType,
+      winterSale: (await activeWinterSale(tx, now)) ?? undefined,
       currency: "USD" as const,
       lineItems: [],
       optionGroups: [],
@@ -600,6 +602,7 @@ export async function saveQuoteV2Draft(
   const [quote] = await tx
     .select({
       id: quotes.id,
+      createdAt: quotes.createdAt,
       quoteNumber: quotes.quoteNumber,
       engineVersion: quotes.engineVersion,
       aggregateRevision: quotes.aggregateRevision,
@@ -660,6 +663,15 @@ export async function saveQuoteV2Draft(
 
   const nextDraftRevision = version.draftRevision + 1;
   const document = command.document;
+  const winterSale = await activeWinterSale(tx, now);
+  if (
+    winterSale &&
+    (winterSale.retroactivePolicy === "include_unaccepted_quotes" ||
+      !winterSale.activatedAt ||
+      quote.createdAt >= new Date(winterSale.activatedAt))
+  )
+    document.pricing.winterSale = winterSale;
+  else delete document.pricing.winterSale;
   assertQuoteV2CatalogPolicy(document, { requireConfirmedZone: false });
   const totals = safeDraftTotals(document);
   const [updated] = await tx
@@ -755,6 +767,7 @@ export async function finalizeQuoteV2Draft(
       quoteNumber: quotes.quoteNumber,
       engineVersion: quotes.engineVersion,
       aggregateState: quotes.aggregateState,
+      createdAt: quotes.createdAt,
       aggregateRevision: quotes.aggregateRevision,
       currentVersionId: quotes.currentVersionId,
     })
@@ -812,6 +825,23 @@ export async function finalizeQuoteV2Draft(
     );
   }
   let totals: QuoteTotals;
+  const currentSale = await activeWinterSale(tx, now);
+  const expectedSale =
+    currentSale &&
+    (currentSale.retroactivePolicy === "include_unaccepted_quotes" ||
+      !currentSale.activatedAt ||
+      quote.createdAt >= new Date(currentSale.activatedAt))
+      ? currentSale
+      : null;
+  if (
+    JSON.stringify(parsedDocument.data.pricing.winterSale ?? null) !==
+    JSON.stringify(expectedSale)
+  ) {
+    throw new TeamMutationFailure(
+      "conflict",
+      "The winter offer changed. Save and review this draft's current pricing before finalizing.",
+    );
+  }
   try {
     totals = calculateQuoteV2Totals(parsedDocument.data.pricing);
   } catch (error) {

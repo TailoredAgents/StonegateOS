@@ -1,6 +1,7 @@
 import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
 import { resolveOpenAiApiEndpoint } from "@myst-os/sdk";
+import { campaignReplyContext } from "@/lib/sms-campaigns";
 import { and, desc, eq, ne, sql } from "drizzle-orm";
 import {
   contacts,
@@ -1843,7 +1844,9 @@ export async function POST(
         })
       : null;
 
+  const campaignContext = await campaignReplyContext(threadContext.contactId);
   const systemPrompt = `
+ ${campaignContext}
  ${persona.systemPrompt}
  Output ONLY JSON with keys: body (string), subject (string). Use an empty string for subject when not needed.
  Write like a strong human salesperson or coordinator, not a workflow engine.

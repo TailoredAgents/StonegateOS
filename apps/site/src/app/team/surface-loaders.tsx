@@ -186,6 +186,10 @@ type TeamSurfaceLoader = (
 ) => Promise<ReactElement>;
 
 export const TEAM_SURFACE_LOADERS = {
+  campaigns: async () => {
+    const { CampaignsSection } = await import("./components/CampaignsSection");
+    return <CampaignsSection />;
+  },
   calendar: async (context) => {
     const { CalendarSection } = await import("./components/CalendarSection");
     return <CalendarSection searchParams={context.calendarSearchParams} />;
@@ -299,6 +303,7 @@ export const TEAM_SURFACE_LOADERS = {
 } satisfies Record<TeamSurfaceId, TeamSurfaceLoader>;
 
 export const TEAM_SURFACE_LOADING_TITLES = {
+  campaigns: "Loading customer campaigns",
   calendar: "Loading calendar",
   inbox: "Loading inbox",
   contacts: "Loading contacts",

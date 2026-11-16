@@ -134,6 +134,7 @@ export async function filterScheduleReadCandidates<
   capacityUnits?: number;
   timezone: string;
   now?: Date;
+  db?: TeamMutationTransaction;
   excludeHoldInstantQuoteId?: string | null;
   excludeHoldQuoteVersionId?: string | null;
 }): Promise<T[]> {
@@ -154,7 +155,7 @@ export async function filterScheduleReadCandidates<
     throw new Error("schedule_candidate_read_range");
   const now = input.now ?? new Date(),
     poolKey = input.capacityPoolKey ?? "field_service";
-  return getDb().transaction(async (tx) => {
+  const readSnapshot = async (tx: TeamMutationTransaction) => {
     const [jobRows, holds, blocks, pools, overrides] = await Promise.all([
       tx
         .select({
@@ -240,7 +241,8 @@ export async function filterScheduleReadCandidates<
       ),
     );
     return input.candidates.filter((_, index) => !decisions[index]!.conflict);
-  });
+  };
+  return input.db ? readSnapshot(input.db) : getDb().transaction(readSnapshot);
 }
 
 export function scheduleIntervalsOverlap(

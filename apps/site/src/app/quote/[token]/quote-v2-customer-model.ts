@@ -1,3 +1,4 @@
+import { winterSalePrice, type WinterSaleSnapshot } from "@myst-os/sdk";
 export type QuoteV2DocumentType = "fixed_quote" | "estimate" | "range";
 export type QuoteV2Audience = "residential" | "commercial";
 export type QuoteV2SchedulingMode =
@@ -94,6 +95,7 @@ export interface QuoteV2DocumentSnapshot {
   exclusions: string[];
   assumptions: string[];
   pricing: {
+    winterSale?: WinterSaleSnapshot;
     documentType: QuoteV2DocumentType;
     currency: "USD";
     lineItems: QuoteV2LineItem[];
@@ -586,10 +588,32 @@ export function calculateQuoteV2LivePricing(
             : adjustment.amountMaxCents),
         0,
       );
-  const discountMinCents = sumKind("discount", "min");
-  const discountMaxCents = sumKind("discount", "max");
+  let discountMinCents = sumKind("discount", "min");
+  let discountMaxCents = sumKind("discount", "max");
   const feeMinCents = sumKind("fee", "min") + sumKind("travel", "min");
   const feeMaxCents = sumKind("fee", "max") + sumKind("travel", "max");
+  if (pricing.winterSale) {
+    for (let i = adjustments.length - 1; i >= 0; i--)
+      if (adjustments[i]?.kind === "discount") adjustments.splice(i, 1);
+    discountMinCents = winterSalePrice(
+      subtotalMinCents + feeMinCents,
+    ).discountCents;
+    discountMaxCents = winterSalePrice(
+      subtotalMaxCents + feeMaxCents,
+    ).discountCents;
+    adjustments.push({
+      id: "winter-sale",
+      kind: "discount",
+      label: "Winter sale — 40% off all services and fees",
+      calculation: "percentage",
+      basis: "subtotal",
+      eligibleLineItemIds: [],
+      basisPoints: 4000,
+      displayOrder: 10000,
+      amountMinCents: discountMinCents,
+      amountMaxCents: discountMaxCents,
+    });
+  }
   const totalMinCents = subtotalMinCents - discountMinCents + feeMinCents;
   const totalMaxCents = subtotalMaxCents - discountMaxCents + feeMaxCents;
   const deposit = pricing.deposit;

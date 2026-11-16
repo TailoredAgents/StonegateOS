@@ -6,6 +6,15 @@ export type { TeamSurfaceDefinition, TeamSurfaceGroup } from "@myst-os/sdk";
 
 export const TEAM_SURFACES = [
   {
+    id: "campaigns",
+    canonicalPath: "/team/marketing/campaigns",
+    legacyTabs: ["campaigns"],
+    group: "marketing",
+    label: "Campaigns",
+    requiredPermissions: ["marketing.write"],
+    subviews: ["winter-sale"],
+  },
+  {
     id: "calendar",
     canonicalPath: "/team/calendar",
     legacyTabs: ["calendar", "myday", "estimates"],

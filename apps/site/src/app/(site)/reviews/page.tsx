@@ -1,32 +1,54 @@
-import { notFound } from "next/navigation";
-import { Card, Section } from "@myst-os/ui";
-import { MdxContent } from "@/components/MdxContent";
-import { getPageBySlug } from "@/lib/content";
+import { Section } from "@myst-os/ui";
+import { ArrowUpRight } from "lucide-react";
+import { PublicPageIntro } from "@/components/public-site/PublicPageIntro";
+import { testimonials } from "@/components/public-site/content";
 import { createPageMetadata } from "@/lib/metadata";
-
 export const metadata = createPageMetadata("reviews");
-
-export default function Page() {
-  const page = getPageBySlug("reviews");
-  if (!page) {
-    notFound();
-  }
-
+export default function ReviewsPage() {
+  const reviewsUrl =
+    process.env["NEXT_PUBLIC_GOOGLE_BUSINESS_PROFILE_URL"]?.trim() ||
+    "https://www.google.com/maps/place/Stonegate+Junk+Removal/@34.1041655,-84.462036,10z/data=!4m8!3m7!1s0x2077851b6c5fd83:0xddcf0b747e40a4ee!8m2!3d34.1041654!4d-84.462036!9m1!1b1!16s%2Fg%2F11yvx_5c88";
   return (
-    <Section>
-      <div className="mx-auto max-w-4xl space-y-6">
-        <header className="space-y-3">
-          <p className="text-label uppercase tracking-[0.28em] text-neutral-500">Stonegate Junk Removal</p>
-          <h1 className="font-display text-display text-primary-800">{page.title}</h1>
-          {page.description ? (
-            <p className="text-body text-neutral-600">{page.description}</p>
-          ) : null}
-        </header>
-        <Card tone="outline">
-          <MdxContent code={page.body.code} />
-        </Card>
+    <Section className="public-page">
+      <div className="public-page-stack space-y-8">
+        <PublicPageIntro
+          eyebrow="From the people we’ve helped"
+          title="Good work leaves a good impression."
+          description="Customer experiences from local pickups. The same care, communication, and follow-through we aim to bring to your home."
+        />
+        <div className="public-review-grid">
+          {testimonials.map((review) => (
+            <figure className="public-review" key={review.name}>
+              <div className="public-stars" aria-label="5 stars">
+                ★★★★★
+              </div>
+              <blockquote>“{review.quote}”</blockquote>
+              <figcaption>
+                {review.name}
+                <span>{review.location}</span>
+              </figcaption>
+            </figure>
+          ))}
+        </div>
+        <div className="public-panel public-heading-row">
+          <div>
+            <h2 className="text-xl font-semibold">
+              More stories, straight from our customers.
+            </h2>
+            <p className="mt-2 text-sm text-neutral-600">
+              Read the reviews or share your own experience with the crew.
+            </p>
+          </div>
+          <a
+            className="public-text-link"
+            href={reviewsUrl}
+            target="_blank"
+            rel="noreferrer"
+          >
+            Visit Google reviews <ArrowUpRight size={18} aria-hidden="true" />
+          </a>
+        </div>
       </div>
     </Section>
   );
 }
-

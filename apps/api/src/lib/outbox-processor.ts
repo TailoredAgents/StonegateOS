@@ -1,4 +1,5 @@
 import { queuePartnerCommittedStatusNotification } from "./partner-job-lifecycle";
+import { hasCampaignConversation } from "./sms-campaign-dispatch";
 import {
   partnerAppointmentBindingSql,
   partnerVisitServiceLabelSql,
@@ -7409,6 +7410,8 @@ async function handleOutboxEvent(
         });
       }
 
+      if (await hasCampaignConversation({ messageId }))
+        return { status: "processed" };
       await handleInboundAutoReply(messageId);
       const autopilotOutcome = await handleInboundSalesAutopilot(messageId);
       if (autopilotOutcome.status === "retry") {
@@ -7600,6 +7603,29 @@ async function handleOutboxEvent(
         metadata?.["autoFirstTouch"] === true ||
         metadata?.["salesAutopilot"] === true;
       const allowDncOverride = metadata?.["allowDncOverride"] === true;
+      const salesAutomation =
+        metadata?.["autoReply"] === true ||
+        metadata?.["followup"] === true ||
+        metadata?.["salesAutopilot"] === true ||
+        metadata?.["autoFirstTouch"] === true;
+      if (
+        !metadata?.["smsCampaignRecipientId"] &&
+        salesAutomation &&
+        message.contactId &&
+        (await hasCampaignConversation({ contactId: message.contactId }))
+      ) {
+        await db
+          .update(conversationMessages)
+          .set({
+            deliveryStatus: "failed",
+            metadata: {
+              ...metadata,
+              suppressionReason: "campaign_staff_reply_required",
+            },
+          })
+          .where(eq(conversationMessages.id, message.id));
+        return { status: "skipped", error: "campaign_staff_reply_required" };
+      }
       const bypassQuietHours =
         metadata?.["autoReply"] === true ||
         metadata?.["confirmationLoop"] === true ||

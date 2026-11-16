@@ -81,46 +81,74 @@ export function CookieConsentBanner() {
       onKeyDown={(event) => {
         if (event.key === "Escape") close();
       }}
-      className="fixed inset-x-3 bottom-[calc(env(safe-area-inset-bottom,0px)+5.75rem)] z-[70] max-h-[65dvh] overflow-y-auto overscroll-contain rounded-2xl border border-neutral-300 bg-white p-4 text-neutral-900 shadow-xl sm:p-5 md:inset-x-auto md:bottom-6 md:left-6 md:w-[min(40rem,calc(100vw-3rem))] md:max-h-[80dvh]"
+      className="fixed inset-x-3 bottom-[calc(env(safe-area-inset-bottom,0px)+5.25rem)] z-[70] max-h-[65dvh] overflow-y-auto overscroll-contain rounded-2xl border border-neutral-300 bg-white p-3 text-neutral-900 shadow-xl sm:p-4 md:inset-x-auto md:bottom-6 md:left-6 md:w-[min(32rem,calc(100vw-3rem))] md:max-h-[80dvh]"
     >
       <div className="flex items-start justify-between gap-4">
         <h2
           ref={headingRef}
           id="cookie-preferences-heading"
           tabIndex={-1}
-          className="pt-2 text-lg font-semibold text-primary-900 focus:outline-none"
+          className={
+            customizing
+              ? "pt-2 text-lg font-semibold text-primary-900 focus:outline-none"
+              : "sr-only"
+          }
         >
           {customizing ? "Cookie settings" : "Your cookie choices"}
         </h2>
+        {!customizing && (
+          <p className="text-xs leading-relaxed text-neutral-700 sm:text-sm">
+            <strong className="font-semibold text-primary-900">Cookies.</strong>{" "}
+            Optional analytics and advertising cookies stay off until you
+            choose.{" "}
+            <Link
+              href="/privacy#cookies"
+              prefetch={false}
+              className="rounded-sm underline underline-offset-2 focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary-700"
+            >
+              Details
+            </Link>
+          </p>
+        )}
         <button
           type="button"
           aria-label="Close cookie notice"
           onClick={close}
-          className="min-h-11 rounded-md px-2 text-sm text-neutral-700 underline underline-offset-4 hover:text-primary-700 focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary-700"
+          className="flex h-11 w-11 shrink-0 items-center justify-center rounded-md text-neutral-700 hover:bg-neutral-100 focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary-700"
         >
-          Close
+          <svg
+            width="18"
+            height="18"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="1.5"
+            aria-hidden="true"
+          >
+            <path d="m6 6 12 12M18 6 6 18" />
+          </svg>
         </button>
       </div>
-      <p className="mt-1 text-sm leading-relaxed text-neutral-700">
-        {customizing
-          ? "Choose which optional cookies and browser storage to allow. You can change your choice anytime. "
-          : "We use necessary cookies to run this site. Optional cookies and browser storage help Stonegate, Google, Meta, and OpenAI understand visits and measure or personalize ads. They stay off until you choose. Change your choice anytime in Cookie settings. "}
-        <Link
-          href="/privacy#cookies"
-          prefetch={false}
-          className="rounded-sm font-medium text-primary-800 underline underline-offset-2 focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary-700"
-        >
-          Cookie policy
-        </Link>
-        .
-      </p>
+      {customizing && (
+        <p className="mt-1 text-sm leading-relaxed text-neutral-700">
+          Choose which optional cookies and browser storage to allow. You can
+          change your choice anytime.{" "}
+          <Link
+            href="/privacy#cookies"
+            prefetch={false}
+            className="rounded-sm font-medium text-primary-800 underline underline-offset-2 focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary-700"
+          >
+            Cookie policy
+          </Link>
+          .
+        </p>
+      )}
       {privacySignal ? (
         <p
           id="cookie-privacy-signal"
           className="mt-3 rounded-lg bg-neutral-100 p-3 text-sm text-neutral-800"
         >
-          Your browser sends a Global Privacy Control or Do Not Track signal.
-          Analytics and advertising are off while that signal is enabled.
+          Your browser privacy signal keeps optional cookies off.
         </p>
       ) : null}
 
@@ -196,28 +224,30 @@ export function CookieConsentBanner() {
           </div>
         </>
       ) : (
-        <div className="mt-4 grid gap-2 sm:grid-cols-3">
+        <div className="mt-2 grid grid-cols-3 gap-2">
           <button
             type="button"
             disabled={privacySignal}
+            aria-label="Accept optional cookies"
             onClick={() => save(true, true)}
             className={choiceButtonClass}
           >
-            Accept optional cookies
+            Accept
           </button>
           <button
             type="button"
+            aria-label="Reject optional cookies"
             onClick={() => save(false, false)}
             className={choiceButtonClass}
           >
-            Reject optional cookies
+            Reject
           </button>
           <button
             type="button"
             onClick={() => setCustomizing(true)}
             className={choiceButtonClass}
           >
-            Customize
+            Settings
           </button>
         </div>
       )}

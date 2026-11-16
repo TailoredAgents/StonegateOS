@@ -165,16 +165,16 @@ export function Header() {
   return (
     <header
       ref={headerRef}
-      className="sticky top-0 z-[60] border-b border-neutral-300/50 bg-white/95"
+      className="public-header sticky top-0 z-[60] border-b border-neutral-300/50 bg-white/95"
     >
       <div
         inert={isMenuOpen ? true : undefined}
-        className="mx-auto flex max-w-6xl items-center justify-between px-6 py-3 md:px-10"
+        className="public-header-inner mx-auto flex max-w-6xl items-center justify-between px-6 py-3 md:px-10"
       >
         <Link
           href="/"
           prefetch={isBookingLanding ? false : null}
-          className="flex items-center gap-2 text-primary-800"
+          className="public-brand flex items-center gap-2 text-primary-800"
         >
           <Image
             src={logoPath}
@@ -185,7 +185,7 @@ export function Header() {
             className="h-12 w-12 object-contain"
             priority
           />
-          <span className="sr-only">{companyName}</span>
+          <span className="public-brand-name">{companyName}</span>
         </Link>
         {!isBookingLanding ? (
           <nav

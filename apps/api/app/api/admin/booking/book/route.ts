@@ -1,4 +1,6 @@
 import type { NextRequest } from "next/server";
+import { WinterSaleSnapshotSchema } from "@myst-os/sdk";
+import { activeWinterSale, winterServiceDateAllowed } from "@/lib/winter-sale";
 import { NextResponse } from "next/server";
 import { DateTime } from "luxon";
 import { nanoid } from "nanoid";
@@ -393,6 +395,12 @@ export async function POST(request: NextRequest): Promise<Response> {
 
   try {
     const result = await db.transaction(async (tx) => {
+      if (!instantQuoteId && (await activeWinterSale(tx)))
+        throw new InstantQuoteHandoffFailure(
+          "instant_quote_relationship_missing",
+          "Book from a winter sale quote or an instant quote so the 40% discount is reviewed and saved with the job.",
+          409,
+        );
       await acquireScheduleConflictLock(tx);
       let resolvedPropertyId = propertyId;
       let resolvedLeadId: string | null = null;
@@ -401,13 +409,28 @@ export async function POST(request: NextRequest): Promise<Response> {
       if (instantQuoteId) {
         // Lock the quote before reading the complete relationship snapshot so
         // contact/property reassignment cannot race this booking.
-        await tx
-          .select({ id: instantQuotes.id })
+        const [instantQuote] = await tx
+          .select({ id: instantQuotes.id, aiResult: instantQuotes.aiResult })
           .from(instantQuotes)
           .where(eq(instantQuotes.id, instantQuoteId))
           .for("update")
           .limit(1);
         const handoff = await loadInstantQuoteTeamHandoff(tx, instantQuoteId);
+        const sale = WinterSaleSnapshotSchema.safeParse(
+          (instantQuote?.aiResult as Record<string, unknown> | null)?.[
+            "winterSale"
+          ],
+        );
+        if (
+          sale.success &&
+          (!winterServiceDateAllowed(sale.data, startAt) ||
+            new Date(sale.data.expiresAt) <= new Date())
+        )
+          throw new InstantQuoteHandoffFailure(
+            "instant_quote_relationship_missing",
+            "The winter sale dates no longer cover this booking. Review the quote and service date.",
+            409,
+          );
         if (
           handoff.contactId !== contactId ||
           !propertyId ||

@@ -1,4 +1,4 @@
-import { Badge, Section } from "@myst-os/ui";
+import { Section } from "@myst-os/ui";
 import { EstimateRequestForm } from "@/components/EstimateRequestForm";
 import {
   ADDONS,
@@ -132,10 +132,10 @@ export default async function EstimatePage({
   })();
 
   return (
-    <Section>
-      <div className="mx-auto max-w-4xl space-y-6">
-        <header className="space-y-3">
-          <Badge tone="highlight">Schedule</Badge>
+    <Section className="public-page">
+      <div className="public-booking mx-auto grid w-full max-w-6xl gap-10 lg:grid-cols-[minmax(0,0.8fr)_minmax(0,1.2fr)] lg:items-start">
+        <header className="public-page-intro space-y-3">
+          <p className="public-eyebrow">Let’s take a closer look</p>
           <h1 className="font-display text-display text-primary-800">
             Request an on-site estimate
           </h1>

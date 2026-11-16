@@ -1,4 +1,5 @@
 import type { NextRequest } from "next/server";
+import { WinterSaleSnapshotSchema } from "@myst-os/sdk";
 import { NextResponse } from "next/server";
 import { z } from "zod";
 import { DateTime } from "luxon";
@@ -475,6 +476,15 @@ export async function POST(request: NextRequest): Promise<Response> {
 
       const dayKey = baseDay.toISODate();
       if (!dayKey) continue;
+      const sale = WinterSaleSnapshotSchema.safeParse(
+        (quote.aiResult as Record<string, unknown> | null)?.["winterSale"],
+      );
+      if (
+        sale.success &&
+        (dayKey > sale.data.serviceThrough ||
+          new Date(sale.data.expiresAt) <= new Date())
+      )
+        continue;
       const daySlots: Suggestion[] = [];
       if (!windows.length) {
         days.push({ date: dayKey, slots: daySlots });

@@ -273,7 +273,16 @@ export async function prepareQuoteVersionIssue(
     validityDays: document.terms.validityDays,
     selectedOptionIds: parsed.selectedOptionIds,
   });
-  const expiresAt = addUtcDays(issuedAt, document.terms.validityDays);
+  const ordinaryExpiry = addUtcDays(issuedAt, document.terms.validityDays);
+  const saleExpiry = document.pricing.winterSale
+    ? new Date(document.pricing.winterSale.expiresAt)
+    : null;
+  if (saleExpiry && saleExpiry <= issuedAt)
+    throw new TypeError(
+      "The winter sale expired. Revise and review this draft before issuing it.",
+    );
+  const expiresAt =
+    saleExpiry && saleExpiry < ordinaryExpiry ? saleExpiry : ordinaryExpiry;
   const model = buildQuoteRenderModel({
     quoteId: parsed.quoteId,
     versionId: parsed.versionId,

@@ -1268,6 +1268,13 @@
       "when": 1796688000000,
       "tag": "0183_outbound_import_history_identity",
       "breakpoints": true
+    },
+    {
+      "idx": 181,
+      "version": "7",
+      "when": 1796774400000,
+      "tag": "0184_sms_campaigns",
+      "breakpoints": true
     }
   ]
 }

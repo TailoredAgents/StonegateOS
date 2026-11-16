@@ -1,3 +1,4 @@
+import { activeWinterSale, winterSaleEstimate } from "@/lib/winter-sale";
 import { NextResponse } from "next/server";
 import type { NextRequest } from "next/server";
 import { z } from "zod";
@@ -659,9 +660,8 @@ export async function POST(request: NextRequest): Promise<Response> {
 
     const base = applyBounds(aiResult, bounds.minLow, bounds.maxHigh);
 
-    const storedAiResult = {
-      ...base,
-    };
+    const promotion = await activeWinterSale();
+    const storedAiResult = winterSaleEstimate(base, promotion);
 
     const db = getDb();
     const primaryType =
@@ -856,12 +856,15 @@ export async function POST(request: NextRequest): Promise<Response> {
       {
         ok: true,
         quoteId,
-        quote: {
-          ...base,
-          discountPercent: discountPercent > 0 ? discountPercent : undefined,
-          priceLowDiscounted: priceLowDiscounted ?? undefined,
-          priceHighDiscounted: priceHighDiscounted ?? undefined,
-        },
+        quote: promotion
+          ? winterSaleEstimate(base, promotion)
+          : {
+              ...base,
+              discountPercent:
+                discountPercent > 0 ? discountPercent : undefined,
+              priceLowDiscounted: priceLowDiscounted ?? undefined,
+              priceHighDiscounted: priceHighDiscounted ?? undefined,
+            },
       },
       requestOrigin,
     );

@@ -1,3 +1,4 @@
+import { activeWinterSale, winterSaleEstimate } from "@/lib/winter-sale";
 import { z } from "zod";
 import { NextResponse } from "next/server";
 import type { NextRequest } from "next/server";
@@ -497,12 +498,15 @@ export async function POST(request: NextRequest): Promise<Response> {
       discountAmount > 0
         ? Math.max(0, quote.priceHigh - discountAmount)
         : undefined;
-    const quoteWithDisplayDiscount = {
-      ...quote,
-      discountAmount: discountAmount > 0 ? discountAmount : undefined,
-      priceLowDiscounted,
-      priceHighDiscounted,
-    };
+    const promotion = await activeWinterSale();
+    const quoteWithDisplayDiscount = promotion
+      ? winterSaleEstimate(quote, promotion)
+      : {
+          ...quote,
+          discountAmount: discountAmount > 0 ? discountAmount : undefined,
+          priceLowDiscounted,
+          priceHighDiscounted,
+        };
 
     const db = getDb();
     const storedAiResult = {
