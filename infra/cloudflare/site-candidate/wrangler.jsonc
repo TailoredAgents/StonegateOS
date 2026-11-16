@@ -1,0 +1,43 @@
+{
+  "name": "stonegate-site-candidate",
+  "main": "worker.ts",
+  "account_id": "78ed83c6e3947c93763acef3a48a5561",
+  "compatibility_date": "2026-11-15",
+  "compatibility_flags": [
+    "nodejs_compat"
+  ],
+  "workers_dev": true,
+  "preview_urls": false,
+  "observability": {
+    "enabled": true,
+    "head_sampling_rate": 1
+  },
+  "containers": [
+    {
+      "class_name": "SiteCandidate",
+      "scheduling_policy": "durable_object",
+      "images": {
+        "base": {
+          "image": "registry.cloudflare.com/78ed83c6e3947c93763acef3a48a5561/stonegate-migration-site-private@sha256:294a427e1a4daa248110f8415f4b555644a68ffd368a9faf4f8e5dfc7029485b"
+        }
+      }
+    }
+  ],
+  "durable_objects": {
+    "bindings": [
+      {
+        "name": "SITE",
+        "class_name": "SiteCandidate"
+      }
+    ],
+    "code_update_strategy": {
+      "mode": "immediate"
+    }
+  },
+  "exports": {
+    "SiteCandidate": {
+      "type": "durable-object",
+      "storage": "sqlite"
+    }
+  }
+}

@@ -18,7 +18,7 @@
       "scheduling_policy": "durable_object",
       "images": {
         "base": {
-          "image": "registry.cloudflare.com/78ed83c6e3947c93763acef3a48a5561/stonegate-migration-api@sha256:ac6edd60e7b3ccd000625981aa4f4e9edf3b99879a1388587a32874ac0fc5869"
+          "image": "registry.cloudflare.com/78ed83c6e3947c93763acef3a48a5561/stonegate-migration-api@sha256:ecb8e167bf43787288cceba6d403e4919f0ce27fe7415e622de07f0e359fcd07"
         }
       }
     }
