@@ -1,6 +1,11 @@
 import Link from "next/link";
+import type { Route } from "next";
 import { redirect } from "next/navigation";
-import { requireCurrentTeamPrincipal } from "@/lib/team-principal";
+import { teamLoginHref } from "@myst-os/sdk";
+import {
+  resolveTeamPrincipalResultFromCookies,
+  requireVerifiedTeamPrincipal,
+} from "@/lib/team-principal";
 import { callAdminApiAs } from "../../lib/api";
 import { IntegrationControl } from "./Controls";
 export const dynamic = "force-dynamic";
@@ -27,7 +32,10 @@ type Operation = {
   result: unknown;
 };
 export default async function IntegrationPage() {
-  const principal = await requireCurrentTeamPrincipal();
+  const verification = await resolveTeamPrincipalResultFromCookies();
+  if (verification.kind === "invalid")
+    redirect(teamLoginHref("/team/tools/integrations") as Route);
+  const principal = requireVerifiedTeamPrincipal(verification);
   if (principal.roleSlug !== "owner") redirect("/team");
   const response = await callAdminApiAs(
     principal,
