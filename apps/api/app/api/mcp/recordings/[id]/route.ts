@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { sql } from "drizzle-orm";
 import { getDb } from "@/db";
+import { downloadTwilioProviderRecording } from "@/lib/twilio-provider";
 import {
   authenticateIntegration,
   accessEvent,
@@ -28,32 +29,21 @@ export async function GET(
     sql`select recording_sid from call_records where id=${id}::uuid and deleted_at is null`,
   );
   const recording = row?.["recording_sid"];
-  const account = process.env["TWILIO_ACCOUNT_SID"],
-    token = process.env["TWILIO_AUTH_TOKEN"];
   if (typeof recording !== "string" || !/^RE[a-fA-F0-9]{32}$/.test(recording))
     return Response.json({ error: "No retained recording" }, { status: 404 });
-  if (!account || !/^AC[a-fA-F0-9]{32}$/.test(account) || !token)
-    return new Response(null, { status: 503 });
   await accessEvent(integration, "recording_download", "read");
-  const response = await fetch(
-    `https://api.twilio.com/2010-04-01/Accounts/${account}/Recordings/${recording}.mp3`,
-    {
-      headers: {
-        Authorization: `Basic ${Buffer.from(`${account}:${token}`).toString("base64")}`,
-      },
-      signal: AbortSignal.timeout(30_000),
-    },
-  );
+  const response = await downloadTwilioProviderRecording(recording);
   if (!response.ok)
     return Response.json(
       { error: "Recording unavailable at provider" },
       { status: response.status === 404 ? 404 : 502 },
     );
-  return new Response(response.body, {
+  return new Response(new Uint8Array(response.buffer), {
     headers: {
-      "Content-Type": "audio/mpeg",
+      "Content-Type": response.contentType,
       "Cache-Control": "private, no-store",
-      "Content-Disposition": `attachment; filename="call-${id}.mp3"`,
+      "X-Content-Type-Options": "nosniff",
+      "Content-Disposition": `attachment; filename="${id}-${response.filename}"`,
     },
   });
 }

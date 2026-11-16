@@ -39,7 +39,7 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: pnpm db:migrate:release-latest
       - name: Check boundaries and existing authorization
-        run: node apps/api/scripts/run-jest-partitions.cjs --runInBand --testPathPattern='agent-integration|team-mutation.test|team-permission'
+        run: node apps/api/scripts/run-jest-partitions.cjs --runInBand --testPathPattern='agent-integration|team-mutation.test|team-permission|team-route-security-manifest|twilio-provider-source-contract'
       - name: Exercise real MCP client, writes, approval and revocation
         run: |
           set -euo pipefail

@@ -2,7 +2,7 @@ import { NextResponse, type NextRequest } from "next/server";
 import { sql } from "drizzle-orm";
 import { z } from "zod";
 import { getDb, auditLogs } from "@/db";
-import { resolvePermissionContext } from "@/lib/permissions";
+import { resolvePermissionContext, requirePermission } from "@/lib/permissions";
 import { isAllowedTeamMutationOrigin } from "@/lib/team-mutation";
 import { newIntegrationToken, tokenHash } from "@/lib/agent-integration-auth";
 import { AGENT_CATALOG } from "@/lib/agent-tool-catalog";
@@ -44,6 +44,8 @@ async function owner(request: NextRequest) {
     : null;
 }
 export async function GET(request: NextRequest) {
+  const denied = await requirePermission(request, "access.manage");
+  if (denied) return denied;
   const ownerId = await owner(request);
   if (!ownerId)
     return NextResponse.json(
@@ -66,6 +68,8 @@ export async function GET(request: NextRequest) {
   );
 }
 export async function POST(request: NextRequest) {
+  const denied = await requirePermission(request, "access.manage");
+  if (denied) return denied;
   const ownerId = await owner(request);
   if (!ownerId || !isAllowedTeamMutationOrigin(request))
     return NextResponse.json(

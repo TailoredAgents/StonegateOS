@@ -120,7 +120,7 @@ try {
       "x-actor-id": member!["id"],
     },
   });
-  assert.equal(forbidden.status, 403);
+  assert.equal(forbidden.status, 401);
   await client.connect(
     new StreamableHTTPClientTransport(new URL(`${base}/api/mcp`), {
       requestInit: {
