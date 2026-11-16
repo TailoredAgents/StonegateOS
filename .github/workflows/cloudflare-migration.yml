@@ -48,6 +48,7 @@ jobs:
         with:
           node-version: '24.21.0'
       - run: npm ci --ignore-scripts --prefix scripts/migration
+      - run: npm ci --ignore-scripts --prefix infra/cloudflare/webhook-journal
       - run: node --test scripts/migration/*.test.mjs
   container-build:
     needs: source-manifest

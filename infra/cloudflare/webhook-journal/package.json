@@ -1,0 +1,6 @@
+{
+  "name": "stonegate-webhook-journal-validation",
+  "private": true,
+  "type": "module",
+  "dependencies": {"twilio": "6.3.0"}
+}

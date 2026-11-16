@@ -1,0 +1,36 @@
+{
+  "name": "stonegate-webhook-journal-validation",
+  "main": "worker.ts",
+  "account_id": "78ed83c6e3947c93763acef3a48a5561",
+  "compatibility_date": "2026-11-15",
+  "compatibility_flags": [
+    "nodejs_compat"
+  ],
+  "workers_dev": true,
+  "preview_urls": false,
+  "observability": {
+    "enabled": false
+  },
+  "durable_objects": {
+    "bindings": [
+      {
+        "name": "JOURNAL",
+        "class_name": "WebhookJournal"
+      },
+      {
+        "name": "RECEIVER",
+        "class_name": "ReplayFixture"
+      }
+    ]
+  },
+  "exports": {
+    "WebhookJournal": {
+      "type": "durable-object",
+      "storage": "sqlite"
+    },
+    "ReplayFixture": {
+      "type": "durable-object",
+      "storage": "sqlite"
+    }
+  }
+}
