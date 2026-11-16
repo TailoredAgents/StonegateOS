@@ -7,8 +7,11 @@ const {existsSync,mkdtempSync,writeFileSync,readFileSync,rmSync}=require('node:f
 const {rootCertificates}=require('node:tls');
 const {setTimeout:wait}=require('node:timers/promises');
 const postgres=createRequire('/app/apps/api/package.json')('postgres');
-const config=JSON.parse(process.env.MIGRATION_RESTORE_CONNECTION);
-if(!config.database.startsWith('stonegate_restore_') || config.user!=='stonegate_validation_ro')throw Error('Unexpected restore target');
+const isSource=process.env.MIGRATION_SOURCE_READINESS==='1';
+const config=JSON.parse(isSource?process.env.MIGRATION_SOURCE_CONNECTION:process.env.MIGRATION_RESTORE_CONNECTION);
+if(isSource){if(config.user!=='stonegate_source_probe_ro'||config.purpose!=='source-readiness-read-only'||Date.parse(config.expiresAt)<=Date.now())throw Error('Unexpected source readiness target');}
+else if(!config.database.startsWith('stonegate_restore_') || config.user!=='stonegate_validation_ro')throw Error('Unexpected restore target');
+const hostname=isSource?'migration-live-db.stonegatejunkremoval.com':'migration-db.stonegatejunkremoval.com';
 // The slim Node image has Node's CA roots but no system PEM bundle for Go.
 // Export the exact bundled roots for cloudflared; TLS verification stays enabled.
 const caDirectory=mkdtempSync('/tmp/stonegate-validation-ca-');
@@ -16,7 +19,7 @@ const managedCa='/etc/cloudflare/certs/cloudflare-containers-ca.crt';
 const caFile=caDirectory+'/roots.pem';
 writeFileSync(caFile,rootCertificates.join('\n')+'\n'+(existsSync(managedCa)?readFileSync(managedCa,'utf8'):''),{mode:0o600});
 let tunnelLog='';let tunnelError=false;
-function startTunnel(){const child=spawn('/usr/local/bin/cloudflared',['access','tcp','--hostname','migration-db.stonegatejunkremoval.com','--url','127.0.0.1:6543'],{
+function startTunnel(){const child=spawn('/usr/local/bin/cloudflared',['access','tcp','--hostname',hostname,'--url','127.0.0.1:6543'],{
  stdio:['ignore','ignore','pipe'],env:{SSL_CERT_FILE:caFile,TUNNEL_SERVICE_TOKEN_ID:config.client_id,TUNNEL_SERVICE_TOKEN_SECRET:config.client_secret}
 });
 child.stderr.on('data',chunk=>{if(tunnelLog.length<8192)tunnelLog+=chunk.toString('utf8').slice(0,8192-tunnelLog.length);});
@@ -46,7 +49,7 @@ const options={host:'127.0.0.1',port:6543,user:config.user,password:config.passw
     "(select count(*)::int from public.appointments) as appointments,"+
     "(select count(*)::int from public.outbox_events) as outbox_events");
    const pass=state.database===config.database && state.role===config.user && state.read_only==='on' && state.tls===true && state.can_write_contacts===false &&
-    ['contacts','appointments','outbox_events'].every(key=>state[key]===config.expected[key]);
+    ['contacts','appointments','outbox_events'].every(key=>isSource?Number.isSafeInteger(state[key])&&state[key]>=0:state[key]===config.expected[key]);
    checks.push({name:'read-only-private-query',pass,ms:Math.round(performance.now()-start)});
   }
   // Interrupt the authenticated local relay while a pool connection is open.
