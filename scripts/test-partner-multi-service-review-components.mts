@@ -10,7 +10,7 @@ const repo = fileURLToPath(new URL("../", import.meta.url));
 const require = createRequire(`${repo}/package.json`),
   siteRequire = createRequire(`${repo}/apps/site/package.json`);
 const { PARTNER_SERVICE_DEFINITIONS } =
-  require("../packages/pricing/src/partner-services") as typeof import("../packages/pricing/src/partner-services");
+  require("./packages/pricing/src/partner-services") as typeof import("../packages/pricing/src/partner-services");
 const { build } = createRequire(require.resolve("tsx"))("esbuild");
 const siteTheme = (
   "default" in tailwindConfig ? tailwindConfig.default : tailwindConfig

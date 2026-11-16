@@ -1,0 +1,46 @@
+{
+  "name": "stonegate-http-gateway-validation",
+  "main": "worker.ts",
+  "account_id": "78ed83c6e3947c93763acef3a48a5561",
+  "compatibility_date": "2026-11-15",
+  "compatibility_flags": [
+    "nodejs_compat"
+  ],
+  "workers_dev": true,
+  "preview_urls": false,
+  "observability": {
+    "enabled": false
+  },
+  "containers": [
+    {
+      "class_name": "HttpGateway",
+      "scheduling_policy": "durable_object",
+      "images": {
+        "base": {
+          "image": "registry.cloudflare.com/78ed83c6e3947c93763acef3a48a5561/stonegate-migration-api@sha256:ecb8e167bf43787288cceba6d403e4919f0ce27fe7415e622de07f0e359fcd07"
+        }
+      }
+    }
+  ],
+  "durable_objects": {
+    "bindings": [
+      {
+        "name": "HTTP",
+        "class_name": "HttpGateway"
+      }
+    ],
+    "code_update_strategy": {
+      "mode": "immediate"
+    }
+  },
+  "exports": {
+    "HttpGateway": {
+      "type": "durable-object",
+      "storage": "sqlite"
+    }
+  },
+  "vars": {
+    "SERVICE_KIND": "fixture",
+    "GATEWAY_HOST": "stonegate-http-gateway-validation.jeffrey-78e.workers.dev"
+  }
+}

@@ -2,6 +2,10 @@
 import { readFile, writeFile } from "node:fs/promises";
 import { createHash } from "node:crypto";
 import path from "node:path";
+import { createRequire } from "node:module";
+const { getTwilioApiBaseUrl } = createRequire(import.meta.url)(
+  "../../packages/sdk/src/twilio-provider",
+) as typeof import("../../packages/sdk/src/twilio-provider");
 const directory = process.argv[2];
 if (!directory) throw Error("Private evidence directory required");
 const settings = JSON.parse(
@@ -13,6 +17,7 @@ if (
   !settings.TWILIO_FROM
 )
   throw Error("Missing deployed Twilio configuration");
+const apiBase = getTwilioApiBaseUrl({ ...settings, NODE_ENV: "production" });
 const headers = {
   authorization:
     "Basic " +
@@ -21,7 +26,11 @@ const headers = {
     ).toString("base64"),
 };
 async function get(url) {
-  const r = await fetch(url, { headers, signal: AbortSignal.timeout(15000) });
+  const r = await fetch(url, {
+    headers,
+    redirect: "error",
+    signal: AbortSignal.timeout(15000),
+  });
   if (!r.ok) throw Error("Provider inventory read failed: " + r.status);
   return r.json();
 }
@@ -32,8 +41,8 @@ let next =
 let count = 0;
 const selected = [];
 while (next) {
-  const url = new URL(next, "https://api.twilio.com");
-  if (url.origin !== "https://api.twilio.com")
+  const url = new URL(next, apiBase);
+  if (url.origin !== apiBase.origin)
     throw Error("Unexpected provider pagination origin");
   const page = await get(url);
   count += page.incoming_phone_numbers.length;

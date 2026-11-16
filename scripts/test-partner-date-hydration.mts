@@ -8,7 +8,7 @@ import { chromium, webkit, expect } from "@playwright/test";
 const repo = fileURLToPath(new URL("../", import.meta.url));
 const require = createRequire(`${repo}/package.json`);
 const { formatPartnerDate, formatPartnerDateTime } =
-  require("../apps/site/src/app/partners/lib/partner-date-time") as typeof import("../apps/site/src/app/partners/lib/partner-date-time");
+  require("./apps/site/src/app/partners/lib/partner-date-time") as typeof import("../apps/site/src/app/partners/lib/partner-date-time");
 const siteRequire = createRequire(`${repo}/apps/site/package.json`);
 const { build } = createRequire(require.resolve("tsx"))("esbuild");
 const React = siteRequire("react");
