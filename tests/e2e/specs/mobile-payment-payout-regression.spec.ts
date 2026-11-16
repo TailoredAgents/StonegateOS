@@ -4,6 +4,7 @@ import {
   createE2EMobileAppointment,
   getLatestE2ESeedSummary,
   getE2EAppointmentVersion,
+  ensureE2ECommissionPrincipals,
 } from "../support/db";
 
 function easternDayKey(value: Date): string {
@@ -72,9 +73,10 @@ test.describe("Mobile final-total and payout refresh regressions", () => {
     await expect(
       card.getByText("No payments recorded.", { exact: true }),
     ).toBeVisible();
-    await card.getByText("Change total", { exact: true }).click();
+    const payment = card.locator("[data-mobile-payment]");
+    await payment.getByText("Change total", { exact: true }).click();
 
-    const finalTotalInput = card.locator('input[placeholder="350.00"]');
+    const finalTotalInput = payment.locator('input[placeholder="350.00"]');
     await finalTotalInput.fill("500.00");
     await expect(
       card.getByRole("button", { name: "Save final job total" }),
@@ -130,6 +132,7 @@ test.describe("Mobile final-total and payout refresh regressions", () => {
     );
     test.setTimeout(120_000);
 
+    await ensureE2ECommissionPrincipals();
     const initialRefresh = await page.request.post(
       "/api/mobile/owner/payout-runs/refresh",
     );
