@@ -2622,9 +2622,9 @@ test.describe("Mobile appointment quoted work and payments", () => {
         "This workflow is covered by the mobile browser projects.",
       );
 
-      const { appointmentId, startAt } = await seededAppointment();
-      let currentSummary = { ...unpaidPaymentSummary };
-      await mockPayments(page, appointmentId, () => currentSummary);
+      const { appointmentId, startAt } = await seededAppointment({
+        finalTotalCents: 32_500,
+      });
 
       let manualPayload: Record<string, unknown> | null = null;
       let manualRequests = 0;
@@ -2636,18 +2636,7 @@ test.describe("Mobile appointment quoted work and payments", () => {
             string,
             unknown
           >;
-          currentSummary = {
-            ...unpaidPaymentSummary,
-            status: "paid",
-            paidTowardJobCents: 32500,
-            tipCents: 1250,
-            balanceCents: 0,
-          };
-          await route.fulfill({
-            status: 200,
-            contentType: "application/json",
-            body: JSON.stringify({ paymentSummary: currentSummary }),
-          });
+          await route.continue();
         },
       );
 
@@ -2707,7 +2696,7 @@ test.describe("Mobile appointment quoted work and payments", () => {
     });
   }
 
-  test("keeps an invalid Square return provisional and explains setup failures", async ({
+  test("requires owner review for an invalid Square return and explains setup failures", async ({
     page,
     isMobile,
   }) => {
@@ -2718,11 +2707,11 @@ test.describe("Mobile appointment quoted work and payments", () => {
 
     await page.goto("/mobile/payment-return?e2e=missing-signed-state");
     await expect(page).toHaveURL(
-      /\/mobile\?screen=myday&payment=pending_verification/u,
+      /\/mobile\?screen=myday&payment=needs_review&paymentError=invalid_square_callback/u,
     );
     await expect(
       page.getByText(
-        "Square returned. StonegateOS is verifying the payment; do not charge again yet.",
+        "Payment needs owner review before another charge is attempted.",
         { exact: true },
       ),
     ).toBeVisible();
@@ -2872,7 +2861,9 @@ test.describe("Mobile appointment quoted work and payments", () => {
       .locator("xpath=..")
       .locator("xpath=..");
     await expect(
-      uploadedPhotoCard.getByText("Staff photo", { exact: true }),
+      uploadedPhotoCard.getByText("Staff photo · Photo uploaded", {
+        exact: true,
+      }),
     ).toBeVisible();
     await expect(page.getByText("blue-chair.jpg", { exact: true })).toHaveCount(
       0,

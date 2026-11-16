@@ -535,6 +535,18 @@ export async function createE2EMobileAppointment(input: {
   });
 }
 
+export async function getE2EAppointmentVersion(
+  appointmentId: string,
+): Promise<string> {
+  const sql = getSql();
+  const rows = await sql<Array<{ updatedAt: Date | string }>>`
+    SELECT updated_at AS "updatedAt" FROM appointments
+    WHERE id = ${appointmentId} LIMIT 1
+  `;
+  if (!rows[0]) throw new Error("Isolated E2E appointment not found.");
+  return new Date(rows[0].updatedAt).toISOString();
+}
+
 export async function getE2EAppointmentCompletion(
   appointmentId: string,
 ): Promise<{

@@ -1,7 +1,9 @@
+import { randomUUID } from "node:crypto";
 import { test, expect } from "../test";
 import {
   createE2EMobileAppointment,
   getLatestE2ESeedSummary,
+  getE2EAppointmentVersion,
 } from "../support/db";
 
 function easternDayKey(value: Date): string {
@@ -55,9 +57,14 @@ test.describe("Mobile final-total and payout refresh regressions", () => {
     const { appointmentId, startAt } = await seededAppointment();
     await page.goto(`/mobile?screen=calendar&date=${easternDayKey(startAt)}`);
 
-    const card = page.locator(`[data-appointment-id="${appointmentId}"]`);
-    const cardToggle = card.getByRole("button", { name: /E2E Contact/u });
-    await expect(card).toBeVisible();
+    const article = page.locator(
+      `article[data-appointment-id="${appointmentId}"]`,
+    );
+    const card = page.locator(
+      `dialog[open][data-appointment-id="${appointmentId}"]`,
+    );
+    const cardToggle = article.getByRole("button", { name: /E2E Contact/u });
+    await expect(article).toBeVisible();
     await cardToggle.click();
 
     await card.getByText("Payment", { exact: true }).click();
@@ -65,7 +72,7 @@ test.describe("Mobile final-total and payout refresh regressions", () => {
     await expect(
       card.getByText("No payments recorded.", { exact: true }),
     ).toBeVisible();
-    await card.getByText("Edit final job total", { exact: true }).click();
+    await card.getByText("Change total", { exact: true }).click();
 
     const finalTotalInput = card.locator('input[placeholder="350.00"]');
     await finalTotalInput.fill("500.00");
@@ -76,6 +83,10 @@ test.describe("Mobile final-total and payout refresh regressions", () => {
     const externalUpdate = await page.request.put(
       `/api/mobile/appointments/${appointmentId}/final-total`,
       {
+        headers: {
+          "If-Match": await getE2EAppointmentVersion(appointmentId),
+          "Idempotency-Key": `e2e-final-total:${randomUUID()}`,
+        },
         data: { finalTotalCents: 47_500 },
       },
     );
@@ -84,19 +95,19 @@ test.describe("Mobile final-total and payout refresh regressions", () => {
       await externalUpdate.text().catch(() => "final-total update failed"),
     ).toBe(true);
 
-    await card.getByText("Quoted Work", { exact: true }).click();
-    await card.getByRole("button", { name: "Manage quoted work" }).click();
+    await card.getByText("Photos", { exact: true }).click();
+    await card.getByRole("button", { name: "More photo options" }).click();
     const scope = card.getByPlaceholder(
-      "Example: Remove the sectional, two mattresses, and boxed garage items shown below.",
+      "Describe the agreed work, access instructions, and any exclusions.",
     );
     await expect(scope).toBeVisible();
     await scope.fill(
       "Remove the sectional and every boxed garage item; scope reconfirmed.",
     );
-    await card.getByRole("button", { name: "Save scope" }).click();
+    await card.getByRole("button", { name: "Save work details" }).click();
     await expect(
       card.getByText(
-        "Quoted scope saved. Any waiting photos will upload now.",
+        "Work details saved. Any waiting photos will upload now.",
         { exact: true },
       ),
     ).toBeVisible();
@@ -166,8 +177,11 @@ test.describe("Mobile final-total and payout refresh regressions", () => {
     await refreshButton.click();
     await requestStarted;
 
-    await expect(refreshButton).toBeDisabled();
-    await expect(refreshButton).toHaveAttribute("aria-busy", "true");
+    const pendingButton = page.getByRole("button", {
+      name: /^Refreshing… \d+s$/u,
+    });
+    await expect(pendingButton).toBeDisabled();
+    await expect(pendingButton).toHaveAttribute("aria-busy", "true");
     await expect(
       page.getByText(
         "Recalculating completed jobs and rebuilding the report. Keep this screen open.",
@@ -175,11 +189,11 @@ test.describe("Mobile final-total and payout refresh regressions", () => {
       ),
     ).toBeVisible();
 
-    await refreshButton.evaluate((element) =>
+    await pendingButton.evaluate((element) =>
       (element as HTMLButtonElement).click(),
     );
     expect(requestCount).toBe(1);
-    await expect(refreshButton).toHaveText(/Refreshing… [1-9]\d*s/u, {
+    await expect(pendingButton).toHaveText(/Refreshing… [1-9]\d*s/u, {
       timeout: 4_000,
     });
 
