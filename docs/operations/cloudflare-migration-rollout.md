@@ -4,6 +4,14 @@ Prepared November 15, 2026 (America/New_York); evidence updated November 16 UTC.
 
 Status: authorized execution is underway on `codex/cloudflare-migration` in an isolated worktree. The public website moved to Cloudflare at 04:20 UTC November 16 (11:20 p.m. Eastern November 15). API, outbox and PostgreSQL remain on Render. The user excluded Discord as unused; its Render service was reversibly suspended at 12:35 UTC November 16 with auto-deploy off and zero instances. The original Render website stays running with auto-deploy disabled for rollback. Website DNS now uses the documented Render O2O CNAME configuration. One authorized SMS and one email were sent from the Cloudflare candidate; SMS delivery and SMTP acceptance are verified, and the user confirmed both messages arrived. No write freeze, payment or database retirement has occurred; the website observation window has begun and the remaining service/database gates stay open.
 
+### November 16 application integration
+
+The public-site refresh, compact mobile cookie notice and winter-sale campaign implementation from the Windows checkout are included in application commit `ba5fab7bd6862761193e977e8e015c5214b7dcff`. All 87 previously pending files were preserved; the two shared messaging files retain both the campaign controls and the migration's retry lock / worker drain changes. Local verification passed API/site typechecks, 97 focused API tests, two worker-drain tests and 18 disposable-PostgreSQL campaign verification groups. This is application integration evidence, not a production deployment receipt.
+
+The user requested publishing these changes through the existing migration setup. The live image digests and `source-manifest.json` pins still describe the existing production/migration baseline. Prior runtime and cutover receipts apply to their recorded images, not automatically to this new application revision. The combined revision needs a new private website build and release validation; it already contains the compatibility patches, so do not apply those patches to it a second time. Preserve existing form keys and immutable assets when building the replacement.
+
+Campaign sending and sale pricing remain disabled by default. Apply and verify additive migration `0184_sms_campaigns.sql` before exposing the campaign workspace on the updated API/worker. Publishing code does not authorize an owner-test SMS, customer batch or offer activation. See [winter-sale operations](../runbooks/winter-sale-campaign.md) for the application settings and launch controls. The API/outbox/database migration gates below remain in effect.
+
 Private receipts and credentials are held outside this public repository under `~/.local/share/stonegate-migration`. Never commit those files, database dumps, object keys or customer records.
 
 ## Execution receipts — November 15–16
