@@ -27,7 +27,7 @@ if (
   )
 )
   throw Error("Invalid private compatibility manifest");
-const archive = "/run/secrets/site_legacy_assets";
+const archive = "/run/legacy_assets/site-assets.tar.gz";
 const hash = (data) => createHash("sha256").update(data).digest("hex");
 if (
   !Array.isArray(prior.staticInventory) ||
