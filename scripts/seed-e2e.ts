@@ -311,6 +311,24 @@ async function main() {
   const start = Date.now();
   assertIsolatedE2ESeedTarget();
   const modules = await loadModules();
+  // Delivery journeys use local provider fakes and must run at any wall-clock
+  // hour. Equal endpoints disable quiet hours in this disposable fixture only;
+  // production defaults and explicit quiet-hours policy tests remain intact.
+  const quietHours = {
+    channels: {
+      sms: { start: "00:00", end: "00:00" },
+      email: { start: "00:00", end: "00:00" },
+      dm: { start: "00:00", end: "00:00" },
+    },
+  };
+  await modules.db
+    .getDb()
+    .insert(modules.db.policySettings)
+    .values({ key: "quiet_hours", value: quietHours })
+    .onConflictDoUpdate({
+      target: modules.db.policySettings.key,
+      set: { value: quietHours, updatedAt: new Date() },
+    });
   const runId = process.env["E2E_RUN_ID"] ?? `seed-${Date.now().toString(36)}`;
 
   const reusable = await findReusableBaseline(modules.db, runId);
