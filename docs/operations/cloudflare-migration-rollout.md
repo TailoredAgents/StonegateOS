@@ -88,7 +88,7 @@ Working rollout defaults following the user's instruction to proceed:
 - Retain the public website origin and existing R2 bucket names/object keys.
 - Keep PostgreSQL. Evaluate PlanetScale's Cloudflare integration as the replacement; confirm version, extensions, recovery capability, capacity and total price before provisioning.
 - Treat $55–75/month as an optimization target only. The current conservative Container fallback models approximately $90–106/month with the temporary relay and retained database; see the utilization-based refinement above.
-- Plan an off-hours write interruption with a proposed 30-minute ceiling. The rehearsal must demonstrate that ceiling; otherwise revise the window or replication method before scheduling.
+- The user confirmed a maximum 30-minute write interruption overnight in America/New_York. Rehearsal must demonstrate that ceiling, including recovery or rollback; choose the exact night only after application observation gates pass.
 - Observe each application move through a normal operating day; observe all application services together for at least 72 hours before the production database move.
 - Retain the old database for 30 days after the database handoff. This is a proposed retention period, not a scheduled deletion.
 - Request a temporary additional hosting budget of $100/month equivalent, prorated, for overlapping services, an isolated test/restore target, backups and a possible connectivity relay. Shared account fees and existing provider usage remain separately accounted for.
@@ -291,7 +291,7 @@ Calendar dates and a reliable engineering estimate follow the access and runtime
 
 The user authorized end-to-end execution and use of the open provider tabs. The confirmed Render workspace is My Workspace. Access and source-isolation choices have been resolved without changing the original working tree. No further permission is needed for authorized staging work.
 
-The final write-interruption window, destination PostgreSQL plan and measured steady-state cost remain unsettled. Keep the proposed 30-minute interruption ceiling and 30-day source retention as planning defaults; do not schedule a database handoff or deletion until recovery timings and all prerequisite gates support them.
+The user confirmed up to 30 minutes overnight (Eastern time) for the final write interruption. The exact night, destination PostgreSQL plan and measured steady-state cost remain unsettled. Retain the proposed 30-day source retention; do not schedule a database handoff or deletion until recovery timings and all prerequisite gates support them.
 
 ## Technical references
 
