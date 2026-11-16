@@ -17,6 +17,7 @@ import {
 const TEAM_APP = join(process.cwd(), "../site/src/app/team");
 
 const EXPECTED_SURFACE_MODULES: Readonly<Record<string, string>> = {
+  campaigns: "./components/CampaignsSection",
   calendar: "./components/CalendarSection",
   inbox: "./components/InboxSection",
   contacts: "./components/ContactsSection",
@@ -56,11 +57,11 @@ function findTsxFiles(directory: string): string[] {
 
 describe("Site Team surface registry", () => {
   it("defines every current surface exactly once with a canonical /team path", () => {
-    expect(TEAM_SURFACES).toHaveLength(23);
-    expect(new Set(TEAM_SURFACES.map((surface) => surface.id)).size).toBe(23);
+    expect(TEAM_SURFACES).toHaveLength(24);
+    expect(new Set(TEAM_SURFACES.map((surface) => surface.id)).size).toBe(24);
     expect(
       new Set(TEAM_SURFACES.map((surface) => surface.canonicalPath)).size,
-    ).toBe(23);
+    ).toBe(24);
 
     for (const surface of TEAM_SURFACES) {
       expect(surface.canonicalPath).toMatch(/^\/team\/(?!login(?:\/|$))/u);

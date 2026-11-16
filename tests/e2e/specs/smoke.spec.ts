@@ -1,6 +1,6 @@
 import { test, expect } from "../test";
 
-const heroHeading = /junk removal that clears clutter fast and responsibly/i;
+const heroHeading = /less clutter\.\s*more possibility\./i;
 
 test.describe("Stonegate smoke", () => {
   test("home hero renders call-to-action", async ({ page }) => {
@@ -13,7 +13,7 @@ test.describe("Stonegate smoke", () => {
       ).toBeVisible();
       const primaryCta = page
         .getByRole("main")
-        .getByRole("link", { name: /get instant quote/i })
+        .getByRole("link", { name: /get my instant quote/i })
         .first();
       await expect(primaryCta).toBeVisible();
       await expect(primaryCta).toHaveAttribute("href", "/book");
