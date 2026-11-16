@@ -162,7 +162,7 @@ void test("the shared marketing menu is a conditional, inert, focus-managed dial
 
 void test("the marketing navigation has one clear partner entry point", () => {
   const header = source("../../../components/Header.tsx");
-  const footer = source("../../../components/Footer.tsx");
+  const footer = source("../../../components/public-site/PublicFooter.tsx");
   const landing = source("../components/PartnerLandingContent.tsx");
 
   assert.match(header, /\{ href: "\/partners", label: "For Partners" \}/u);

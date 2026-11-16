@@ -1,8 +1,8 @@
 # API Route Index (apps/api)
 
-Generated from source. Fingerprint: `936fe00e4a527ba8`.
+Generated from source. Fingerprint: `26f467a5750ea5a1`.
 
-Routes discovered: 486
+Routes discovered: 488
 
 This index inventories exported HTTP handlers. It does not replace endpoint authentication, request-schema, response-schema, or side-effect documentation.
 
@@ -249,6 +249,7 @@ This index inventories exported HTTP handlers. It does not replace endpoint auth
 | POST | `/api/admin/seo/posts/[postId]/review` | `apps/api/app/api/admin/seo/posts/[postId]/review/route.ts` |
 | POST | `/api/admin/seo/run` | `apps/api/app/api/admin/seo/run/route.ts` |
 | GET | `/api/admin/seo/status` | `apps/api/app/api/admin/seo/status/route.ts` |
+| GET, POST | `/api/admin/sms-campaigns` | `apps/api/app/api/admin/sms-campaigns/route.ts` |
 | POST | `/api/admin/stripe/backfill` | `apps/api/app/api/admin/stripe/backfill/route.ts` |
 | GET | `/api/admin/system/health` | `apps/api/app/api/admin/system/health/route.ts` |
 | POST | `/api/admin/team/break-glass/exchange` | `apps/api/app/api/admin/team/break-glass/exchange/route.ts` |
@@ -456,6 +457,7 @@ This index inventories exported HTTP handlers. It does not replace endpoint auth
 | POST | `/api/public/team/request-link` | `apps/api/app/api/public/team/request-link/route.ts` |
 | GET | `/api/public/team/session` | `apps/api/app/api/public/team/session/route.ts` |
 | POST, OPTIONS | `/api/public/web-events` | `apps/api/app/api/public/web-events/route.ts` |
+| GET | `/api/public/winter-sale` | `apps/api/app/api/public/winter-sale/route.ts` |
 | GET | `/api/quote-versions/[id]/acceptance-certificate` | `apps/api/app/api/quote-versions/[id]/acceptance-certificate/route.ts` |
 | GET | `/api/quote-versions/[id]/attachments/[attachmentId]/content` | `apps/api/app/api/quote-versions/[id]/attachments/[attachmentId]/content/route.ts` |
 | DELETE | `/api/quote-versions/[id]/attachments/[attachmentId]` | `apps/api/app/api/quote-versions/[id]/attachments/[attachmentId]/route.ts` |
