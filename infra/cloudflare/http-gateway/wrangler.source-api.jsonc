@@ -1,0 +1,45 @@
+{
+  "name": "stonegate-source-api-gateway-validation",
+  "main": "worker.ts",
+  "account_id": "78ed83c6e3947c93763acef3a48a5561",
+  "compatibility_date": "2026-11-15",
+  "compatibility_flags": ["nodejs_compat"],
+  "workers_dev": true,
+  "preview_urls": false,
+  "observability": {
+    "enabled": false
+  },
+  "containers": [
+    {
+      "class_name": "HttpGateway",
+      "scheduling_policy": "durable_object",
+      "images": {
+        "base": {
+          "image": "registry.cloudflare.com/78ed83c6e3947c93763acef3a48a5561/stonegate-migration-api@sha256:166fd25e0265999880e3493dfb5a00312e9a7fd949c25157f476c4184599ecbb"
+        }
+      }
+    }
+  ],
+  "durable_objects": {
+    "bindings": [
+      {
+        "name": "HTTP",
+        "class_name": "HttpGateway"
+      }
+    ],
+    "code_update_strategy": {
+      "mode": "immediate"
+    }
+  },
+  "exports": {
+    "HttpGateway": {
+      "type": "durable-object",
+      "storage": "sqlite"
+    }
+  },
+  "vars": {
+    "AUTO_RECOVER": "true",
+    "SERVICE_KIND": "source-api-readonly",
+    "GATEWAY_HOST": "stonegate-source-api-gateway-validation.jeffrey-78e.workers.dev"
+  }
+}

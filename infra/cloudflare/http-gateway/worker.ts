@@ -2,13 +2,20 @@ import { DurableObject } from "cloudflare:workers";
 import { createHash, timingSafeEqual } from "node:crypto";
 import { upstreamRequest, trackedResponse } from "./proxy.mjs";
 import { fixture } from "./fixture";
+import { sourceApiRuntime } from "./source-api-runtime";
 
 interface GatewayEnv {
   HTTP: DurableObjectNamespace<HttpGateway>;
   MIGRATION_PROBE_TOKEN: string;
-  SERVICE_KIND: "fixture" | "site" | "source-site" | "target-api";
+  SERVICE_KIND:
+    | "fixture"
+    | "site"
+    | "source-site"
+    | "target-api"
+    | "source-api-readonly";
   SITE_RUNTIME_ENV?: string;
   MIGRATION_TARGET_CONNECTION?: string;
+  MIGRATION_SOURCE_CONNECTION?: string;
   GATEWAY_HOST: string;
   AUTO_RECOVER?: string;
   OPERATION_MODE?: "rehearsal" | "production";
@@ -81,16 +88,22 @@ export class HttpGateway extends DurableObject<GatewayEnv> {
       const r = await this.ctx
         .container!.getTcpPort(8080)
         .fetch(
-          this.env.SERVICE_KIND === "target-api"
+          ["target-api", "source-api-readonly"].includes(this.env.SERVICE_KIND)
             ? "http://container/api/readyz"
             : "http://container/api/healthz",
           {
             signal: AbortSignal.timeout(
-              this.env.SERVICE_KIND === "source-site" ? 10000 : 2000,
+              this.env.SERVICE_KIND === "source-site"
+                ? 10000
+                : this.env.SERVICE_KIND === "source-api-readonly"
+                  ? 5000
+                  : 2000,
             ),
           },
         );
-      if (this.env.SERVICE_KIND === "target-api") {
+      if (
+        ["target-api", "source-api-readonly"].includes(this.env.SERVICE_KIND)
+      ) {
         // This isolated API has no providers or consumer. Its readiness gate
         // requires the actual database and migration journal before activation.
         const body = (await r.json()) as {
@@ -132,6 +145,26 @@ export class HttpGateway extends DurableObject<GatewayEnv> {
         env: {},
         enableInternet: false,
       };
+    if (this.env.SERVICE_KIND === "source-api-readonly") {
+      const config = JSON.parse(this.env.MIGRATION_SOURCE_CONNECTION ?? "{}");
+      if (
+        this.env.OPERATION_MODE === "production" ||
+        config.purpose !== "source-readiness-read-only" ||
+        config.user !== "stonegate_source_probe_ro" ||
+        config.host !== "dpg-d43o7c0dl3ps73a4rb4g-a" ||
+        config.rejectUnauthorized !== true ||
+        !(Date.parse(config.expiresAt) > Date.now())
+      )
+        throw Error("Invalid read-only source runtime");
+      return {
+        entrypoint: ["node", "-e", sourceApiRuntime],
+        env: {
+          MIGRATION_SOURCE_CONNECTION: this.env.MIGRATION_SOURCE_CONNECTION!,
+          MIGRATION_PROBE_TOKEN: this.env.MIGRATION_PROBE_TOKEN,
+        },
+        enableInternet: true,
+      };
+    }
     if (this.env.SERVICE_KIND === "target-api") {
       const config = JSON.parse(this.env.MIGRATION_TARGET_CONNECTION ?? "{}");
       if (
@@ -356,6 +389,30 @@ export class HttpGateway extends DurableObject<GatewayEnv> {
   async fetch(request: Request): Promise<Response> {
     const url = new URL(request.url);
     if (url.pathname.startsWith("/__gateway/")) {
+      if (
+        ["/__gateway/runtime-status", "/__gateway/interrupt-relay"].includes(
+          url.pathname,
+        )
+      ) {
+        if (
+          this.env.SERVICE_KIND !== "source-api-readonly" ||
+          !this.ctx.container!.running
+        )
+          return unavailable("runtime_control_unavailable", 409);
+        return this.ctx
+          .container!.getTcpPort(8084)
+          .fetch(
+            "http://container" +
+              (url.pathname.endsWith("runtime-status")
+                ? "/state"
+                : "/interrupt-relay"),
+            {
+              method: request.method,
+              headers: { "x-runtime-key": this.env.MIGRATION_PROBE_TOKEN },
+              signal: AbortSignal.timeout(5000),
+            },
+          );
+      }
       if (url.pathname === "/__gateway/status")
         return Response.json({
           ...this.state,
@@ -484,12 +541,18 @@ export default {
       control &&
       (url.search ||
         !(
-          (request.method === "GET" && url.pathname === "/__gateway/status") ||
+          (request.method === "GET" &&
+            (url.pathname === "/__gateway/status" ||
+              (env.SERVICE_KIND === "source-api-readonly" &&
+                url.pathname === "/__gateway/runtime-status"))) ||
           (request.method === "POST" &&
             [
               "/__gateway/warm",
               "/__gateway/activate",
               "/__gateway/drain",
+              ...(env.SERVICE_KIND === "source-api-readonly"
+                ? ["/__gateway/interrupt-relay"]
+                : []),
             ].includes(url.pathname))
         ))
     )
