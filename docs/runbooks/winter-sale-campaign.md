@@ -1,6 +1,6 @@
 # Winter sale campaign operations
 
-Implemented locally November 11, 2026. Entry point: **Team → Marketing → Campaigns** (`/team/marketing/campaigns`). Nothing in this implementation sends a message just by deploying, creating a draft, selecting customers, or preparing a review.
+Implemented locally November 11 and released November 16, 2026 through the existing Cloudflare/Render setup. Migration `0184_sms_campaigns` is applied; campaign sending and sale pricing remain off. See the [production release receipt](../operations/2026-11-16-site-campaign-release.md). Entry point: **Team → Marketing → Campaigns** (`/team/marketing/campaigns`). Nothing in this implementation sends a message just by deploying, creating a draft, selecting customers, or preparing a review.
 
 ## What is available
 

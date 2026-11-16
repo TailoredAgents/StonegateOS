@@ -40,7 +40,7 @@
   "services": [
     {
       "binding": "SITE_GATEWAY",
-      "service": "stonegate-site-production"
+      "service": "stonegate-site-release-20261116"
     }
   ]
 }

@@ -59,5 +59,7 @@
     "site": "20.20.2",
     "api": "20.20.2",
     "outbox": "20.20.2"
-  }
+  },
+  "currentProductionRelease": "infra/cloudflare/releases/2026-11-16-site-campaigns.json",
+  "productionStateNote": "source-manifest.json retains the November 15 migration baseline. Refresh source runtime, compatibility patch selection and handoff receipts before migrating the updated Render API/outbox to Cloudflare."
 }

@@ -1,0 +1,65 @@
+{
+  "releasedAt": "2026-11-16T18:03:41.187475+00:00",
+  "repository": "TailoredAgents/StonegateOS",
+  "applicationRevision": "749ebb50ab02faf34d56ad744b15af50604ba57a",
+  "site": {
+    "worker": "stonegate-site-release-20261116",
+    "image": "registry.cloudflare.com/78ed83c6e3947c93763acef3a48a5561/stonegate-site-release@sha256:b17ca57137135465aff7d7a120f70489780b4b399cf1044e2a2d44bd14b77241",
+    "node": "24.22.1",
+    "buildId": "EA8T1G4ZwTQ_2p2VvHoqO",
+    "priorWorker": "stonegate-site-production",
+    "priorImage": "registry.cloudflare.com/78ed83c6e3947c93763acef3a48a5561/stonegate-migration-site-private@sha256:294a427e1a4daa248110f8415f4b555644a68ffd368a9faf4f8e5dfc7029485b",
+    "routes": [
+      {
+        "pattern": "https://stonegatejunkremoval.com/*",
+        "zone_id": "7eb7c6c85a93c7b0cae01de78028a40f"
+      },
+      {
+        "pattern": "https://www.stonegatejunkremoval.com/*",
+        "zone_id": "7eb7c6c85a93c7b0cae01de78028a40f"
+      }
+    ]
+  },
+  "render": [
+    {
+      "name": "api",
+      "service": "srv-d43o7k0dl3ps73a4rhu0",
+      "deploy": "dep-dbtk6n0u01pc73e5ulug",
+      "revision": "749ebb50ab02faf34d56ad744b15af50604ba57a",
+      "status": "live",
+      "priorDeploy": "dep-db8k5gnavr4c73ftkn2g",
+      "autoDeploy": "no",
+      "at": "2026-11-16T17:59:16.105271+00:00"
+    },
+    {
+      "name": "outbox",
+      "service": "srv-d43sdh0dl3ps73a8l70g",
+      "deploy": "dep-dbtk9k142hec738timg0",
+      "revision": "749ebb50ab02faf34d56ad744b15af50604ba57a",
+      "status": "live",
+      "priorDeploy": "dep-db5ukie7bikc73e4ch8g",
+      "autoDeploy": "no",
+      "at": "2026-11-16T18:02:59.411947+00:00"
+    }
+  ],
+  "database": {
+    "provider": "Render",
+    "migration": "0184_sms_campaigns",
+    "rollback": "Retain the additive tables and their records."
+  },
+  "campaignSendingEnabled": false,
+  "winterSaleEnabled": false,
+  "campaignMessagesSentByRelease": 0,
+  "verification": {
+    "e2e": "https://github.com/TailoredAgents/StonegateOS/actions/runs/43919433211",
+    "partnerJourney": "https://github.com/TailoredAgents/StonegateOS/actions/runs/43919433581",
+    "candidatePageChecks": 26,
+    "publicPageChecks": 26,
+    "browserErrors": 0,
+    "mobileCookieHeightPx": 122,
+    "serverActionsPreserved": 202,
+    "staticAssetsPreserved": 158,
+    "apiReady": true
+  },
+  "migrationBaselineNote": "source-manifest.json retains the November 15 migration baseline. Refresh source runtime, compatibility patch selection and handoff receipts before migrating the updated Render API/outbox to Cloudflare."
+}

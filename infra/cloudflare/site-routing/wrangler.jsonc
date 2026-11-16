@@ -18,7 +18,7 @@
   "services": [
     {
       "binding": "SOURCE_SITE",
-      "service": "stonegate-site-production"
+      "service": "stonegate-site-release-20261116"
     }
   ],
   "vars": {
