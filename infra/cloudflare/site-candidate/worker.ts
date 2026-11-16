@@ -1,5 +1,6 @@
 import { DurableObject } from "cloudflare:workers";
 import { createHash, timingSafeEqual } from "node:crypto";
+import { staticInventory } from "./static-inventory";
 
 interface CandidateEnv {
   SITE: DurableObjectNamespace<SiteCandidate>;
@@ -159,7 +160,10 @@ export class SiteCandidate extends DurableObject<CandidateEnv> {
         Math.min(expiresAt, Date.now() + 3_600_000),
       );
       await this.ctx.storage.setAlarm(Date.now() + 90_000);
-    } else if (!allowedRead(request))
+    } else if (
+      url.pathname !== "/__candidate/static-manifest" &&
+      !allowedRead(request)
+    )
       return new Response(null, { status: 404 });
     this.starting ??= this.ensureReady().finally(() => {
       this.starting = undefined;
@@ -170,6 +174,25 @@ export class SiteCandidate extends DurableObject<CandidateEnv> {
         ready: true,
         image: await this.ctx.container!.inspect(),
       });
+    if (url.pathname === "/__candidate/static-manifest") {
+      const process = await this.ctx.container!.exec(
+        ["node", "-e", staticInventory],
+        {
+          stdout: "pipe",
+          stderr: "ignore",
+          signal: AbortSignal.timeout(10000),
+        },
+      );
+      const result = await process.output();
+      if (result.exitCode !== 0 || result.stdout.byteLength > 256 * 1024)
+        throw Error("Static inventory failed");
+      return new Response(result.stdout, {
+        headers: {
+          "content-type": "application/json",
+          "cache-control": "no-store",
+        },
+      });
+    }
     const headers = new Headers();
     headers.set("accept", request.headers.get("accept") ?? "*/*");
     headers.set("host", "stonegatejunkremoval.com");
@@ -204,7 +227,10 @@ export default {
       !url.search &&
       ((request.method === "POST" &&
         ["/__candidate/start", "/__candidate/stop"].includes(url.pathname)) ||
-        (request.method === "GET" && url.pathname === "/__candidate/status"));
+        (request.method === "GET" &&
+          ["/__candidate/status", "/__candidate/static-manifest"].includes(
+            url.pathname,
+          )));
     if (!control && !allowedRead(request))
       return new Response(null, { status: 404 });
     if (Date.now() >= expiresAt && url.pathname !== "/__candidate/stop")

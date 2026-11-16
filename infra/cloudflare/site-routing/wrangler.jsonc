@@ -1,0 +1,37 @@
+{
+  "name": "stonegate-site-rollback-validation",
+  "main": "worker.ts",
+  "account_id": "78ed83c6e3947c93763acef3a48a5561",
+  "compatibility_date": "2026-11-15",
+  "compatibility_flags": ["nodejs_compat"],
+  "workers_dev": true,
+  "preview_urls": false,
+  "observability": {
+    "enabled": false,
+  },
+  "r2_buckets": [
+    {
+      "binding": "ASSETS",
+      "bucket_name": "stonegate-migration-assets",
+    },
+  ],
+  "services": [
+    {
+      "binding": "SOURCE_SITE",
+      "service": "stonegate-site-production",
+    },
+  ],
+  "vars": {
+    "PUBLIC_STATIC": "true",
+  },
+  "routes": [
+    {
+      "pattern": "https://stonegatejunkremoval.com/_next/static/*",
+      "zone_id": "7eb7c6c85a93c7b0cae01de78028a40f",
+    },
+    {
+      "pattern": "https://www.stonegatejunkremoval.com/_next/static/*",
+      "zone_id": "7eb7c6c85a93c7b0cae01de78028a40f",
+    },
+  ],
+}

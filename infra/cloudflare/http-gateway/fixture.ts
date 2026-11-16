@@ -8,6 +8,7 @@ const server=createServer(async(req,res)=>{
  const url=new URL(req.url,'http://container');
  if(!accepting){res.writeHead(503);res.end();return;}
  if(url.pathname==='/api/healthz'){res.end('ok');return;}
+ if(url.pathname==='/crash'){process.exit(23);return;}
  if(url.pathname==='/counts'){res.setHeader('content-type','application/json');res.end(JSON.stringify({mutations,slowWrites}));return;}
  if(url.pathname==='/lost-response'){mutations++;req.socket.destroy();return;}
  if(url.pathname==='/redirect'){res.writeHead(307,{location:'/landing?next=%2Fteam'});res.end();return;}
