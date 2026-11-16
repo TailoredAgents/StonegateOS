@@ -3,18 +3,23 @@ import path from "node:path";
 const directory = process.argv[2];
 if (!directory) throw Error("Private evidence directory required");
 const isSource = process.argv[3] === "source";
+const isTarget = process.argv[3] === "target";
 const route = process.argv[3] === "api" || isSource ? "/api-check" : "/check";
 const token = (
   await readFile(path.join(directory, "probe-token"), "utf8")
 ).trim();
-const base = isSource
-  ? "https://stonegate-source-readiness.jeffrey-78e.workers.dev"
-  : "https://stonegate-database-validation.jeffrey-78e.workers.dev";
+const base = isTarget
+  ? "https://stonegate-target-readiness.jeffrey-78e.workers.dev"
+  : isSource
+    ? "https://stonegate-source-readiness.jeffrey-78e.workers.dev"
+    : "https://stonegate-database-validation.jeffrey-78e.workers.dev";
 const { createHash } = await import("node:crypto");
 const vm = await import("node:vm");
 const probeSource = await readFile(
   new URL(
-    "../../infra/cloudflare/containers/database-check.ts",
+    isTarget
+      ? "../../infra/cloudflare/target/check.ts"
+      : "../../infra/cloudflare/containers/database-check.ts",
     import.meta.url,
   ),
   "utf8",
@@ -49,7 +54,7 @@ try {
       ...(await response.json()),
     };
     const versionMatches =
-      !isSource ||
+      (!isSource && !isTarget) ||
       response.headers.get("x-stonegate-probe-sha256") === expectedHash;
     checks.push({
       ...result,
@@ -82,7 +87,7 @@ try {
   await writeFile(
     path.join(
       directory,
-      `container-${isSource ? "source" : "database"}-validation-${Date.now()}.json`,
+      `container-${isTarget ? "target" : isSource ? "source" : "database"}-validation-${Date.now()}.json`,
     ),
     JSON.stringify({ at: new Date().toISOString(), checks }),
     { mode: 0o600, flag: "wx" },

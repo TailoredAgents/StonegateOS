@@ -6,6 +6,6 @@
     "test": "node --test *.test.mjs"
   },
   "dependencies": {
-    "postgres": "3.4.4"
+    "postgres": "3.4.7"
   }
 }

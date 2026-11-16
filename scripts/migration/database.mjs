@@ -25,6 +25,23 @@ function pgEnvironment() {
     PGUSER:decodeURIComponent(url.username), PGPASSWORD:decodeURIComponent(url.password),
     PGDATABASE:decodeURIComponent(url.pathname.slice(1)), PGSSLMODE:url.searchParams.get('sslmode') || 'require' };
 }
+export function isIsolatedRestoreTarget(target, record, now = Date.now()) {
+  const local = ['127.0.0.1','localhost','[::1]'].includes(target.hostname);
+  if (!/^\/stonegate_restore_[a-z0-9_]+$/.test(target.pathname)) return false;
+  if (local) return true;
+  return Boolean(record && record.purpose === 'empty-planetscale-rehearsal' &&
+    record.provider === 'planetscale' && record.project === 'stonegate-os-pg17' &&
+    record.host.endsWith('.psdb.cloud') && target.hostname === record.host &&
+    (target.port || '5432') === String(record.port) &&
+    decodeURIComponent(target.username) === record.user &&
+    target.pathname.slice(1) === record.database &&
+    target.searchParams.get('sslmode') === 'verify-full' &&
+    Date.parse(record.expiresAt) > now);
+}
+async function isolatedTarget(target) {
+  const file = process.env.MIGRATION_TARGET_FILE;
+  return isIsolatedRestoreTarget(target, file ? JSON.parse(await readFile(file, 'utf8')) : null);
+}
 async function privateJson(file, value) {
   await writeFile(file, JSON.stringify(value, null, 2) + '\n', { mode: 0o600, flag: 'wx' });
 }
@@ -162,8 +179,8 @@ async function backup(directory) {
 }
 async function restore(directory) {
   const target = new URL(connection());
-  if (!['127.0.0.1','localhost','[::1]'].includes(target.hostname) || !target.pathname.startsWith('/stonegate_restore_')) {
-    throw new Error('Restore is restricted to an isolated local stonegate_restore_* database');
+  if (!await isolatedTarget(target)) {
+    throw new Error('Restore requires an isolated stonegate_restore_* database; remote targets also require an exact unexpired private target record and verified TLS');
   }
   const key = await readFile(path.join(directory,'backup.key'));
   const file = path.join(directory,'database.pgdump.aesgcm');
@@ -195,7 +212,7 @@ async function verify(directory) {
     // Re-parse source CHECK expressions on the restore server. Different PostgreSQL
     // patch versions may flatten ANDs or array casts. Never strip SQL punctuation
     // or whitelist a changed condition. The server's parsed definitions must match.
-    if (['127.0.0.1','localhost','[::1]'].includes(target.hostname) && target.pathname.startsWith('/stonegate_restore_')) {
+    if (await isolatedTarget(target)) {
       for (const item of normalized.constraints) {
         const restored=actual.constraints.find(x=>x.schema===item.schema&&x.table===item.table&&x.name===item.name);
         if (!restored || restored.definition===item.definition || !item.definition.startsWith('CHECK (')) continue;
