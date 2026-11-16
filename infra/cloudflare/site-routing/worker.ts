@@ -109,7 +109,9 @@ export default {
       )
     )
       return new Response(null, { status: 400 });
-    url.hostname = host;
+    // Fetch the retained Render service explicitly. From workers.dev, fetching
+    // the public hostname can enter the new Worker and test the candidate again.
+    url.hostname = "stonegate-site.onrender.com";
     url.port = "";
     url.protocol = "https:";
     const response = await fetch(url, {
@@ -119,7 +121,7 @@ export default {
       signal: AbortSignal.timeout(30000),
     });
     const result = new Response(response.body, response);
-    result.headers.set("x-migration-site-route", "render-origin");
+    result.headers.set("x-migration-site-route", "render-service-origin");
     result.headers.set("cache-control", "no-store");
     result.headers.set("x-robots-tag", "noindex, nofollow");
     return result;

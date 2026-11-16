@@ -7,7 +7,7 @@
   "workers_dev": true,
   "preview_urls": false,
   "observability": {
-    "enabled": false,
+    "enabled": false
   },
   "containers": [
     {
@@ -15,30 +15,30 @@
       "scheduling_policy": "durable_object",
       "images": {
         "base": {
-          "image": "registry.cloudflare.com/78ed83c6e3947c93763acef3a48a5561/stonegate-migration-site-private@sha256:294a427e1a4daa248110f8415f4b555644a68ffd368a9faf4f8e5dfc7029485b",
-        },
-      },
-    },
+          "image": "registry.cloudflare.com/78ed83c6e3947c93763acef3a48a5561/stonegate-migration-site-private@sha256:294a427e1a4daa248110f8415f4b555644a68ffd368a9faf4f8e5dfc7029485b"
+        }
+      }
+    }
   ],
   "durable_objects": {
     "bindings": [
       {
         "name": "HTTP",
-        "class_name": "HttpGateway",
-      },
+        "class_name": "HttpGateway"
+      }
     ],
     "code_update_strategy": {
-      "mode": "immediate",
-    },
+      "mode": "immediate"
+    }
   },
   "exports": {
     "HttpGateway": {
       "type": "durable-object",
-      "storage": "sqlite",
-    },
+      "storage": "sqlite"
+    }
   },
   "vars": {
     "SERVICE_KIND": "source-site",
-    "GATEWAY_HOST": "stonegate-site-gateway-validation.jeffrey-78e.workers.dev",
-  },
+    "GATEWAY_HOST": "stonegate-site-gateway-validation.jeffrey-78e.workers.dev"
+  }
 }

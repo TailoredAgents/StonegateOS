@@ -9,19 +9,26 @@ const targets = [
   {name:'admin-unauthenticated',url:'https://stonegate-api.onrender.com/api/admin/contacts',statuses:[401,403]},
 ];
 
-export async function observe(bucket: R2Bucket, scheduledAt?: number) {
+export async function observe(bucket: R2Bucket, scheduledAt: number | undefined, siteGateway: Fetcher) {
   const now = Date.now();
   if (now >= Date.parse(observationEndsAt)) return {expired:true,endsAt:observationEndsAt};
   const checks = await Promise.all(targets.map(async target => {
     const started = Date.now();
     try {
-      const response = await fetch(target.url, {
+      const cloudflareSite = new URL(target.url).hostname === "stonegatejunkremoval.com";
+      const request = new Request(target.url, {
         method:'GET',redirect:'manual',signal:AbortSignal.timeout(20000),
         headers:{'user-agent':'StonegateMigrationHealth/1.0','cache-control':'no-cache'},
       });
+      // Same-zone fetch can bypass Worker routes. The service binding exercises
+      // the actual production controller; external browser tests cover routing.
+      const response = cloudflareSite ? await siteGateway.fetch(request) : await fetch(request);
       // Discard bodies: readiness details, cookies and customer data are never retained.
       await response.body?.cancel();
-      return {name:target.name,status:response.status,pass:target.statuses.includes(response.status),ms:Date.now()-started};
+      return {name:target.name,status:response.status,
+        transport:cloudflareSite?'site-service-binding':'public-http',
+        hosting:response.headers.get('x-stonegate-hosting'),
+        pass:target.statuses.includes(response.status) && (!cloudflareSite || response.headers.get('x-stonegate-hosting')==='cloudflare'),ms:Date.now()-started};
     } catch {
       return {name:target.name,status:null,pass:false,ms:Date.now()-started};
     }

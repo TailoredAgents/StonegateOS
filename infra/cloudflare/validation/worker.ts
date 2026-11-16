@@ -1,6 +1,7 @@
 import { createHash, timingSafeEqual } from 'node:crypto';
 import postgres from 'postgres';
 import { observe, observationHistory } from './observations';
+interface ValidationEnv extends Env { SITE_GATEWAY: Fetcher }
 
 function authorized(request: Request, secret: string | undefined): boolean {
   if (!secret) return false;
@@ -13,17 +14,17 @@ function json(value: unknown, status = 200): Response {
   return Response.json(value, {status, headers:{'cache-control':'no-store','x-content-type-options':'nosniff'}});
 }
 export default {
-  async scheduled(controller:ScheduledController,env:Env):Promise<void> {
-    const result = await observe(env.VALIDATION,controller.scheduledTime);
+  async scheduled(controller:ScheduledController,env:ValidationEnv):Promise<void> {
+    const result = await observe(env.VALIDATION,controller.scheduledTime,env.SITE_GATEWAY);
     if ('pass' in result && !result.pass) throw new Error('Migration health observation failed');
   },
-  async fetch(request: Request, env: Env): Promise<Response> {
+  async fetch(request: Request, env: ValidationEnv): Promise<Response> {
     if (!authorized(request, env.MIGRATION_PROBE_TOKEN)) return json({error:'unauthorized'},401);
     const url = new URL(request.url);
     const bucket = url.searchParams.get('bucket') === 'legacy' ? env.LEGACY : env.MEDIA;
     try {
       if (request.method === 'POST' && url.pathname === '/observe') {
-        const result=await observe(env.VALIDATION);
+        const result=await observe(env.VALIDATION,undefined,env.SITE_GATEWAY);
         return json(result,'expired' in result?410:result.pass?200:503);
       }
       if (request.method === 'GET' && url.pathname === '/observations') {
@@ -101,4 +102,4 @@ export default {
       return json({error:'validation_failed',code},503);
     }
   },
-} satisfies ExportedHandler<Env>;
+} satisfies ExportedHandler<ValidationEnv>;

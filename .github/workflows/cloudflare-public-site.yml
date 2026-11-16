@@ -1,0 +1,39 @@
+name: Cloudflare public website verification
+on:
+  workflow_dispatch:
+  push:
+    branches: [codex/cloudflare-migration]
+    paths: [.github/workflows/cloudflare-public-site.yml]
+permissions:
+  contents: read
+concurrency:
+  group: cloudflare-public-website-verification
+  cancel-in-progress: false
+jobs:
+  live-website:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24.21.0'
+      - name: Check public routing, authentication boundaries and redirects
+        run: |
+          mkdir -p "$RUNNER_TEMP/stonegate-site-check"
+          node scripts/migration/site-live-validation.mjs "$RUNNER_TEMP/stonegate-site-check"
+      - name: Install isolated browser test tools
+        run: |
+          npm install --ignore-scripts --no-audit --no-fund --prefix "$RUNNER_TEMP/stonegate-browser" @playwright/test@1.56.1
+          node "$RUNNER_TEMP/stonegate-browser/node_modules/@playwright/test/cli.js" install --with-deps chromium
+      - name: Check desktop and mobile pages from outside the Cloudflare account
+        env:
+          NODE_PATH: ${{ runner.temp }}/stonegate-browser/node_modules
+        run: node scripts/migration/site-browser-validation.mjs "$RUNNER_TEMP/stonegate-site-check" cloudflare
+      - name: Retain aggregate receipts only
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: stonegate-public-site-check
+          path: ${{ runner.temp }}/stonegate-site-check/*.json
+          retention-days: 7

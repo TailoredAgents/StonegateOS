@@ -22,6 +22,9 @@ const legacy = JSON.parse(
   ),
 );
 const legacyKeys = new Set(legacy.map((a) => a.key));
+const { buildId: renderBuildId } = JSON.parse(
+  await readFile(path.join(directory, "site-render-build.json"), "utf8"),
+);
 const base =
   "https://stonegate-site-rollback-validation.jeffrey-78e.workers.dev";
 const checks = [];
@@ -54,11 +57,13 @@ try {
     "/api/healthz",
   ]) {
     const r = await call(route);
-    await r.body?.cancel();
+    const html = await r.text();
     check(
       "render-html:" + route,
       r.status === 200 &&
-        r.headers.get("x-migration-site-route") === "render-origin",
+        r.headers.get("x-migration-site-route") === "render-service-origin" &&
+        !r.headers.get("x-stonegate-hosting") &&
+        (route !== "/" || html.includes(renderBuildId)),
     );
   }
   const www = await call("/", {
@@ -66,9 +71,10 @@ try {
   });
   await www.body?.cancel();
   check(
-    "www-origin-preserved",
+    "www-fallback-service-readable",
     [200, 301, 302, 307, 308].includes(www.status) &&
-      www.headers.get("x-migration-site-route") === "render-origin",
+      www.headers.get("x-migration-site-route") === "render-service-origin" &&
+      !www.headers.get("x-stonegate-hosting"),
     { status: www.status },
   );
   let checked = 0;

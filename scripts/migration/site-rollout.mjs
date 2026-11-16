@@ -4,6 +4,7 @@ import { readFile, readdir, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { createHash } from "node:crypto";
 import path from "node:path";
+import { setTimeout as delay } from "node:timers/promises";
 import { verifyWebsite } from "./site-live-validation.mjs";
 const [directory, action] = process.argv.slice(2);
 if (
@@ -48,6 +49,7 @@ async function cf(suffix, method = "GET", body) {
       headers: {
         authorization: "Bearer " + cloudflareToken,
         "content-type": "application/json",
+        "cache-control": "no-cache",
       },
       ...(body ? { body: JSON.stringify(body) } : {}),
       signal: AbortSignal.timeout(30000),
@@ -125,6 +127,10 @@ const evidence = await Promise.all([
   latest("site-gateway-validation-", (d) => d.failures === 0),
   latest("gateway-recovery-validation-", (d) => d.ok === true),
   latest("http-gateway-validation-", (d) => d.ok === true),
+  latest(
+    "site-route-canary-",
+    (d) => d.ok === true && d.host === host && d.cleaned === true,
+  ),
 ]);
 const sourceConfig = await readFile(
   path.join(homedir(), ".render/cli.yaml"),
@@ -190,19 +196,19 @@ if (
   !records.some(
     (r) =>
       r.name === host &&
-      r.type === "A" &&
-      r.content === "216.24.57.1" &&
+      r.type === "CNAME" &&
+      r.content === "stonegate-site.onrender.com" &&
       r.proxied,
   ) ||
   !records.some(
     (r) =>
       r.name === "www." + host &&
       r.type === "CNAME" &&
-      r.content === "www.stonegate-site.onrender.com" &&
+      r.content === "stonegate-site.onrender.com" &&
       r.proxied,
   )
 )
-  throw Error("Expected proxied website DNS missing");
+  throw Error("Expected proxied Render O2O CNAMEs missing");
 const production = JSON.parse(
   await readFile(path.join(directory, "site-production-secrets.json"), "utf8"),
 );
@@ -263,18 +269,36 @@ async function verifyPublicStatic() {
   for (let i = 0; i < preservation.verified.length; i += 4)
     await Promise.all(
       preservation.verified.slice(i, i + 4).map(async (asset) => {
-        const r = await fetch(
-          "https://" + host + "/_next/static/" + asset.key,
-          { signal: AbortSignal.timeout(30000), cache: "no-store" },
-        );
-        const bytes = Buffer.from(await r.arrayBuffer());
+        let r;
+        let bytes;
+        for (let attempt = 0; attempt < 10; attempt++) {
+          r = await fetch("https://" + host + "/_next/static/" + asset.key, {
+            signal: AbortSignal.timeout(30000),
+            cache: "no-store",
+          });
+          bytes = Buffer.from(await r.arrayBuffer());
+          if (r.headers.get("x-migration-site-route") === "preserved-static")
+            break;
+          if (attempt < 9) await delay(2000);
+        }
         if (
           !r.ok ||
           r.headers.get("x-migration-site-route") !== "preserved-static" ||
           bytes.length !== asset.bytes ||
           createHash("sha256").update(bytes).digest("hex") !== asset.sha256
         )
-          throw Error("Public static validation failed");
+          throw Error(
+            "Public static validation failed: " +
+              JSON.stringify({
+                key: asset.key,
+                status: r.status,
+                route: r.headers.get("x-migration-site-route"),
+                actualBytes: bytes.length,
+                expectedBytes: asset.bytes,
+                actualHash: createHash("sha256").update(bytes).digest("hex"),
+                expectedHash: asset.sha256,
+              }),
+          );
         count++;
       }),
     );
@@ -316,15 +340,46 @@ try {
       { at: new Date().toISOString(), ...applied.at(-1) },
     );
   }
-  const finalRoutes = await cf("/workers/routes");
+  let finalRoutes;
+  for (let attempt = 0; attempt < 10; attempt++) {
+    finalRoutes = await cf("/workers/routes");
+    if (
+      applied.every((r) =>
+        finalRoutes.some((x) => x.id === r.id && x.script === r.script),
+      )
+    )
+      break;
+    if (attempt < 9) await delay(2000);
+  }
   if (
     !applied.every((r) =>
       finalRoutes.some((x) => x.id === r.id && x.script === r.script),
     )
   )
-    throw Error("Route activation could not be confirmed");
+    throw Error(
+      "Route activation could not be confirmed: " + JSON.stringify(finalRoutes),
+    );
   let verifiedAssets;
   if (action === "static") verifiedAssets = await verifyPublicStatic();
+  if (action === "site") {
+    // Route writes and edge propagation are separate. Wait only with GETs;
+    // business mutations are never replayed while waiting for the new route.
+    let active = false;
+    for (let attempt = 0; attempt < 20; attempt++) {
+      const response = await fetch("https://" + host + "/", {
+        redirect: "manual",
+        cache: "no-store",
+        signal: AbortSignal.timeout(15000),
+      });
+      await response.body?.cancel();
+      active =
+        response.status === 200 &&
+        response.headers.get("x-stonegate-hosting") === "cloudflare";
+      if (active) break;
+      await delay(1000);
+    }
+    if (!active) throw Error("Public website route did not become healthy");
+  }
   const websiteChecks = action === "site" ? await verifyWebsite() : undefined;
   const receipt = {
     at: new Date().toISOString(),
