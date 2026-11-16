@@ -16,7 +16,7 @@ Decisions already made by the owner:
 - Use the existing system and texting infrastructure.
 - Launch manually and send in controlled batches; proposed first batch is 25 recipients.
 - AI assists with drafts and replies; the owner controls the offer, sending, pricing, and bookings.
-- Customer copy describes a winter sale. Do not mention internal uncertainty about future operations or promise a reopening date.
+- Customer copy describes the winter sale and its confirmed booking and service dates. Do not promise an unconfirmed reopening date.
 
 The owner subsequently authorized local implementation with “Please proceed with your plan.” The feature has been built for review. Customer messages, production deployment/migration, live pricing activation and bookings still require the explicit launch workflow; none occurred during implementation.
 
