@@ -1,6 +1,6 @@
 # Stonegate agent access and main-branch release plan
 
-Status: implementation under validation; main integration and live release pending.
+Status: released on main and connected to the Facebook outreach project. See [release receipt](operations/2026-11-16-agent-access-release.md) for verification and limits.
 Owner request: November 16, 2026 (America/New_York).
 
 ## Outcome and authorization
@@ -11,13 +11,13 @@ The owner approved implementation and deployment after reviewing this plan. The 
 
 “Full access” covers all customer/business context and supported customer-operation tools described below. It does not require exposing infrastructure secrets, raw database credentials, password hashes, or an unrestricted SQL/shell tool. Agent permissions must be visible and revocable rather than hidden behind a shared administrator credential.
 
-## Verified starting point
+## Verified starting point (historical snapshot)
 
 Implementation update: the Facebook workflow is an existing local Codex chat. Austin is the requested integration owner, and the Stonegate Gmail connection for `austin@stonegatejunkremoval.com` is already available on this host. Use Gmail alongside MCP for full mailbox history instead of duplicating it into the CRM. The connector uses SDK 1.32.2, stateless Streamable HTTP, a dedicated bearer grant and a local stdio bridge. The operator runbook is [agent-integrations.md](runbooks/agent-integrations.md).
 
 The production read-only audit found 3,634 contacts; 7,762 SMS, 6,851 DM, 55 call-channel and 18 ingested email messages; and 3,704 calls, with 3,661 linked and 2,708 transcript/recording identifiers. Invalid Messenger timestamps are flagged. A separate checkpoint manifest initially covered 49 files and 1,200 unique source records without modifying the active review. Provider backfill is not launched without a demonstrated missing range. Contact merges retain the existing human-session requirement and are exposed as previews, an explicit capability limit.
 
-Migration 0185, the real SDK/database smoke test, and mobile/desktop owner controls passed locally. The checks cover the expanded campaign audience, DNC, actual CRM writes, duplicate protection, exact owner approval, expiry and revocation. Main integration, live deployment and client installation remain the release steps.
+Migration 0185, the real SDK/database smoke test, and mobile/desktop owner controls passed locally. The checks cover the expanded campaign audience, DNC, actual CRM writes, duplicate protection, exact owner approval, expiry and revocation. Main integration, live deployment and client installation are complete. Live reads and attachment download passed; a live internal-note test was skipped because no unique owner-email CRM contact existed. CRM write/approval/retry behavior passed the real local SDK/database test.
 
 - Repository: `TailoredAgents/StonegateOS`.
 - After fetching origin on November 16, `origin/main` is `5a90cf86`; the current release branch and `origin/codex/cloudflare-migration` are `85fc2bb2`. Main has zero unique commits and the release branch has 60 unique commits. Recheck immediately before integration; this is a snapshot, not an assumption for future work.
@@ -100,14 +100,14 @@ Historical imports must preserve provider IDs and original timestamps, avoid gen
 
 ## Implementation sequence
 
-- [ ] **1. Establish baseline.** Refresh remotes, inspect branch protections/CI, verify deployed revisions and flags, identify the actual Facebook agent host, and produce the aggregate coverage report.
-- [ ] **2. Define contracts.** Inventory tools and permissions; specify integration principal, grant/action authorization, audit and additive schema changes. Decide the supported MCP transport/auth combination based on the client.
-- [ ] **3. Implement full reads.** Build the live connector and paginated contact/channel/call/customer-history services. Connect the actual agent and verify reads against Stonegate's own UI. This is an intermediate milestone.
-- [ ] **4. Match and import.** Add checkpoint interchange, identity reconciliation, call-only discovery and coverage reporting. Start only supported backfills; report gaps without blocking access to existing records.
-- [ ] **5. Implement writes and outreach.** Add CRM/task/quote/booking actions, agent campaign draft and delegated execution, older-lead audience support, pause/revoke and delivery reporting. Complete the capability matrix and make any remaining unavailable channel/action explicit.
-- [ ] **6. Test and prepare release.** Run the focused checks below plus required repository CI. Build deployable artifacts from committed source. Prepare migrations, endpoint routing and the actual client configuration with credentials kept private.
-- [ ] **7. Integrate into main.** Follow the branch procedure below, retaining the public-site/cookie/campaign work and Jeffrey's migration history.
-- [ ] **8. Deploy and prove live.** Release from the merged main revision, connect the Facebook agent to production, verify representative reads and safe reversible writes, and record exact revisions/health/rollback. Launching customer outreach remains a distinct campaign operation.
+- [x] **1. Establish baseline.** Refresh remotes, inspect branch protections/CI, verify deployed revisions and flags, identify the actual Facebook agent host, and produce the aggregate coverage report.
+- [x] **2. Define contracts.** Inventory tools and permissions; specify integration principal, grant/action authorization, audit and additive schema changes. Decide the supported MCP transport/auth combination based on the client.
+- [x] **3. Implement full reads.** Build the live connector and paginated contact/channel/call/customer-history services. Connect the actual agent and verify reads against Stonegate's own UI. This is an intermediate milestone.
+- [x] **4. Match and import.** Add checkpoint interchange, identity reconciliation, call-only discovery and coverage reporting. Start only supported backfills; report gaps without blocking access to existing records.
+- [x] **5. Implement writes and outreach.** Add CRM/task/quote/booking actions, agent campaign draft and delegated execution, older-lead audience support, pause/revoke and delivery reporting. Complete the capability matrix and make any remaining unavailable channel/action explicit.
+- [x] **6. Test and prepare release.** Run the focused checks below plus required repository CI. Build deployable artifacts from committed source. Prepare migrations, endpoint routing and the actual client configuration with credentials kept private.
+- [x] **7. Integrate into main.** Follow the branch procedure below, retaining the public-site/cookie/campaign work and Jeffrey's migration history.
+- [x] **8. Deploy and prove live.** Release from the merged main revision, connect the Facebook agent to production, verify representative reads and record exact revisions/health/rollback. Write/approval/retry behavior was exercised against the real local SDK/database; the live note check was skipped for the reason recorded above. Launching customer outreach remains a distinct campaign operation.
 
 ## Main integration and deployment procedure
 
@@ -129,7 +129,7 @@ Historical imports must preserve provider IDs and original timestamps, avoid gen
 - Mutations: operation receipt and idempotency survive retries; concurrent edits detect conflicts; an expired/changed campaign authorization cannot release messages.
 - Outreach: synthetic/provider-mocked tests for opt-outs, consent, quiet hours, cooldown, duplicate recipients, new prospect segment, pause/revoke, provider timeout and reconciliation. No production customer texts used as test traffic.
 - Run focused API/integration tests, typecheck/lint and required CI; public/partner smoke checks for auth/routing changes. Test the actual final merged artifact, not just an earlier branch SHA.
-- Production: privately verify a Facebook-to-SMS/call-to-job example, a call-only contact, and missing-history output. Exercise a reversible internal note/task and inspect audit. Any owner-test message requires a specified owner-controlled destination and send instruction.
+- Production: privately verify a Facebook-to-SMS/call-to-job example, a call-only contact, and missing-history output. Exercise a reversible internal note/task and inspect audit where a positively identified owner test contact exists; otherwise record the skip and retain the real SDK/database write proof. Any owner-test message requires a specified owner-controlled destination and send instruction.
 
 ## Done means
 
@@ -140,4 +140,4 @@ Historical imports must preserve provider IDs and original timestamps, avoid gen
 - Customer messages still go through the existing audited delivery system, and no campaign was launched merely by deploying the connector.
 - A handoff/runbook records connection setup, available tools, data coverage, main/deployment revisions, verification and rollback without secrets or customer data.
 
-Open implementation facts to resolve through inspection: actual agent host and MCP support; production coverage/retention; connected mailbox provider; current provider channel readiness; current branch protection and CI. Launch dates, audience, exact content and send budget are campaign choices, not prerequisites for building and publishing the integration.
+Implementation facts are recorded in the release receipt: the trusted local Codex project has an installed MCP bridge and working CLI fallback, company Gmail search/read is connected, production coverage and retention limits were sampled, and main/release checks passed. Individual delivery providers and campaign eligibility remain subject to the existing operational checks when a campaign is prepared. Launch dates, audience, exact content and send budget are campaign choices, not prerequisites for building and publishing the integration.

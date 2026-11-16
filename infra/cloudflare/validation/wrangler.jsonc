@@ -3,9 +3,7 @@
   "main": "worker.ts",
   "account_id": "78ed83c6e3947c93763acef3a48a5561",
   "compatibility_date": "2026-11-15",
-  "compatibility_flags": [
-    "nodejs_compat"
-  ],
+  "compatibility_flags": ["nodejs_compat"],
   "workers_dev": true,
   "preview_urls": false,
   "observability": {
@@ -13,9 +11,7 @@
     "head_sampling_rate": 0.1
   },
   "triggers": {
-    "crons": [
-      "*/15 * * * *"
-    ]
+    "crons": ["*/15 * * * *"]
   },
   "hyperdrive": [
     {
@@ -40,7 +36,7 @@
   "services": [
     {
       "binding": "SITE_GATEWAY",
-      "service": "stonegate-site-release-20261116"
+      "service": "stonegate-site-agent-final-20261116"
     }
   ]
 }

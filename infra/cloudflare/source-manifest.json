@@ -25,33 +25,25 @@
     {
       "path": "infra/cloudflare/patches/outbox-graceful-drain.patch",
       "sha256": "7604a2f93de983f3d9030193a80c00c47a5bda2171a3582658ff3848a58ca234",
-      "services": [
-        "outbox"
-      ],
+      "services": ["outbox"],
       "purpose": "Finish the current event on SIGTERM, admit no next event or scheduler, and release the database pool before exit"
     },
     {
       "path": "infra/cloudflare/patches/inbox-booking-directory.patch",
       "sha256": "d28776d4d19f65c2f7e0a0a2efbfb5470f79fd68f7263ed8ea47086e60b7d52a",
-      "services": [
-        "site"
-      ],
+      "services": ["site"],
       "purpose": "Load the authenticated team directory on booking drawer open, with failure and retry states"
     },
     {
       "path": "infra/cloudflare/patches/discord-graceful-drain.patch",
       "sha256": "00df2305df44707ed7f6050a3fc9793505f747e2fdcadfa9cc408ceaca2f8153",
-      "services": [
-        "discord"
-      ],
+      "services": ["discord"],
       "purpose": "Declare the direct Luxon dependency and drain accepted Discord tasks before gateway/database shutdown"
     },
     {
       "path": "infra/cloudflare/patches/inbound-provider-retry-lock.patch",
       "sha256": "cc47e3ac230c2dba4b5d5fcfdfdef2ef5b2a8341dcfefeb1eb9f35b6241e6542",
-      "services": [
-        "api"
-      ],
+      "services": ["api"],
       "purpose": "Serialize concurrent inbound retries of the same provider message ID inside the existing database transaction; avoid duplicate committed messages and side effects during callback replay"
     }
   ],
@@ -60,6 +52,6 @@
     "api": "20.20.2",
     "outbox": "20.20.2"
   },
-  "currentProductionRelease": "infra/cloudflare/releases/2026-11-16-site-campaigns.json",
-  "productionStateNote": "source-manifest.json retains the November 15 migration baseline. Refresh source runtime, compatibility patch selection and handoff receipts before migrating the updated Render API/outbox to Cloudflare."
+  "currentProductionRelease": "infra/cloudflare/releases/2026-11-16-agent-access.json",
+  "productionStateNote": "Historical migration source pins remain baseline evidence. API, outbox and PostgreSQL remain on Render; refresh handoff evidence before any further hosting migration."
 }

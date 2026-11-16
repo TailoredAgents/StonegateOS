@@ -1,0 +1,105 @@
+{
+  "releasedAt": "2026-11-16T22:05:15.455950+00:00",
+  "repository": "TailoredAgents/StonegateOS",
+  "applicationRevision": "4d85b70a312aa8f310d7ad0c1864089963e1d067",
+  "apiOutboxRevision": "cc5edf422260fa6091239df927a0f0c0ddd3f2e1",
+  "pullRequest": "https://github.com/TailoredAgents/StonegateOS/pull/9",
+  "site": {
+    "worker": "stonegate-site-agent-final-20261116",
+    "image": "registry.cloudflare.com/78ed83c6e3947c93763acef3a48a5561/stonegate-site-agent@sha256:2e680442308f3aa0c60fe526be26274328f931418b20571b19e0291b2dc8d87b",
+    "buildId": "RQkp8hMWM_k7b_fsBFIT4",
+    "priorWorker": "stonegate-site-agent-live-20261116",
+    "earlierRollbackWorker": "stonegate-site-release-20261116",
+    "routes": [
+      {
+        "pattern": "https://stonegatejunkremoval.com/*",
+        "zone_id": "7eb7c6c85a93c7b0cae01de78028a40f"
+      },
+      {
+        "pattern": "https://www.stonegatejunkremoval.com/*",
+        "zone_id": "7eb7c6c85a93c7b0cae01de78028a40f"
+      }
+    ]
+  },
+  "render": [
+    {
+      "name": "api",
+      "service": "srv-d43o7k0dl3ps73a4rhu0",
+      "deploy": "dep-dbtnc02fngtc739l5msg",
+      "revision": "cc5edf422260fa6091239df927a0f0c0ddd3f2e1",
+      "status": "live",
+      "priorDeploy": "dep-dbtk6n0u01pc73e5ulug",
+      "autoDeploy": "no",
+      "at": "2026-11-16T21:36:17.841214+00:00"
+    },
+    {
+      "name": "outbox",
+      "service": "srv-d43sdh0dl3ps73a8l70g",
+      "deploy": "dep-dbtnekjl550s738p03f0",
+      "revision": "cc5edf422260fa6091239df927a0f0c0ddd3f2e1",
+      "status": "live",
+      "priorDeploy": "dep-dbtk9k142hec738timg0",
+      "autoDeploy": "no",
+      "at": "2026-11-16T21:37:52.886693+00:00"
+    }
+  ],
+  "database": {
+    "provider": "Render",
+    "migration": "0185_agent_integrations",
+    "rollback": "Retain additive grants, operations, access events and audit history."
+  },
+  "integration": {
+    "endpoint": "https://stonegate-api.onrender.com/api/mcp",
+    "owner": "Austin",
+    "client": "Trusted local Facebook outreach Codex project",
+    "credentialLifetimeDays": 30,
+    "mailbox": "Existing separate Stonegate Gmail connection",
+    "installed": true,
+    "liveClientVerified": true
+  },
+  "campaignSendingEnabled": false,
+  "winterSaleEnabled": false,
+  "customerMessagesSentByRelease": 0,
+  "verification": {
+    "ciHead": "4d85b70a312aa8f310d7ad0c1864089963e1d067",
+    "ciRuns": [43963492719, 43963492773, 43963492713],
+    "initialConnectorCiHead": "cc5edf422260fa6091239df927a0f0c0ddd3f2e1",
+    "initialConnectorCiRuns": ["43957239435", "43957239278", "43957239306"],
+    "candidatePageChecks": 26,
+    "publicPageChecks": 26,
+    "signedOutLoginViewportChecks": 2,
+    "browserErrors": 0,
+    "priorServerActionsPreserved": 203,
+    "newServerActions": 0,
+    "priorStaticAssetsPreserved": 169,
+    "totalImageStaticAssets": 172,
+    "apiReady": true,
+    "mcpTools": 37,
+    "historyChecks": [
+      {
+        "check": "unlinked_call_discovery",
+        "found": true
+      },
+      {
+        "check": "retained_recording_sample",
+        "recordingFound": false,
+        "status": null,
+        "bytes": 0,
+        "sampledRecordingIdentifiers": 114,
+        "sampledDeletedCalls": 114
+      },
+      {
+        "check": "facebook_sms_job_history",
+        "found": true,
+        "callHistoryFound": true
+      },
+      {
+        "check": "internal_owner_note_write_and_retry",
+        "ok": false,
+        "note": "No unique exact owner-email CRM contact; no customer record modified."
+      }
+    ],
+    "writeTesting": "Actual CRM writes, approval, retry and revocation passed against local PostgreSQL and real SDK. Production internal-note write skipped because there was no unique exact owner-email CRM contact."
+  },
+  "migrationBaselineNote": "Historical migration source pins remain baseline evidence. API, outbox and PostgreSQL remain on Render; refresh handoff evidence before any further hosting migration."
+}

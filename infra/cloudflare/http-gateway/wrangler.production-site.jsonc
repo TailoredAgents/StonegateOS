@@ -1,5 +1,5 @@
 {
-  "name": "stonegate-site-release-20261116",
+  "name": "stonegate-site-agent-final-20261116",
   "main": "worker.ts",
   "account_id": "78ed83c6e3947c93763acef3a48a5561",
   "compatibility_date": "2026-11-15",
@@ -15,7 +15,7 @@
       "scheduling_policy": "durable_object",
       "images": {
         "base": {
-          "image": "registry.cloudflare.com/78ed83c6e3947c93763acef3a48a5561/stonegate-site-release@sha256:b17ca57137135465aff7d7a120f70489780b4b399cf1044e2a2d44bd14b77241"
+          "image": "registry.cloudflare.com/78ed83c6e3947c93763acef3a48a5561/stonegate-site-agent@sha256:2e680442308f3aa0c60fe526be26274328f931418b20571b19e0291b2dc8d87b"
         }
       }
     }
@@ -36,7 +36,7 @@
   },
   "vars": {
     "SERVICE_KIND": "source-site",
-    "GATEWAY_HOST": "stonegate-site-release-20261116.jeffrey-78e.workers.dev",
+    "GATEWAY_HOST": "stonegate-site-agent-final-20261116.jeffrey-78e.workers.dev",
     "OPERATION_MODE": "production",
     "AUTO_RECOVER": "true"
   },
