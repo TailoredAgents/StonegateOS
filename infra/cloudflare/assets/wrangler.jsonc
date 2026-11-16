@@ -1,0 +1,11 @@
+{
+  "name": "stonegate-migration-assets",
+  "main": "worker.ts",
+  "account_id": "78ed83c6e3947c93763acef3a48a5561",
+  "compatibility_date": "2026-11-15",
+  "compatibility_flags": ["nodejs_compat"],
+  "workers_dev": true,
+  "preview_urls": false,
+  "vars": { "EXPECTED_SHA256": "9c5d060ea419887fdf2ebb03956593c78b27ab18a974a724e1f958eab62547b5" },
+  "r2_buckets": [{ "binding": "ASSETS", "bucket_name": "stonegate-migration-assets" }]
+}

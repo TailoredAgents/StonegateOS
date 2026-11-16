@@ -3,6 +3,7 @@
 export const siteCheck = String.raw`
 const {spawn}=require('node:child_process');
 const {readFileSync}=require('node:fs');
+const {createHash}=require('node:crypto');
 const {setTimeout:wait}=require('node:timers/promises');
 const child=spawn(process.execPath,['apps/site/node_modules/next/dist/bin/next','start','apps/site','--hostname','127.0.0.1','--port','8081'],{
   cwd:'/app',stdio:'ignore',env:{...process.env,PORT:'8081',API_BASE_URL:'http://127.0.0.1:1',NEXT_PUBLIC_API_BASE_URL:'http://127.0.0.1:1',NEXT_TELEMETRY_DISABLED:'1'}
@@ -31,8 +32,21 @@ let spawnError=false;child.on('error',()=>{spawnError=true;});
     checks.push({route:'static-javascript',status:a.status,pass:a.ok});
    }
   }
+  const compatibility=JSON.parse(readFileSync('/app/infra/cloudflare/site-action-compatibility.json','utf8'));
+  checks.push({route:'existing-form-actions',count:compatibility.existingActionCount,pass:compatibility.ok===true&&compatibility.actionIdsMatch===true&&compatibility.encryptionKeyMatches===true&&compatibility.existingActionCount===202});
+  const legacy=JSON.parse(readFileSync('/app/infra/cloudflare/site-legacy-assets.json','utf8'));
+  let verified=0;
+  for(let offset=0;offset<legacy.length;offset+=4){
+   await Promise.all(legacy.slice(offset,offset+4).map(async asset=>{
+    const r=await fetch('http://127.0.0.1:8081/_next/static/'+asset.key,{signal:AbortSignal.timeout(10000)});
+    const bytes=Buffer.from(await r.arrayBuffer());
+    if(r.status!==200||bytes.length!==asset.bytes||createHash('sha256').update(bytes).digest('hex')!==asset.sha256)throw Error('legacy_static_asset_mismatch');
+    verified++;
+   }));
+  }
+  checks.push({route:'existing-static-assets',verified,pass:verified===115&&verified===compatibility.legacyAssets});
   const publicConfiguration=JSON.parse(readFileSync('/app/infra/cloudflare/site-public-build-manifest.json','utf8'));
-  console.log(JSON.stringify({ok:checks.every(c=>c.pass),checks,publicConfiguration}));
+  console.log(JSON.stringify({ok:checks.every(c=>c.pass),checks,publicConfiguration,compatibility}));
   if(checks.some(c=>!c.pass))process.exitCode=1;
  }catch(e){console.log(JSON.stringify({ok:false,error:e.message,checks}));process.exitCode=1;}
  finally{child.kill('SIGTERM');await wait(500);if(child.exitCode===null)child.kill('SIGKILL');}

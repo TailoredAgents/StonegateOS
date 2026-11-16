@@ -52,7 +52,7 @@ jobs:
           writeFileSync('source/infra/cloudflare/compatibility-patches.json',JSON.stringify(patches));
           const file='source/infra/cloudflare/Dockerfile';let docker=readFileSync(file,'utf8');
           if(!docker.includes('RUN --mount=type=secret,id=site_build_env case')||!docker.includes('node infra/cloudflare/build-site.mjs'))throw Error('Docker template changed');
-          docker=docker.replace('RUN --mount=type=secret,id=site_build_env case','RUN --mount=type=secret,id=site_build_env --mount=type=secret,id=site_compatibility case').replace('node infra/cloudflare/build-site.mjs','STONEGATE_PRIVATE_SITE_BUILD=1 node infra/cloudflare/build-private-site.mjs');
+          docker=docker.replace('RUN --mount=type=secret,id=site_build_env case','RUN --mount=type=secret,id=site_build_env --mount=type=secret,id=site_compatibility --mount=type=secret,id=site_legacy_assets case').replace('node infra/cloudflare/build-site.mjs','STONEGATE_PRIVATE_SITE_BUILD=1 node infra/cloudflare/build-private-site.mjs');
           writeFileSync(file,docker);
           JS
           cat > source/.dockerignore <<'EOF'
@@ -69,10 +69,13 @@ jobs:
           NODE_VERSION: ${{ steps.source.outputs.node }}
           SITE_BUILD_ENV: ${{ secrets.STONEGATE_MIGRATION_SITE_PUBLIC_ENV }}
           SITE_COMPATIBILITY: ${{ secrets.STONEGATE_MIGRATION_SITE_COMPATIBILITY }}
+          ASSET_ARCHIVE_TOKEN: ${{ secrets.STONEGATE_MIGRATION_ASSET_ARCHIVE_TOKEN }}
         run: |
           set -euo pipefail
           test -n "$SITE_BUILD_ENV" && test -n "$SITE_COMPATIBILITY"
-          docker build --secret id=site_build_env,env=SITE_BUILD_ENV --secret id=site_compatibility,env=SITE_COMPATIBILITY --build-arg SERVICE=site --build-arg SOURCE_REVISION="$REVISION" --build-arg NODE_VERSION="$NODE_VERSION" -f source/infra/cloudflare/Dockerfile -t stonegate-private-site source
+          test -n "$ASSET_ARCHIVE_TOKEN"
+          curl --fail --silent --show-error --retry 2 -H "Authorization: Bearer $ASSET_ARCHIVE_TOKEN" https://stonegate-migration-assets.jeffrey-78e.workers.dev/archive -o "$RUNNER_TEMP/site-assets.tar.gz"
+          docker build --secret id=site_build_env,env=SITE_BUILD_ENV --secret id=site_compatibility,env=SITE_COMPATIBILITY --secret id=site_legacy_assets,src="$RUNNER_TEMP/site-assets.tar.gz" --build-arg SERVICE=site --build-arg SOURCE_REVISION="$REVISION" --build-arg NODE_VERSION="$NODE_VERSION" -f source/infra/cloudflare/Dockerfile -t stonegate-private-site source
           docker run --rm --network none stonegate-private-site node infra/cloudflare/native-probe.mjs --self-test
       - name: Publish exclusively to private Cloudflare registry
         env:
