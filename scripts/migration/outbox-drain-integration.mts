@@ -45,21 +45,21 @@ process.env.TEAM_KILL_OUTBOX_DISPATCH='false';
 const {processOutboxBatch}=await import('../../apps/api/src/lib/outbox-processor');
 const {closeDbForWorkerShutdown}=await import('../../apps/api/src/db');
 const fixture=postgres(database.href,{max:1,prepare:false});
-const eventType='migration.shutdown.fixture';
+const shutdownFixtureEventType='migration.shutdown.fixture';
 try {
-  await fixture`insert into outbox_events (type,payload) values (${eventType},'{}'),(${eventType},'{}')`;
+  await fixture`insert into outbox_events (type,payload) values (${shutdownFixtureEventType},'{}'),(${shutdownFixtureEventType},'{}')`;
   let admitted=0;
-  await processOutboxBatch({limit:50,eventTypes:[eventType],shouldContinue:()=>admitted++===0});
-  const [state]=await fixture`select count(*) filter(where processed_at is not null)::int as processed,count(*) filter(where processed_at is null and attempts=0)::int as untouched from outbox_events where type=${eventType}`;
+  await processOutboxBatch({limit:50,eventTypes:[shutdownFixtureEventType],shouldContinue:()=>admitted++===0});
+  const [state]=await fixture`select count(*) filter(where processed_at is not null)::int as processed,count(*) filter(where processed_at is null and attempts=0)::int as untouched from outbox_events where type=${shutdownFixtureEventType}`;
   if(state.processed!==1||state.untouched!==1)throw Error('Drain admitted another event or consumed its retry budget');
-  await processOutboxBatch({limit:50,eventTypes:[eventType],shouldContinue:()=>false});
-  const [stillPending]=await fixture`select count(*)::int as count from outbox_events where type=${eventType} and processed_at is null and attempts=0`;
+  await processOutboxBatch({limit:50,eventTypes:[shutdownFixtureEventType],shouldContinue:()=>false});
+  const [stillPending]=await fixture`select count(*)::int as count from outbox_events where type=${shutdownFixtureEventType} and processed_at is null and attempts=0`;
   if(stillPending.count!==1)throw Error('Stopped worker changed pending work');
-  await processOutboxBatch({limit:50,eventTypes:[eventType]});
-  const [resumed]=await fixture`select count(*)::int as count from outbox_events where type=${eventType} and processed_at is not null and attempts=1`;
+  await processOutboxBatch({limit:50,eventTypes:[shutdownFixtureEventType]});
+  const [resumed]=await fixture`select count(*)::int as count from outbox_events where type=${shutdownFixtureEventType} and processed_at is not null and attempts=1`;
   if(resumed.count!==2)throw Error('Preserved work did not resume exactly once');
   console.log(JSON.stringify({ok:true,batchAdmissionStops:true,pendingRetryBudgetPreserved:true,resumedOnce:true}));
 } finally {
-  await fixture`delete from outbox_events where type=${eventType}`;
+  await fixture`delete from outbox_events where type=${shutdownFixtureEventType}`;
   await fixture.end();await closeDbForWorkerShutdown();
 }
