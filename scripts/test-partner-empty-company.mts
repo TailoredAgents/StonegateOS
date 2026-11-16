@@ -1,13 +1,18 @@
-import {
-  navigatePartnerBrowserPage,
-  reloadPartnerBrowserPage,
-} from "./lib/partner-browser-navigation";
-import { localPartnerRehearsalDatabaseUrl } from "./lib/partner-local-rehearsal";
-import { completeLocalPartnerRateSetup } from "./lib/partner-service-rate-browser-setup";
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { createRequire } from "node:module";
+const { navigatePartnerBrowserPage, reloadPartnerBrowserPage } = createRequire(
+  import.meta.url,
+)(
+  "./lib/partner-browser-navigation",
+) as typeof import("./lib/partner-browser-navigation");
+const { localPartnerRehearsalDatabaseUrl } = createRequire(import.meta.url)(
+  "./lib/partner-local-rehearsal",
+) as typeof import("./lib/partner-local-rehearsal");
+const { completeLocalPartnerRateSetup } = createRequire(import.meta.url)(
+  "./lib/partner-service-rate-browser-setup",
+) as typeof import("./lib/partner-service-rate-browser-setup");
 import { fileURLToPath } from "node:url";
 import test from "node:test";
 import { chromium, webkit, expect, type Page } from "@playwright/test";

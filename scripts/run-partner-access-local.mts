@@ -1,9 +1,11 @@
-import { localPartnerRehearsalDatabaseUrl } from "./lib/partner-local-rehearsal";
 import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createRequire } from "node:module";
+const { localPartnerRehearsalDatabaseUrl } = createRequire(import.meta.url)(
+  "./lib/partner-local-rehearsal",
+) as typeof import("./lib/partner-local-rehearsal");
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 

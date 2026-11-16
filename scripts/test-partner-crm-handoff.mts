@@ -1,10 +1,14 @@
-import { completeLocalPartnerRateSetup } from "./lib/partner-service-rate-browser-setup";
-import { localPartnerRehearsalDatabaseUrl } from "./lib/partner-local-rehearsal";
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { mkdir, writeFile } from "node:fs/promises";
 import { createRequire } from "node:module";
+const { completeLocalPartnerRateSetup } = createRequire(import.meta.url)(
+  "./lib/partner-service-rate-browser-setup",
+) as typeof import("./lib/partner-service-rate-browser-setup");
+const { localPartnerRehearsalDatabaseUrl } = createRequire(import.meta.url)(
+  "./lib/partner-local-rehearsal",
+) as typeof import("./lib/partner-local-rehearsal");
 import { fileURLToPath } from "node:url";
 import test from "node:test";
 import { chromium, expect, type Page } from "@playwright/test";
