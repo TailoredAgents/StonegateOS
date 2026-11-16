@@ -37,7 +37,7 @@ function start(args,extra={}) {
 }
 async function stop(){if(!application||application.exitCode!==null)return;application.kill('SIGTERM');for(let i=0;i<50&&application.exitCode===null;i++)await wait(100);if(application.exitCode===null)application.kill('SIGKILL');}
 async function startApi(){
-  start(['apps/api/node_modules/next/dist/bin/next','start','apps/api','--hostname','127.0.0.1','--port','8082'],{PORT:'8082'});
+  start(['apps/api/node_modules/next/dist/bin/next','start','apps/api','--hostname',process.env.MIGRATION_MODE==='site'?'0.0.0.0':'127.0.0.1','--port','8082'],{PORT:'8082'});
   for(let i=0;i<100;i++){
     if(application.exitCode!==null)throw Error('API_STARTUP_FAILED');
     try{const r=await fetch('http://127.0.0.1:8082/api/healthz',{signal:AbortSignal.timeout(500)});await r.body?.cancel();if(r.ok)return;}catch{}
@@ -66,7 +66,7 @@ async function api(path,options={}){const r=await fetch('http://127.0.0.1:8082'+
     }
     await local(4016,'/__control/scenario',{method:'PUT',headers:{'content-type':'application/json'},body:JSON.stringify({operation:'send_email',scenario:'success',delayMs:3000})});
     const fakeEnvironment={E2E_RUN_ID:'cloudflare-synthetic-'+randomUUID(),TEAM_CRM_AUDIT_MODE:'1',
-      TEAM_KILL_EXTERNAL_SENDS:'false',TEAM_KILL_OUTBOX_DISPATCH:'false',OUTBOX_POLL_INTERVAL_MS:'500',OUTBOX_BATCH_SIZE:'1',
+      TEAM_KILL_EXTERNAL_SENDS:'false',TEAM_KILL_OUTBOX_DISPATCH:'false',OUTBOX_POLL_INTERVAL_MS:'500',OUTBOX_BATCH_SIZE:'50',
       TWILIO_ACCOUNT_SID:'AC00000000000000000000000000000000',TWILIO_AUTH_TOKEN:'twilio-test-token',TWILIO_FROM:'+15555550123',
       TWILIO_API_BASE_URL:'http://127.0.0.1:4010',TWILIO_WEBHOOK_PUBLIC_BASE_URL:'http://127.0.0.1:8082',
       SMTP_HOST:'127.0.0.1',SMTP_PORT:'1025',SMTP_USER:'synthetic',SMTP_PASS:'synthetic',SMTP_FROM:'migration@migration.invalid',SMTP_TIMEOUT_MS:'10000'};
@@ -78,12 +78,15 @@ async function api(path,options={}){const r=await fetch('http://127.0.0.1:8082'+
       if(inFlight||application.exitCode!==null)break;await wait(100);
     }
     check('real-outbox-has-in-flight-email',Boolean(inFlight));
+    const [boundary]=await sql.unsafe('select clock_timestamp() as at');
     const started=performance.now();application.kill('SIGTERM');
     await wait(100);check('shutdown-waits-for-in-flight-delivery',application.exitCode===null);
     for(let i=0;i<250&&application.exitCode===null;i++)await wait(100);
     check('in-flight-outbox-drains-cleanly',application.exitCode===0&&stdout.includes('outbox.worker.drained'),{ms:Math.round(performance.now()-started)});
     const [settled]=await sql.unsafe('select state from external_message_dispatches where id=$1',[inFlight.id]);
     check('in-flight-email-committed-before-exit',settled.state==='succeeded');
+    const [admittedAfterStop]=await sql.unsafe('select count(*)::int as count from external_message_dispatches where created_at > $1',[boundary.at]);
+    check('no-provider-dispatch-admitted-after-stop',admittedAfterStop.count===0);
     // Restart against the same durable queue and the same local provider records.
     await local(4016,'/__control/scenario',{method:'PUT',headers:{'content-type':'application/json'},body:JSON.stringify({operation:'send_email',scenario:'success',delayMs:0})});
     start(['--import','tsx','scripts/outbox-worker.ts'],{...fakeEnvironment,OUTBOX_BATCH_SIZE:'50'});
@@ -134,6 +137,17 @@ async function api(path,options={}){const r=await fetch('http://127.0.0.1:8082'+
     await stop();await startApi();
     const after=await api('/api/admin/contacts?contactId='+encodeURIComponent(contactId),{headers});
     check('record-and-session-survive-api-restart',after.status===200&&after.body.contacts?.some(row=>row.id===contactId&&row.email===email));
+    async function checkSite(expectedRevoked=false) {
+      const origin='https://stonegate-synthetic-validation.jeffrey-78e.workers.dev';
+      const headers={authorization:'Bearer '+process.env.MIGRATION_PROBE_TOKEN,'content-type':'application/json'};
+      try {
+        const response=await fetch(origin+'/site/check',{method:'POST',headers,body:JSON.stringify({adminKey,sessionToken:token,contactId,memberId:member.id,expectedRevoked}),signal:AbortSignal.timeout(120000)});
+        const result=await response.json();
+        check('site-probe-version-matches',response.headers.get('x-stonegate-probe-sha256')===process.env.MIGRATION_SITE_PROBE_HASH);
+        checks.push(...(result.checks??[]));check('coupled-site-api-check',response.ok&&result.ok===true,{status:response.status,...(result.proxyRequests?{proxyRequests:result.proxyRequests}:{})});
+      }finally{const stop=await fetch(origin+'/site/stop',{method:'POST',headers,signal:AbortSignal.timeout(15000)});await stop.body?.cancel();if(!stop.ok)throw Error('SITE_CLEANUP_FAILED');}
+    }
+    if(process.env.MIGRATION_MODE==='site')await checkSite();
     if(process.env.MIGRATION_MODE==='booking') {
       const used=await sql.unsafe("select phone_e164 from contacts where phone_e164 like '+140455501%'");
       const phones=new Set(used.map(row=>row.phone_e164));
@@ -162,6 +176,7 @@ async function api(path,options={}){const r=await fetch('http://127.0.0.1:8082'+
     }
     await sql.unsafe('update team_sessions set revoked_at=now() where id=$1',[sessionId]);
     const revoked=await api('/api/admin/contacts',{headers});check('revoked-session-rejected',revoked.status===401);
+    if(process.env.MIGRATION_MODE==='site')await checkSite(true);
   }
   console.log(JSON.stringify({ok:true,checks}));
  } catch(error) {

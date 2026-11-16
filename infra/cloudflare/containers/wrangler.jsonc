@@ -18,7 +18,7 @@
       "scheduling_policy": "durable_object",
       "images": {
         "base": {
-          "image": "registry.cloudflare.com/78ed83c6e3947c93763acef3a48a5561/stonegate-migration-site@sha256:749911d73dc42eabbdb297b9b33e9f0ce2f63eed0c33311a6be8bc3e9b56ed8a"
+          "image": "registry.cloudflare.com/78ed83c6e3947c93763acef3a48a5561/stonegate-migration-site@sha256:d71c61c28c261dbbd2a6b8faad3ccca28a987208df1bae0d8077872acd1d8d5d"
         }
       }
     },
@@ -27,7 +27,7 @@
       "scheduling_policy": "durable_object",
       "images": {
         "base": {
-          "image": "registry.cloudflare.com/78ed83c6e3947c93763acef3a48a5561/stonegate-migration-api@sha256:37bce0ede509aa98b62e82ff76f19fae65ef01bf702d1ad812ee99f57e5e3e85"
+          "image": "registry.cloudflare.com/78ed83c6e3947c93763acef3a48a5561/stonegate-migration-api@sha256:ac6edd60e7b3ccd000625981aa4f4e9edf3b99879a1388587a32874ac0fc5869"
         }
       }
     },
@@ -36,7 +36,7 @@
       "scheduling_policy": "durable_object",
       "images": {
         "base": {
-          "image": "registry.cloudflare.com/78ed83c6e3947c93763acef3a48a5561/stonegate-migration-outbox@sha256:a4e050fc281bdb593875bc3a34f5b511ff4a289d6abaa79482010edf23a30306"
+          "image": "registry.cloudflare.com/78ed83c6e3947c93763acef3a48a5561/stonegate-migration-outbox@sha256:53f2986b484ce1fd96d085801f208937149b6e0f56206312ac114219a7501257"
         }
       }
     },
@@ -45,7 +45,7 @@
       "scheduling_policy": "durable_object",
       "images": {
         "base": {
-          "image": "registry.cloudflare.com/78ed83c6e3947c93763acef3a48a5561/stonegate-migration-discord@sha256:5c5adaf0b2ec18016ef907b208b01dffbe788fde36a9633729320513d19d360d"
+          "image": "registry.cloudflare.com/78ed83c6e3947c93763acef3a48a5561/stonegate-migration-discord@sha256:1e6fc86c27777d50eb06638684d698a743d5dcd5a3b102f569a2a256bb9b0595"
         }
       }
     }

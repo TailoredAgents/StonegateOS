@@ -3,12 +3,14 @@
   "main": "worker.ts",
   "account_id": "78ed83c6e3947c93763acef3a48a5561",
   "compatibility_date": "2026-11-15",
-  "compatibility_flags": ["nodejs_compat"],
+  "compatibility_flags": [
+    "nodejs_compat"
+  ],
   "workers_dev": true,
   "preview_urls": false,
   "observability": {
     "enabled": true,
-    "head_sampling_rate": 1,
+    "head_sampling_rate": 1
   },
   "containers": [
     {
@@ -16,41 +18,60 @@
       "scheduling_policy": "durable_object",
       "images": {
         "base": {
-          "image": "registry.cloudflare.com/78ed83c6e3947c93763acef3a48a5561/stonegate-migration-api@sha256:37bce0ede509aa98b62e82ff76f19fae65ef01bf702d1ad812ee99f57e5e3e85",
-        },
-      },
+          "image": "registry.cloudflare.com/78ed83c6e3947c93763acef3a48a5561/stonegate-migration-api@sha256:ac6edd60e7b3ccd000625981aa4f4e9edf3b99879a1388587a32874ac0fc5869"
+        }
+      }
     },
     {
       "class_name": "SyntheticOutbox",
       "scheduling_policy": "durable_object",
       "images": {
         "base": {
-          "image": "registry.cloudflare.com/78ed83c6e3947c93763acef3a48a5561/stonegate-migration-outbox@sha256:a4e050fc281bdb593875bc3a34f5b511ff4a289d6abaa79482010edf23a30306",
-        },
-      },
+          "image": "registry.cloudflare.com/78ed83c6e3947c93763acef3a48a5561/stonegate-migration-outbox@sha256:53f2986b484ce1fd96d085801f208937149b6e0f56206312ac114219a7501257"
+        }
+      }
     },
+    {
+      "class_name": "SyntheticSite",
+      "scheduling_policy": "durable_object",
+      "images": {
+        "base": {
+          "image": "registry.cloudflare.com/78ed83c6e3947c93763acef3a48a5561/stonegate-migration-site@sha256:d71c61c28c261dbbd2a6b8faad3ccca28a987208df1bae0d8077872acd1d8d5d"
+        }
+      }
+    }
   ],
   "durable_objects": {
-    "code_update_strategy": { "mode": "immediate" },
+    "code_update_strategy": {
+      "mode": "immediate"
+    },
     "bindings": [
       {
         "name": "API",
-        "class_name": "SyntheticApi",
+        "class_name": "SyntheticApi"
       },
       {
         "name": "OUTBOX",
-        "class_name": "SyntheticOutbox",
+        "class_name": "SyntheticOutbox"
       },
-    ],
+      {
+        "name": "SITE",
+        "class_name": "SyntheticSite"
+      }
+    ]
   },
   "exports": {
     "SyntheticApi": {
       "type": "durable-object",
-      "storage": "sqlite",
+      "storage": "sqlite"
     },
     "SyntheticOutbox": {
       "type": "durable-object",
-      "storage": "sqlite",
+      "storage": "sqlite"
     },
-  },
+    "SyntheticSite": {
+      "type": "durable-object",
+      "storage": "sqlite"
+    }
+  }
 }
