@@ -4,6 +4,7 @@ import { createRequire } from "node:module";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { isIP } from "node:net";
+import https from "node:https";
 import path from "node:path";
 import { setTimeout as wait } from "node:timers/promises";
 const directory = process.argv[2];
@@ -111,11 +112,35 @@ try {
   r = await call("/__gateway/status");
   check("public-ingress-cannot-reach-controls", r.status === 404);
   await r.arrayBuffer();
-  const direct = await fetch(target + "/api/echo", {
-    headers: { "x-migration-gateway-key": operator },
-    signal: AbortSignal.timeout(10000),
+  // Render ingress uses IPv4 here. A normal Worker fetch may instead select
+  // IPv6; compare the same address family rather than treat that as lost identity.
+  const direct = await new Promise((resolve, reject) => {
+    const request = https.get(
+      target + "/api/echo",
+      { family: 4, headers: { "x-migration-gateway-key": operator } },
+      (response) => {
+        let body = "";
+        response.on("data", (chunk) => {
+          body += chunk;
+          if (body.length > 100000)
+            request.destroy(Error("Oversized identity response"));
+        });
+        response.on("error", reject);
+        response.on("end", () => {
+          try {
+            resolve({ status: response.statusCode, body: JSON.parse(body) });
+          } catch {
+            reject(Error("Invalid identity response"));
+          }
+        });
+      },
+    );
+    request.on("error", reject);
+    request.setTimeout(10000, () =>
+      request.destroy(Error("Identity request timed out")),
+    );
   });
-  const directEcho = await direct.json();
+  const directEcho = direct.body;
   const expectedClient = directEcho.headers["cf-connecting-ip"];
   check(
     "independent-client-address-observed",
@@ -149,7 +174,6 @@ try {
   for (const value of ["192.0.2.99", "spoofed", "192.0.2.1, 192.0.2.2"]) {
     r = await call("/api/echo", {
       headers: {
-        "cf-connecting-ip": value,
         "x-forwarded-for": value,
         "x-real-ip": value,
         "x-migration-legacy-client-ip": value,
@@ -164,6 +188,21 @@ try {
         echo.headers["x-forwarded-for"] === expectedClient &&
         echo.headers["cf-connecting-ip"] === expectedClient,
     );
+  }
+  for (const value of ["192.0.2.99", "spoofed"]) {
+    r = await call("/api/echo", { headers: { "cf-connecting-ip": value } });
+    if (r.status === 403) {
+      await r.arrayBuffer();
+      check("forged-cloudflare-identity-rejected-at-edge:" + value, true);
+    } else {
+      echo = await r.json();
+      check(
+        "forged-cloudflare-identity-overwritten:" + value,
+        r.status === 200 &&
+          echo.headers?.["x-forwarded-for"] === expectedClient &&
+          echo.headers?.["cf-connecting-ip"] === expectedClient,
+      );
+    }
   }
   const route = "/api/webhooks/twilio/sms?original=%2f&value=one&value=two";
   const params = {
@@ -272,6 +311,10 @@ try {
   r = await call("/api/counts");
   const counts = await r.json();
   check("public-write-executed-exactly-once", counts.mutations === 1);
+} catch {
+  if (!checks.some((check) => !check.pass))
+    checks.push({ name: "validation-request-failed", pass: false });
+  process.exitCode = 1;
 } finally {
   try {
     const stopped = await promisify(execFile)(

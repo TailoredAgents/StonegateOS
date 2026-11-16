@@ -355,6 +355,10 @@ try {
         state.body.phase === "standby",
     );
   }
+} catch {
+  if (!checks.some((check) => !check.pass))
+    checks.push({ cycle, name: "validation-request-failed", pass: false });
+  process.exitCode = 1;
 } finally {
   if (child) {
     try {
