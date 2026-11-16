@@ -1,0 +1,89 @@
+name: Build private site with existing form compatibility
+on:
+  push:
+    branches: [codex/cloudflare-migration]
+    paths: [.github/workflows/cloudflare-private-site.yml]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  private-site:
+    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/codex/cloudflare-migration'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: migration
+      - name: Read pinned site revision
+        id: source
+        run: |
+          node --input-type=module <<'JS'
+          import {readFileSync,appendFileSync} from 'node:fs';
+          const manifest=JSON.parse(readFileSync('migration/infra/cloudflare/source-manifest.json','utf8'));
+          const revision=manifest.services.site;
+          if(!/^[a-f0-9]{40}$/.test(revision))throw Error('Invalid source revision');
+          appendFileSync(process.env.GITHUB_OUTPUT,'revision='+revision+'\nnode='+manifest.runtimeByService.site+'\n');
+          JS
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ steps.source.outputs.revision }}
+          path: source
+          persist-credentials: false
+      - name: Prepare pinned source and validated patches
+        run: |
+          set -euo pipefail
+          mkdir -p source/infra/cloudflare source/scripts/migration
+          cp migration/infra/cloudflare/{Dockerfile,native-probe.mjs,build-site.mjs,build-private-site.mjs} source/infra/cloudflare/
+          cp migration/scripts/migration/{worker-drain.test.mjs,discord-drain.test.mjs,discord-drain-integration.mjs} source/scripts/migration/
+          cp migration/apps/api/src/__tests__/database-ssl.test.ts source/apps/api/src/__tests__/database-ssl.test.ts
+          node --input-type=module <<'JS'
+          import {readFileSync,writeFileSync} from 'node:fs';
+          import {createHash} from 'node:crypto';
+          import {execFileSync} from 'node:child_process';
+          import {resolve} from 'node:path';
+          const manifest=JSON.parse(readFileSync('migration/infra/cloudflare/source-manifest.json','utf8'));
+          const patches=manifest.compatibilityPatches.filter(p=>!p.services||p.services.includes('site'));
+          for(const patch of patches){
+            if(createHash('sha256').update(readFileSync('migration/'+patch.path)).digest('hex')!==patch.sha256)throw Error('Patch digest mismatch');
+            execFileSync('git',['apply','--check',resolve('migration/'+patch.path)],{cwd:'source'});
+            execFileSync('git',['apply',resolve('migration/'+patch.path)],{cwd:'source'});
+          }
+          writeFileSync('source/infra/cloudflare/compatibility-patches.json',JSON.stringify(patches));
+          const file='source/infra/cloudflare/Dockerfile';let docker=readFileSync(file,'utf8');
+          if(!docker.includes('RUN --mount=type=secret,id=site_build_env case')||!docker.includes('node infra/cloudflare/build-site.mjs'))throw Error('Docker template changed');
+          docker=docker.replace('RUN --mount=type=secret,id=site_build_env case','RUN --mount=type=secret,id=site_build_env --mount=type=secret,id=site_compatibility case').replace('node infra/cloudflare/build-site.mjs','STONEGATE_PRIVATE_SITE_BUILD=1 node infra/cloudflare/build-private-site.mjs');
+          writeFileSync(file,docker);
+          JS
+          cat > source/.dockerignore <<'EOF'
+          .git
+          **/node_modules
+          **/.env*
+          **/.dev.vars*
+          output
+          artifacts
+          EOF
+      - name: Build and verify private site image
+        env:
+          REVISION: ${{ steps.source.outputs.revision }}
+          NODE_VERSION: ${{ steps.source.outputs.node }}
+          SITE_BUILD_ENV: ${{ secrets.STONEGATE_MIGRATION_SITE_PUBLIC_ENV }}
+          SITE_COMPATIBILITY: ${{ secrets.STONEGATE_MIGRATION_SITE_COMPATIBILITY }}
+        run: |
+          set -euo pipefail
+          test -n "$SITE_BUILD_ENV" && test -n "$SITE_COMPATIBILITY"
+          docker build --secret id=site_build_env,env=SITE_BUILD_ENV --secret id=site_compatibility,env=SITE_COMPATIBILITY --build-arg SERVICE=site --build-arg SOURCE_REVISION="$REVISION" --build-arg NODE_VERSION="$NODE_VERSION" -f source/infra/cloudflare/Dockerfile -t stonegate-private-site source
+          docker run --rm --network none stonegate-private-site node infra/cloudflare/native-probe.mjs --self-test
+      - name: Publish exclusively to private Cloudflare registry
+        env:
+          REGISTRY_USER: ${{ secrets.CF_MIGRATION_PRIVATE_REGISTRY_USER }}
+          REGISTRY_PASSWORD: ${{ secrets.CF_MIGRATION_PRIVATE_REGISTRY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          test -n "$REGISTRY_USER" && test -n "$REGISTRY_PASSWORD"
+          trap 'docker logout registry.cloudflare.com >/dev/null 2>&1 || true' EXIT
+          printf '%s' "$REGISTRY_PASSWORD" | docker login registry.cloudflare.com -u "$REGISTRY_USER" --password-stdin
+          image="registry.cloudflare.com/78ed83c6e3947c93763acef3a48a5561/stonegate-migration-site-private:${GITHUB_SHA}"
+          docker tag stonegate-private-site "$image"
+          docker push "$image"
+          docker image inspect "$image" --format '{{json .RepoDigests}}' >> "$GITHUB_STEP_SUMMARY"
