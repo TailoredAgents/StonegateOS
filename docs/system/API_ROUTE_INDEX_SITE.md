@@ -1,8 +1,8 @@
 # API Route Index (apps/site)
 
-Generated from source. Fingerprint: `8b8051df997d9347`.
+Generated from source. Fingerprint: `ec9b005c43acfbad`.
 
-Routes discovered: 129
+Routes discovered: 130
 
 This index inventories exported HTTP handlers. It does not replace endpoint authentication, request-schema, response-schema, or side-effect documentation.
 
@@ -120,6 +120,7 @@ This index inventories exported HTTP handlers. It does not replace endpoint auth
 | POST | `/api/team/sales/touch` | `apps/site/src/app/api/team/sales/touch/route.ts` |
 | POST | `/api/team/settings/sessions/revoke` | `apps/site/src/app/api/team/settings/sessions/revoke/route.ts` |
 | POST | `/api/team/simulated-chat` | `apps/site/src/app/api/team/simulated-chat/route.ts` |
+| GET, POST | `/api/team/sms-campaigns/[operation]` | `apps/site/src/app/api/team/sms-campaigns/[operation]/route.ts` |
 | GET, POST | `/api/team/sms-campaigns` | `apps/site/src/app/api/team/sms-campaigns/route.ts` |
 | POST | `/api/team/stt` | `apps/site/src/app/api/team/stt/route.ts` |
 | GET | `/api/winter-sale` | `apps/site/src/app/api/winter-sale/route.ts` |

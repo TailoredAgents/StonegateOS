@@ -1,8 +1,8 @@
 # API Route Index (apps/api)
 
-Generated from source. Fingerprint: `7fd0e01561c9b130`.
+Generated from source. Fingerprint: `60173bccf8bc6289`.
 
-Routes discovered: 492
+Routes discovered: 496
 
 This index inventories exported HTTP handlers. It does not replace endpoint authentication, request-schema, response-schema, or side-effect documentation.
 
@@ -250,7 +250,11 @@ This index inventories exported HTTP handlers. It does not replace endpoint auth
 | POST | `/api/admin/seo/posts/[postId]/review` | `apps/api/app/api/admin/seo/posts/[postId]/review/route.ts` |
 | POST | `/api/admin/seo/run` | `apps/api/app/api/admin/seo/run/route.ts` |
 | GET | `/api/admin/seo/status` | `apps/api/app/api/admin/seo/status/route.ts` |
+| GET, POST | `/api/admin/sms-campaigns/drafts` | `apps/api/app/api/admin/sms-campaigns/drafts/route.ts` |
+| GET, POST | `/api/admin/sms-campaigns/qualification` | `apps/api/app/api/admin/sms-campaigns/qualification/route.ts` |
 | GET, POST | `/api/admin/sms-campaigns` | `apps/api/app/api/admin/sms-campaigns/route.ts` |
+| GET, POST | `/api/admin/sms-campaigns/single` | `apps/api/app/api/admin/sms-campaigns/single/route.ts` |
+| GET | `/api/admin/sms-campaigns/single/status` | `apps/api/app/api/admin/sms-campaigns/single/status/route.ts` |
 | POST | `/api/admin/stripe/backfill` | `apps/api/app/api/admin/stripe/backfill/route.ts` |
 | GET | `/api/admin/system/health` | `apps/api/app/api/admin/system/health/route.ts` |
 | POST | `/api/admin/team/break-glass/exchange` | `apps/api/app/api/admin/team/break-glass/exchange/route.ts` |
