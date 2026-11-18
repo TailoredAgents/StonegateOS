@@ -1,6 +1,6 @@
 # Individual promotional SMS
 
-November 18, 2026. Implement a usable, owner-approved one-contact release using the existing campaign outbox and inbox. No customer sends are authorized by implementation or testing. The owner's follow-up asks for activation when ready; complete local proof first, then resolve the original deployment/import approval boundary against the concrete release.
+November 18, 2026. Implement a usable, owner-approved one-contact release using the existing campaign outbox and inbox. No customer sends are authorized by implementation or testing. The owner’s follow-up asks for the feature to be usable when finished, authorizing deployment and activation after local proof. Live recipient import and actual test/customer SMS still need specific approval.
 
 - Preserve individually written copy in immutable versions, with exact contact IDs and a full-file dry-run/import digest. Test 1,318 fictional drafts; do not import the real list during development.
 - Preview the exact recipient, configured sender, complete reviewed text, 30% offer, and every hold. Owner action approval binds that snapshot. Each release queues at most one message and returns its real inbox identity/state.
@@ -17,4 +17,4 @@ November 18, 2026. Implement a usable, owner-approved one-contact release using 
 - Final rewritten source contains 1,278 usable drafts of 1,318 selected IDs; 40 are explicitly withheld. Local adapter writes a blocked report and never substitutes old copy.
 - Production was inspected read-only. Sender exists, but no campaign or promotional verification/rate/test-number setup is configured. No production settings changed.
 - Detailed tool contract, evidence and release/refresh steps: [individual SMS runbook](../runbooks/individual-promotional-sms.md).
-- Deployment/live data import/real test SMS remain subject to the owner's original explicit approval boundary. The requested usable activation is the next release step; do not fake provider verification or bypass per-contact holds.
+- The owner’s follow-up authorizes deployment and activation after proof. Live data import and real test SMS still require specific approval. Do not fake provider verification or bypass per-contact holds.
