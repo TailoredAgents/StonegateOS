@@ -36,6 +36,34 @@ const tool = (
 // Every target is static and reviewed. There is no user-supplied URL or method.
 export const AGENT_CATALOG: CatalogTool[] = [
   tool(
+    "promotional_sms_import",
+    "Import existing exact texts; never rewrite. body: {action: dry_run or import,campaignId,sourceHash: SHA256 of source,records:[{contactId,body,sourceReference}],reviewHash?: returned by dry_run}. Run dry_run first, inspect every issue, then import same records/reviewHash with a new stable requestKey. Up to 2000 records, 1 MiB. Requires owner-delegated access; no dashboard upload needed.",
+    "/api/admin/sms-campaigns/drafts",
+    "POST",
+    ["marketing.write", "contacts.read"],
+    true,
+    () => import("../../app/api/admin/sms-campaigns/drafts/route"),
+  ),
+  tool(
+    "outreach_qualification_read",
+    "Read current outreach qualification/version. query:{contactId}. Missing record means expectedVersion 0 for initial review.",
+    "/api/admin/sms-campaigns/qualification",
+    "GET",
+    ["marketing.read", "contacts.read"],
+    false,
+    () => import("../../app/api/admin/sms-campaigns/qualification/route"),
+  ),
+  tool(
+    "outreach_qualification_record",
+    "Record reviewed evidence as owner delegate. body:{contactId,expectedVersion,qualification:past_customer|prior_inquiry|quote_only|unverified,facebookStatus:clear|excluded|uncertain,holds:string[],externalLastActivityAt:ISO|null,evidenceReference,reviewedAt:ISO}. Preserve actual findings; never invent consent or clear exclusions without evidence. Does not grant consent. Stable requestKey required.",
+    "/api/admin/sms-campaigns/qualification",
+    "POST",
+    ["marketing.write", "contacts.write"],
+    true,
+    () => import("../../app/api/admin/sms-campaigns/qualification/route"),
+  ),
+
+  tool(
     "promotional_sms_drafts",
     "Read saved individual promotional drafts. query: campaignId, optional contactId, limit and offset. Copy is immutable and versioned.",
     "/api/admin/sms-campaigns/drafts",
@@ -377,12 +405,13 @@ export const AGENT_CATALOG: CatalogTool[] = [
   ),
   tool(
     "campaigns_command",
-    "Create/save/review/pause/resume/end/test/release campaign through existing controls. body is CampaignCommand. Release approves a reviewed batch of up to 25, not each recipient. Consent changes are owner-only outside MCP.",
+    "Manage campaign create/save/review/pause/resume/end/test/release and record existing consent evidence. Owner-delegated connections execute authorized work directly without dashboard approvals. Individual terms use deliveryMode: individual_drafts, audience: customers_and_leads, discountBasisPoints: 3000. Consent body: action:consent,contactId,status:granted|revoked,source,evidence,evidenceReference?,capturedAt:ISO,timeZone. Never infer consent merely from a phone number or prior inquiry.",
     "/api/admin/sms-campaigns",
     "POST",
     [
       "marketing.write",
       "contacts.read",
+      "contacts.write",
       "messages.read",
       "messages.send",
       "policy.write",
@@ -412,7 +441,12 @@ export function catalogTool(name: string) {
   if (!found) throw new Error("Unknown tool");
   return found;
 }
-export function needsActionApproval(tool: CatalogTool, input: ToolInput) {
+export function needsActionApproval(
+  tool: CatalogTool,
+  input: ToolInput,
+  mode: "per_action" | "owner_delegated" = "per_action",
+) {
+  if (mode === "owner_delegated") return false;
   if (tool.name === "campaigns_command") {
     if (input.body["action"] === "consent")
       throw new Error(

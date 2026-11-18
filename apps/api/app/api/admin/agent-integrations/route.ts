@@ -27,7 +27,11 @@ const Command = z.discriminatedUnion("action", [
   z.object({ action: z.literal("revoke"), id: z.string().uuid() }).strict(),
   z
     .object({
-      action: z.literal("enable_individual_sms"),
+      action: z.enum([
+        "enable_individual_sms",
+        "enable_owner_delegation",
+        "require_action_approval",
+      ]),
       id: z.string().uuid(),
     })
     .strict(),
@@ -60,7 +64,7 @@ export async function GET(request: NextRequest) {
     );
   const db = getDb();
   const integrations = await db.execute(
-    sql`select id,name,tools,expires_at,revoked_at,last_used_at,created_at from agent_integrations where owner_id=${ownerId}::uuid order by created_at desc limit 100`,
+    sql`select id,name,tools,approval_mode,expires_at,revoked_at,last_used_at,created_at from agent_integrations where owner_id=${ownerId}::uuid order by created_at desc limit 100`,
   );
   const operations = await db.execute(
     sql`select o.id,o.integration_id,i.name,o.tool,o.payload,o.payload_hash,o.status,o.expires_at,o.result,o.created_at from agent_operations o join agent_integrations i on i.id=o.integration_id where i.owner_id=${ownerId}::uuid order by (o.status='pending') desc,o.created_at desc limit 100`,
@@ -124,6 +128,22 @@ export async function POST(request: NextRequest) {
       );
       if (!rows.length)
         return NextResponse.json({ error: "Not found" }, { status: 404 });
+    } else if (
+      command.action === "enable_owner_delegation" ||
+      command.action === "require_action_approval"
+    ) {
+      const mode =
+        command.action === "enable_owner_delegation"
+          ? "owner_delegated"
+          : "per_action";
+      const rows = await tx.execute(
+        sql`update agent_integrations set approval_mode=${mode},tools=(select jsonb_agg(distinct capability) from jsonb_array_elements(tools || ${JSON.stringify(ALL_AGENT_TOOLS)}::jsonb) capability) where id=${command.id}::uuid and owner_id=${ownerId}::uuid and revoked_at is null and expires_at>now() returning id`,
+      );
+      if (!rows.length)
+        return NextResponse.json(
+          { error: "Active connection not found" },
+          { status: 404 },
+        );
     } else if (command.action === "enable_individual_sms") {
       const capabilities = AGENT_CATALOG.filter((t) =>
         t.name.startsWith("promotional_sms_"),
@@ -136,7 +156,7 @@ export async function POST(request: NextRequest) {
           { error: "Active connection not found" },
           { status: 404 },
         );
-    } else {
+    } else if (command.action === "approve" || command.action === "reject") {
       const rows =
         await tx.execute(sql`update agent_operations o set status=${command.action === "approve" ? "approved" : "rejected"},approved_by=${ownerId}::uuid,approved_at=now(),updated_at=now()
       from agent_integrations i where o.integration_id=i.id and i.owner_id=${ownerId}::uuid and i.revoked_at is null and i.expires_at>now()
@@ -160,7 +180,11 @@ export async function POST(request: NextRequest) {
       action: `agent.integration.${command.action}`,
       entityType:
         command.action === "revoke" ||
-        command.action === "enable_individual_sms"
+        [
+          "enable_individual_sms",
+          "enable_owner_delegation",
+          "require_action_approval",
+        ].includes(command.action)
           ? "agent_integration"
           : "agent_operation",
       entityId: command.id,

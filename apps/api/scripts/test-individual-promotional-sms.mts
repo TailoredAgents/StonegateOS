@@ -220,6 +220,21 @@ try {
     "promotional_sms_drafts",
   ])
     assert(discovered.tools.some((t) => t.name === name));
+  await http("/api/admin/agent-integrations", {
+    action: "enable_owner_delegation",
+    id: grant["id"],
+  });
+  async function delegatedWrite(
+    tool: string,
+    body: unknown,
+    key = `delegated-${randomUUID()}`,
+  ) {
+    const result = await call(tool, { body, requestKey: key });
+    assert.equal(result["status"], "succeeded", JSON.stringify(result));
+    const response = record(result["result"]);
+    assert.equal(response["status"], 200, JSON.stringify(response));
+    return record(response["body"]);
+  }
   const recipientIds = Array.from({ length: 1318 }, () => randomUUID());
   const contacts = recipientIds.map((contactId, i) => ({
     id: contactId,
@@ -254,7 +269,7 @@ try {
     stackingPolicy: "no_stacking",
     introduction: "Fictional test only",
   };
-  const created = await http("/api/admin/sms-campaigns", {
+  const created = await delegatedWrite("campaigns_command", {
     action: "create",
     terms,
   });
@@ -269,7 +284,7 @@ try {
     sourceHash: sha(JSON.stringify(records)),
     records,
   };
-  const before = await http("/api/admin/sms-campaigns/drafts", {
+  const before = await delegatedWrite("promotional_sms_import", {
     ...importInput,
     action: "dry_run",
   });
@@ -282,17 +297,15 @@ try {
   >`select count(*)::int count from sms_campaign_drafts`;
   assert.equal(noImport!.count, 0);
   const importKey = `fixture-import-${randomUUID()}`;
-  const imported = await http(
-    "/api/admin/sms-campaigns/drafts",
+  const imported = await delegatedWrite(
+    "promotional_sms_import",
     { ...importInput, action: "import", reviewHash: report["reviewHash"] },
-    ownerToken,
     importKey,
   );
   assert.equal(record(imported["data"])["imported"], 1318);
-  await http(
-    "/api/admin/sms-campaigns/drafts",
+  await delegatedWrite(
+    "promotional_sms_import",
     { ...importInput, action: "import", reviewHash: report["reviewHash"] },
-    ownerToken,
     importKey,
   );
   const drafts = await db<
@@ -311,7 +324,7 @@ try {
   pass(
     "1,318 fictional drafts: zero-write dry run, atomic reviewed import, exact wording, idempotent retry",
   );
-  const invalidImport = await http("/api/admin/sms-campaigns/drafts", {
+  const invalidImport = await delegatedWrite("promotional_sms_import", {
     ...importInput,
     action: "dry_run",
     records: [
@@ -336,7 +349,7 @@ try {
     "Dry-run rejects duplicate/missing CRM IDs and conflicting offer wording without partial import",
   );
   for (let i = 0; i < 12; i++) {
-    await http("/api/admin/sms-campaigns/qualification", {
+    await delegatedWrite("outreach_qualification_record", {
       contactId: recipientIds[i],
       expectedVersion: 0,
       qualification: i % 2 ? "quote_only" : "prior_inquiry",
@@ -348,7 +361,7 @@ try {
       evidenceReference: `fictional-secure-evidence:qualification-${i}`,
       reviewedAt: now.toISOString(),
     });
-    await http("/api/admin/sms-campaigns", {
+    await delegatedWrite("campaigns_command", {
       action: "consent",
       contactId: recipientIds[i],
       status: "granted",
@@ -359,6 +372,13 @@ try {
       timeZone: zone,
     });
   }
+  pass(
+    "Owner-delegated MCP created campaign, dry-ran/imported 1,318 exact drafts, recorded qualification and consent evidence without owner screens",
+  );
+  await http("/api/admin/agent-integrations", {
+    action: "require_action_approval",
+    id: grant["id"],
+  });
   const { campaignTestFingerprint, campaignReplyContext } = await import(
     "../src/lib/sms-campaigns"
   );
@@ -597,8 +617,140 @@ try {
   pass(
     "Recipient offer and suggested-reply context are 30%; public/global 40% behavior remains unchanged",
   );
+  // Prove the owner's selected five can run sequentially with no per-message dashboard approvals.
+  await http("/api/admin/agent-integrations", {
+    action: "enable_owner_delegation",
+    id: grant["id"],
+  });
+  const delegatedCampaign = record(
+    (
+      await delegatedWrite("campaigns_command", {
+        action: "create",
+        terms: { ...terms, name: "Fictional delegated five" },
+      })
+    )["data"],
+  );
+  const delegatedCampaignId = id(delegatedCampaign["campaignId"]);
+  const five = Array.from({ length: 5 }, (_, i) => ({
+    contactId: randomUUID(),
+    body: `Fictional saved message ${i + 1}: 30% off.`,
+    sourceReference: `fictional-delegated-five:${i}`,
+  }));
+  for (const [i, row] of five.entries()) {
+    const phone = `+1202555018${i}`;
+    await db`insert into contacts(id,first_name,last_name,phone,phone_e164) values(${row.contactId},'Fictional','Delegated five',${phone},${phone})`;
+    await delegatedWrite("outreach_qualification_record", {
+      contactId: row.contactId,
+      expectedVersion: 0,
+      qualification: "prior_inquiry",
+      facebookStatus: "clear",
+      holds: [],
+      externalLastActivityAt: new Date(
+        now.getTime() - 90 * 86400_000,
+      ).toISOString(),
+      evidenceReference: "fictional-existing-evidence:five",
+      reviewedAt: now.toISOString(),
+    });
+    await delegatedWrite("campaigns_command", {
+      action: "consent",
+      contactId: row.contactId,
+      status: "granted",
+      source: "fictional existing evidence",
+      evidence:
+        "Fictional prior affirmative permission, not inferred from inquiry",
+      evidenceReference: "fictional-existing-evidence:five",
+      capturedAt: new Date(now.getTime() - 90 * 86400_000).toISOString(),
+      timeZone: zone,
+    });
+  }
+  const fiveImport = {
+    campaignId: delegatedCampaignId,
+    records: five,
+    sourceHash: sha(JSON.stringify(five)),
+  };
+  const fiveDry = record(
+    (
+      await delegatedWrite("promotional_sms_import", {
+        ...fiveImport,
+        action: "dry_run",
+      })
+    )["data"],
+  );
+  await delegatedWrite("promotional_sms_import", {
+    ...fiveImport,
+    action: "import",
+    reviewHash: fiveDry["reviewHash"],
+  });
+  const initialProviderCount = providerCalls.length;
+  await delegatedWrite("campaigns_command", {
+    action: "test",
+    campaignId: delegatedCampaignId,
+    version: 1,
+    testPhone: "+12025550199",
+  });
+  await processOutboxBatch({ eventTypes: ["message.send"], limit: 20 });
+  assert.equal(
+    providerCalls.length,
+    initialProviderCount + 1,
+    "MCP owner test reached simulated provider",
+  );
+  await webhook("+12025550100", "", providerCalls.at(-1)!.sid, "delivered");
+  const fiveReceipts: Record<string, unknown>[] = [];
+  for (const [i, row] of five.entries()) {
+    const listed = record(
+      (
+        await call("promotional_sms_drafts", {
+          query: { campaignId: delegatedCampaignId, contactId: row.contactId },
+        })
+      )["body"],
+    );
+    const draft = record(z.array(z.unknown()).parse(listed["records"])[0]);
+    const selection = {
+      contactId: row.contactId,
+      draftId: draft["id"],
+      version: draft["version"],
+    };
+    const preview = record(
+      (await call("promotional_sms_preview", { query: selection }))["body"],
+    );
+    assert.equal(preview["eligible"], true, JSON.stringify(preview));
+    const args = {
+      body: {
+        ...selection,
+        review: preview["review"],
+        reviewExpiresAt: preview["reviewExpiresAt"],
+      },
+      requestKey: `delegated-five-${row.contactId}`,
+    };
+    const sent = await call("promotional_sms_release", args);
+    assert.equal(sent["status"], "succeeded", JSON.stringify(sent));
+    const receipt = record(record(record(sent["result"])["body"])["data"]);
+    assert.equal(receipt["released"], 1);
+    // Move only the synthetic pacing timestamp; no production timing is bypassed.
+    await db`update sms_campaigns set next_send_at=now()-interval '1 minute' where id=${delegatedCampaignId}`;
+    await processOutboxBatch({ eventTypes: ["message.send"], limit: 20 });
+    assert.equal(providerCalls.length, initialProviderCount + 2 + i);
+    assert.equal(providerCalls.at(-1)!.body, row.body);
+    await call("promotional_sms_release", args);
+    await processOutboxBatch({ eventTypes: ["message.send"], limit: 20 });
+    assert.equal(
+      providerCalls.length,
+      initialProviderCount + 2 + i,
+      "Retry must not duplicate",
+    );
+    await webhook(`+1202555018${i}`, "Fictional customer reply");
+    const [incoming] = await db<
+      { thread_id: string }[]
+    >`select thread_id from conversation_messages where thread_id=${receipt["threadId"] as string} and direction='inbound' order by created_at desc limit 1`;
+    assert.equal(incoming?.thread_id, receipt["threadId"]);
+    fiveReceipts.push(receipt);
+  }
+  pass(
+    "MCP-only owner test plus five sequential exact-text sends; each inbound reply shares its outbound thread; retries add zero sends; no per-action dashboard approvals",
+  );
   const proof = {
     fictionalOnly: true,
+    delegatedFive: fiveReceipts,
     realSmsSent: 0,
     draftsImported: 1318,
     tool: "promotional_sms_release",

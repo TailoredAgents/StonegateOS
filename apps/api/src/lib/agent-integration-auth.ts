@@ -8,6 +8,7 @@ export type AgentIntegration = {
   name: string;
   owner_id: string;
   tools: string[];
+  approval_mode?: "per_action" | "owner_delegated";
   expires_at: Date;
   ownerPermissions: string[];
 };
@@ -24,7 +25,7 @@ export async function authenticateIntegration(
   const bearer = request.headers.get("authorization") ?? "";
   if (!/^Bearer sg_agent_[A-Za-z0-9_-]{43}$/i.test(bearer)) return null;
   const [row] = await getDb().execute(sql`
-    select i.id,i.name,i.owner_id,i.tools,i.expires_at,r.permissions,m.permissions_grant,m.permissions_deny from agent_integrations i
+    select i.id,i.name,i.owner_id,i.tools,i.approval_mode,i.expires_at,r.permissions,m.permissions_grant,m.permissions_deny from agent_integrations i
     join team_members m on m.id=i.owner_id join team_roles r on r.id=m.role_id
     where i.token_hash=${tokenHash(bearer.slice(7))} and i.revoked_at is null
       and i.expires_at>now() and m.active=true and r.slug='owner'`);
@@ -41,11 +42,15 @@ export async function authenticateIntegration(
 }
 export async function integrationStillActive(integration: AgentIntegration) {
   const [row] = await getDb().execute(sql`
-    select i.id,r.permissions,m.permissions_grant,m.permissions_deny from agent_integrations i join team_members m on m.id=i.owner_id
+    select i.id,i.tools,i.approval_mode,r.permissions,m.permissions_grant,m.permissions_deny from agent_integrations i join team_members m on m.id=i.owner_id
     join team_roles r on r.id=m.role_id where i.id=${integration.id}::uuid
     and i.revoked_at is null and i.expires_at>now() and m.active=true and r.slug='owner'`);
   if (!row || process.env["AGENT_INTEGRATIONS_DISABLED"] === "true")
     throw new Error("Integration revoked or expired");
+  integration.tools = row["tools"] as string[];
+  integration.approval_mode = row[
+    "approval_mode"
+  ] as AgentIntegration["approval_mode"];
   integration.ownerPermissions = computeEffectivePermissions({
     rolePermissions: row["permissions"] as string[],
     grant: row["permissions_grant"] as string[],

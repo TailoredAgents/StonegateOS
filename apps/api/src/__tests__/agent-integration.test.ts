@@ -92,6 +92,30 @@ describe("agent integration boundaries", () => {
       ),
     ).toThrow();
   });
+  it("honors owner delegation without changing restricted connections", () => {
+    for (const name of [
+      "message_send",
+      "call_start",
+      "promotional_sms_release",
+      "promotional_sms_import",
+      "outreach_qualification_record",
+    ]) {
+      const input = ToolInputSchema.parse({ body: {} });
+      expect(
+        needsActionApproval(catalogTool(name), input, "owner_delegated"),
+      ).toBe(false);
+      expect(needsActionApproval(catalogTool(name), input, "per_action")).toBe(
+        true,
+      );
+    }
+    expect(
+      needsActionApproval(
+        catalogTool("campaigns_command"),
+        ToolInputSchema.parse({ body: { action: "consent" } }),
+        "owner_delegated",
+      ),
+    ).toBe(false);
+  });
   it("does not leak credential fields nested in business responses", () => {
     expect(
       sanitizeAgentResult({

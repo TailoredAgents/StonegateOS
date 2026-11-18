@@ -1289,6 +1289,13 @@
       "when": 1796947200000,
       "tag": "0186_individual_promotional_sms",
       "breakpoints": true
+    },
+    {
+      "idx": 184,
+      "version": "7",
+      "when": 1797033600000,
+      "tag": "0187_agent_owner_delegation",
+      "breakpoints": true
     }
   ]
 }

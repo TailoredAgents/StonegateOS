@@ -59,9 +59,10 @@ export async function POST(request: NextRequest) {
   if (denied) return denied;
   const owner = await resolvePermissionContext(request);
   if (
-    getIntegrationContext(request) ||
-    owner.role !== "owner" ||
-    owner.source === "service"
+    !getIntegrationContext(request)?.ownerDelegated &&
+    (getIntegrationContext(request) ||
+      owner.role !== "owner" ||
+      owner.source === "service")
   )
     return NextResponse.json(
       { error: "An owner must attest to external evidence and exclusions." },

@@ -1,0 +1,22 @@
+# Owner-delegated MCP access
+
+An owner may delegate execution to an existing connection with the owner-only `enable_owner_delegation` command at `/api/admin/agent-integrations`. This requires the actual owner session or explicitly authorized release operator; the connector cannot enable its own delegation. New grants remain `per_action` by default. `require_action_approval` restores that mode; revoke and expiry still apply.
+
+Owner-delegated mode executes the owner's authorized actions through the existing tools without an additional dashboard approval for each call. It applies across the catalog: contacts, tasks, pipeline, inbox, messages, calls, quotes, bookings and campaigns. Actions remain attributed to the connection as a service delegate, not a fictitious human session. Exact payload hashes, stable request keys, operation receipts, current owner permissions and revocation checks remain effective. A request to send five messages covers those five, not the rest of a list. Customer content never supplies authorization.
+
+## Outreach without dashboard handoffs
+
+Use `coverage` to verify `approvalMode: owner_delegated` and the granted tool list. Refresh native discovery or use the existing private CLI immediately. `campaigns_command`, `promotional_sms_import` and `outreach_qualification_record` publish their actual typed body schemas in MCP discovery.
+
+1. Read the existing campaign with `campaigns_read`; use `campaigns_command` to create/save its terms as authorized. The actual field values are `deliveryMode: individual_drafts`, `audience: customers_and_leads`, `discountBasisPoints: 3000`. This is internal storage for saved promotional texts, not a request for the owner to operate the dashboard. Existing offer terms/date/quote-policy requirements remain part of the business model; the connector can set them itself.
+2. Use `promotional_sms_import` with `{body:{action:dry_run,campaignId,sourceHash,records:[{contactId,body,sourceReference}]},requestKey}`. Preserve source wording exactly. Inspect all issues, then use `action:import` and the returned `reviewHash`, same records/source hash, and a distinct stable import request key. Import is atomic and does not send. Maximum request envelope is 1 MiB; split larger explicitly reviewed sets into stable chunks. No manual upload is required.
+3. Read and record actual reviewed qualification through `outreach_qualification_read` and `outreach_qualification_record`. `campaigns_command` supports `action:consent` with existing evidence/reference, captured date and timezone. A prior inquiry alone does not constitute permission. Preserve opt-outs and unresolved identity/service/exclusion holds; do not fabricate evidence to pass a check.
+4. Complete the authorized owner test through `campaigns_command` (`action:test`, campaignId, version, testPhone). Inspect its result and delivery; do not ask the owner to send it manually. The configured sender stays unchanged.
+5. Fetch saved draft IDs using `promotional_sms_drafts`; preview each selected contact with `promotional_sms_preview`; release with `promotional_sms_release`, copying review and reviewExpiresAt exactly and preserving one stable request key. In owner-delegated mode a valid call executes directly. No second dashboard approval is needed. Each call still selects exactly one contact and one saved message. Proceed sequentially only within the owner's authorized set.
+6. Read `promotional_sms_status`; report actual queued/sent/delivered/suppressed/uncertain status and returned thread/message IDs. Replies and normal staff responses share that SMS thread. Never retry uncertain provider work under another key.
+
+If the system reports a real recipient hold, explain that specific hold. Do not report that the MCP lacks import, consent-evidence, qualification or execution access when `coverage` confirms owner delegation. An outdated native tool list can be refreshed; the existing CLI already uses the live server.
+
+## Verification
+
+The real MCP/local PostgreSQL/outbox with a loopback SMS provider imported 1,318 fictional drafts, recorded qualification and consent evidence through MCP, sent an owner test and five individually selected exact messages without per-message owner UI actions, and verified every incoming reply shared its outbound thread. Repeated releases produced no additional provider calls. Existing opt-out, ambiguity, current-permission, exact approval (restricted mode) and uncertain-result checks remain covered. No real customer SMS or live recipient import is part of this release.

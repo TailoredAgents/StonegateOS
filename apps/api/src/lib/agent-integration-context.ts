@@ -7,6 +7,7 @@ export type IntegrationContext = {
   label: string;
   permissions: TeamPermission[];
   mutationAllowed: boolean;
+  ownerDelegated?: boolean;
 };
 
 // Only requests constructed by the in-process tool dispatcher can acquire this

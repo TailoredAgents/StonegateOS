@@ -2,6 +2,8 @@
 
 Website, API and outbox deployed and sending enabled November 18, 2026. This uses Stonegate's normal SMS inbox, durable outbox, provider dispatch ledger and owner action approvals. One release accepts one existing contact and one immutable saved draft. No body editing, footer insertion, ordinary-composer workaround or staff impersonation is involved.
 
+Owner-delegated connections can now import drafts, record reviewed qualification/consent evidence and execute authorized actions without per-message dashboard approval. See [owner-delegated access](agent-owner-delegation.md). The per-action approval instructions below apply to restricted connections.
+
 ## MCP tools
 
 | Tool                      | Input                                                                                              | Result                                                                                                                                                          |

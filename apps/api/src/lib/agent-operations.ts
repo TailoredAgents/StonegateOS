@@ -82,6 +82,7 @@ async function invoke(
     label: integration.name,
     permissions: tool.permissions,
     mutationAllowed: !!operationId,
+    ownerDelegated: integration.approval_mode === "owner_delegated",
   });
   const response = await invokeCatalogHandler(tool, request, input.params);
   const raw = await response.text();
@@ -100,8 +101,8 @@ export async function runCatalogTool(
   name: string,
   input: ToolInput,
 ) {
-  requireTool(integration, name);
   await integrationStillActive(integration);
+  requireTool(integration, name);
   const tool = catalogTool(name);
   if (tool.method === "GET") {
     await accessEvent(integration, name, "attempted");
@@ -117,9 +118,12 @@ export async function runCatalogTool(
     throw new Error(
       "Writes require a stable requestKey (16-200 characters); reuse it after a timeout",
     );
-  if (JSON.stringify(input).length > 32_768)
+  if (
+    Buffer.byteLength(JSON.stringify(input)) >
+    (name === "promotional_sms_import" ? 1_048_576 : 32_768)
+  )
     throw new Error("Action is too large");
-  const approval = needsActionApproval(tool, input);
+  const approval = needsActionApproval(tool, input, integration.approval_mode);
   const hash = payloadHash(input);
   const rows = await getDb()
     .execute(sql`insert into agent_operations(integration_id,request_key,tool,payload,payload_hash,status,expires_at)
@@ -138,7 +142,11 @@ export async function runCatalogTool(
     await accessEvent(
       integration,
       name,
-      approval ? "approval_requested" : "prepared",
+      approval
+        ? "approval_requested"
+        : integration.approval_mode === "owner_delegated"
+          ? "owner_delegated"
+          : "prepared",
       String(operation["id"]),
     );
   if (operation["status"] === "approved")
@@ -179,9 +187,13 @@ export async function executeAgentOperation(
     // Revoke and claim use the same integration lock. Already claimed external
     // provider work cannot be recalled; subsequent claims fail after revocation.
     const [active] = await tx.execute(
-      sql`select id from agent_integrations where id=${integration.id}::uuid and revoked_at is null and expires_at>now() for update`,
+      sql`select id,tools,approval_mode from agent_integrations where id=${integration.id}::uuid and revoked_at is null and expires_at>now() for update`,
     );
     if (!active) throw new Error("Integration revoked or expired");
+    integration.tools = active["tools"] as string[];
+    integration.approval_mode = active[
+      "approval_mode"
+    ] as AgentIntegration["approval_mode"];
     const [row] = await tx.execute(
       sql`select * from agent_operations where id=${operationId}::uuid and integration_id=${integration.id}::uuid for update`,
     );
@@ -196,7 +208,11 @@ export async function executeAgentOperation(
     if (payloadHash(input) !== row["payload_hash"])
       throw new Error("Action changed after review");
     if (
-      needsActionApproval(catalogTool(String(row["tool"])), input) &&
+      needsActionApproval(
+        catalogTool(String(row["tool"])),
+        input,
+        integration.approval_mode,
+      ) &&
       !row["approved_by"]
     )
       throw new Error("Owner approval is required");
