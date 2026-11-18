@@ -1,0 +1,67 @@
+{
+  "fictionalOnly": true,
+  "realSmsSent": 0,
+  "draftsImported": 1318,
+  "tool": "promotional_sms_release",
+  "inputs": {
+    "body": {
+      "contactId": "5cd6104a-5d44-4496-9a20-e58a38d71c3d",
+      "draftId": "e3be0971-b4d7-4ead-b89c-db43872bd798",
+      "version": 1,
+      "review": {
+        "contactId": "5cd6104a-5d44-4496-9a20-e58a38d71c3d",
+        "draftId": "e3be0971-b4d7-4ead-b89c-db43872bd798",
+        "version": 1,
+        "campaignId": "3daae1ac-3178-41fe-b54a-77110d736436",
+        "campaignVersion": 1,
+        "qualificationVersion": 1,
+        "destination": "+12025550101",
+        "sender": "+12025550100",
+        "text": "Hi Fictional 1, Jeffrey at Stonegate here. We have 30% off winter cleanups if you still need help with your project.",
+        "bodyHash": "54f89df21f191829b1de95b79c7174c764356e478e68383eb2466756b3014ac3",
+        "threadId": null,
+        "consentId": "a816065b-ed2a-45b8-a346-c9eb78c6d9cd",
+        "discountBasisPoints": 3000,
+        "expiresAt": "2026-12-02T18:24:41.117Z",
+        "serviceThrough": "2026-12-09"
+      },
+      "reviewExpiresAt": "2026-11-18T18:35:00.007Z"
+    },
+    "requestKey": "fictional-send-5d26900f-42d6-4667-80fb-44728aeb1bf7"
+  },
+  "releaseResult": {
+    "released": 1,
+    "replay": false,
+    "contactId": "5cd6104a-5d44-4496-9a20-e58a38d71c3d",
+    "draftId": "e3be0971-b4d7-4ead-b89c-db43872bd798",
+    "threadId": "3e5c7797-cb93-4dea-a06d-43af9d0acffb",
+    "messageId": "cb44443a-4aad-46c0-a6b6-3668b124587b",
+    "deliveryState": "queued",
+    "providerState": null,
+    "blocker": null,
+    "deliveryHolds": []
+  },
+  "conversation": {
+    "contactId": "5cd6104a-5d44-4496-9a20-e58a38d71c3d",
+    "outgoingMessageId": "cb44443a-4aad-46c0-a6b6-3668b124587b",
+    "outgoingThreadId": "3e5c7797-cb93-4dea-a06d-43af9d0acffb",
+    "incomingMessageId": "6255c314-e8a4-4c37-aeff-35341783369d",
+    "incomingThreadId": "3e5c7797-cb93-4dea-a06d-43af9d0acffb",
+    "jeffreyReplyMessageId": "f83da297-c331-43b1-8411-9bdc1e2d2bb8",
+    "jeffreyReplyThreadId": "3e5c7797-cb93-4dea-a06d-43af9d0acffb"
+  },
+  "duplicateReleaseProviderCalls": 0,
+  "lateOptOut": "8af59e79-0987-4fd4-b10b-44722145a799",
+  "uncertainProviderResult": "d5133dca-ab84-4a88-903f-7d1ecb5ee5ce",
+  "checks": [
+    "1,318 fictional drafts: zero-write dry run, atomic reviewed import, exact wording, idempotent retry",
+    "Dry-run rejects duplicate/missing CRM IDs and conflicting offer wording without partial import",
+    "Phone/thread ambiguity, email/call/external 21-day activity, Facebook overlap, named exclusions, active jobs and service holds block preview",
+    "Changing the destination after owner approval blocks release",
+    "ONE MCP release sends ONLY the selected saved text; outbound, signed inbound webhook and Jeffrey's normal composer reply share one thread",
+    "Repeated release and lost MCP completion return the original message/current state without another provider send",
+    "A new STOP blocks release after approval and also blocks an already queued message at actual dispatch",
+    "Provider accepted/connection lost stays in reconciliation; neither a retry nor another recipient bypasses it",
+    "Recipient offer and suggested-reply context are 30%; public/global 40% behavior remains unchanged"
+  ]
+}

@@ -1,6 +1,6 @@
 # Individual approved promotional SMS
 
-Implemented locally November 18, 2026. This uses Stonegate's normal SMS inbox, durable outbox, provider dispatch ledger and owner action approvals. One release accepts one existing contact and one immutable saved draft. No body editing, footer insertion, ordinary-composer workaround or staff impersonation is involved.
+Website, API and outbox deployed and sending enabled November 18, 2026. This uses Stonegate's normal SMS inbox, durable outbox, provider dispatch ledger and owner action approvals. One release accepts one existing contact and one immutable saved draft. No body editing, footer insertion, ordinary-composer workaround or staff impersonation is involved.
 
 ## MCP tools
 
@@ -118,6 +118,6 @@ Existing recipient-local 9 a.m.–6 p.m. hours, campaign pacing, capacity, curre
 5. Restart/refresh the outreach assistant's Stonegate MCP connection and call `tools/list`. Existing endpoint remains `https://stonegate-api.onrender.com/api/mcp`; existing stdio bridge and private credential file remain valid. Native tools may require a new agent turn/session. The installed `stonegate-agent-client.mjs list` / `call-file` commands work without changing credentials. Do not paste tokens into the outreach project or chat.
 6. Owner reviews/imports the real recipient file and records evidence/holds separately. Complete an explicitly approved real owner test of the campaign terms/sender through the existing campaign control; no provider test was sent by development. Then preview and approve one exact contact's saved draft. Work the reply in its returned normal inbox thread.
 
-The November 18 read-only production check found the configured Stonegate sender **+1 404-777-2631**, no campaigns, and the original campaign/pricing flags off. Promotional-registration verification, pricing verification, interval, segment rate and owner test allowlist were not configured. These are existing launch requirements, not new artificial switches. Read `campaigns_read` again at activation; do not represent the local simulator as real carrier delivery or current provider registration.
+Live activation verified November 18: main `46422e35`, API and outbox live, all five campaign/pricing/marketing flags enabled, pacing 60 seconds, estimated segment rate $0.02, owner-test allowlist configured. Austin explicitly requested enabling sending while preserving the existing number and registration. `campaigns_read` returns `sendsEnabled: true` and `blockers: []`. The existing grant now exposes all four new tools (41 total), with its token and expiry unchanged. No campaign, live recipient import or real SMS was created by this release. Campaign setup, approved owner test and individual recipient eligibility/approval still apply. See the [release record](../operations/2026-11-18-individual-sms-release.md).
 
 Containment uses existing pause/revoke controls while retaining inbound replies and STOP processing. Keep uncertain provider work in reconciliation and retain quoted/accepted financial snapshots.

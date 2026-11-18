@@ -1,0 +1,69 @@
+{
+  "releasedAt": "2026-11-18T19:07:38.658624+00:00",
+  "repository": "TailoredAgents/StonegateOS",
+  "apiOutboxRevision": "46422e354969451fe37a65dfb9498610f72f7b5b",
+  "pullRequest": "https://github.com/TailoredAgents/StonegateOS/pull/10",
+  "render": [
+    {
+      "name": "api",
+      "service": "srv-d43o7k0dl3ps73a4rhu0",
+      "deploy": "dep-dbuvacutlv9c73c671ng",
+      "revision": "46422e354969451fe37a65dfb9498610f72f7b5b",
+      "status": "live",
+      "priorDeploy": "dep-dbtnc02fngtc739l5msg",
+      "autoDeploy": "no",
+      "at": "2026-11-18T19:00:13.024677+00:00",
+      "initialCodeDeploy": "dep-dbuv30lckfvc73ac65n0",
+      "sendingSettingEnabled": true
+    },
+    {
+      "name": "outbox",
+      "service": "srv-d43sdh0dl3ps73a8l70g",
+      "deploy": "dep-dbuvadek1f9s73aq41dg",
+      "revision": "46422e354969451fe37a65dfb9498610f72f7b5b",
+      "status": "live",
+      "priorDeploy": "dep-dbtnekjl550s738p03f0",
+      "autoDeploy": "no",
+      "at": "2026-11-18T18:58:40.728036+00:00",
+      "initialCodeDeploy": "dep-dbuv5d3l550s73bp648g",
+      "sendingSettingEnabled": true
+    }
+  ],
+  "site": {
+    "worker": "stonegate-site-sms-20261118",
+    "applicationRevision": "46422e354969451fe37a65dfb9498610f72f7b5b",
+    "gatewayRevision": "fe8eb84e634737d2756f14574d886b303cb905f0",
+    "gatewayVersion": "bd71a857-b2f9-4cd9-a002-3ae0705e0ba2",
+    "image": "registry.cloudflare.com/78ed83c6e3947c93763acef3a48a5561/stonegate-site-sms@sha256:33e269ff06651940d85987c155b68602e65ada2819ecc60e30d69d8a2ba0c30a",
+    "containerDiskMb": 6000,
+    "priorWorker": "stonegate-site-agent-final-20261116",
+    "individualSmsUiStatus": "live",
+    "cutoverAt": "2026-11-18T19:10:42.630070+00:00",
+    "buildId": "0a8C7ZY9O2YGvwH7p3sRJ"
+  },
+  "migration": "0186_individual_promotional_sms",
+  "campaignSendingEnabled": true,
+  "systemBlockers": [],
+  "senderRegistrationChanged": false,
+  "grantToolCount": 41,
+  "customerMessagesSentByRelease": 0,
+  "liveRecipientImports": 0,
+  "verification": {
+    "ciHead": "e5ad0f0015c5790be4fc4d4d98fd1d46bb0a41b6",
+    "ciRuns": [
+      44369002539,
+      44369002492,
+      44369002501,
+      44369002698
+    ],
+    "fictionalSharedThreadId": "3e5c7797-cb93-4dea-a06d-43af9d0acffb",
+    "outboundMessageId": "cb44443a-4aad-46c0-a6b6-3668b124587b",
+    "inboundMessageId": "6255c314-e8a4-4c37-aeff-35341783369d",
+    "staffReplyMessageId": "f83da297-c331-43b1-8411-9bdc1e2d2bb8",
+    "retryExtraProviderCalls": 0,
+    "candidatePageChecks": 26,
+    "publicPageChecks": 26,
+    "browserErrors": 0,
+    "gatewayTestsPassed": 11
+  }
+}
