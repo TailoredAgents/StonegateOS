@@ -49,7 +49,11 @@ jobs:
           node-version: 24.21.0
           cache: pnpm
       - run: pnpm install --frozen-lockfile
-      - run: pnpm exec playwright install --with-deps chromium webkit
+      - name: Install browser dependencies from the standard Ubuntu archive
+        run: |
+          # The runner's regional EC2 mirror can take minutes per package.
+          sudo sed -E -i 's|https?://[a-z0-9.-]+\.ec2\.archive\.ubuntu\.com/ubuntu|https://archive.ubuntu.com/ubuntu|g' /etc/apt/sources.list.d/ubuntu.sources
+          pnpm exec playwright install --with-deps chromium webkit
       - name: Apply all production migrations to the disposable database
         run: pnpm --filter api exec tsx scripts/migrate-to-target.ts latest
       - name: Portal API and website regression tests
