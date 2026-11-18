@@ -339,7 +339,12 @@ export async function PATCH(
 
     const selectedServices = body.selectedServices;
 
-    if (await activeWinterSale(db))
+    const [saleContact] = await db
+      .select({ contactId: quotes.contactId })
+      .from(quotes)
+      .where(eq(quotes.id, quoteId))
+      .limit(1);
+    if (await activeWinterSale(db, new Date(), saleContact?.contactId))
       throw new TeamMutationFailure(
         "invalid",
         "Revise this legacy offer in the current Quotes workspace to include the winter discount. Existing accepted agreements remain unchanged.",

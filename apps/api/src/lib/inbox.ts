@@ -961,6 +961,21 @@ export async function recordInboundMessage(input: InboundMessageInput): Promise<
     }
 
     const threadFilters = [eq(conversationThreads.contactId, contact.id), eq(conversationThreads.channel, channel)];
+    if (channel === "sms") {
+      await tx.execute(
+        sql`select pg_advisory_xact_lock(hashtextextended(${`system-outbound:${contact.id}:sms`},0))`,
+      );
+      // The promotional receipt pins the normal conversation even if another
+      // thread was subsequently created. It never reassigns contact identity.
+      const [promotionalThread] = await tx.execute<{ thread_id: string }>(
+        sql`select m.thread_id from sms_campaign_recipients r join conversation_messages m on m.id=r.message_id join sms_campaigns c on c.id=r.campaign_id join conversation_threads t on t.id=m.thread_id where r.contact_id=${contact.id}::uuid and r.phone=${resolvedFromAddress} and r.is_test=false and r.draft_id is not null and m.delivery_status in ('sent','delivered') and c.sender=${input.toAddress ?? null} and t.staff_scope='general' and t.contact_id=r.contact_id order by r.created_at desc limit 1`,
+      );
+      if (promotionalThread)
+        threadFilters.push(
+          eq(conversationThreads.id, promotionalThread.thread_id),
+        );
+    }
+
 
     const [existingThread] = await tx
       .select({

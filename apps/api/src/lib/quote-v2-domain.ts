@@ -596,18 +596,24 @@ export function calculateQuoteV2Totals(
 
     const normalMax = subtotalMaxCents + feeMaxCents;
 
-    discountMinCents = winterSalePrice(normalMin).discountCents;
+    discountMinCents = winterSalePrice(
+      normalMin,
+      parsed.winterSale.basisPoints,
+    ).discountCents;
 
-    discountMaxCents = winterSalePrice(normalMax).discountCents;
+    discountMaxCents = winterSalePrice(
+      normalMax,
+      parsed.winterSale.basisPoints,
+    ).discountCents;
 
     adjustments.push({
       id: "winter-sale",
       kind: "discount",
-      label: "Winter sale — 40% off all services and fees",
+      label: `Winter sale — ${parsed.winterSale.basisPoints / 100}% off all services and fees`,
       calculation: "percentage",
       basis: "subtotal",
       eligibleLineItemIds: [],
-      basisPoints: 4000,
+      basisPoints: parsed.winterSale.basisPoints,
       displayOrder: 10000,
       eligibleSubtotalMinCents: normalMin,
       eligibleSubtotalMaxCents: normalMax,

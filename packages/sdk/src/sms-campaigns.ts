@@ -7,7 +7,7 @@ export const WinterSaleSnapshotSchema = z
   .object({
     campaignId: z.string().uuid(),
     name: z.string().max(100),
-    basisPoints: z.literal(4000),
+    basisPoints: z.union([z.literal(3000), z.literal(4000)]),
     expiresAt: z.string().datetime({ offset: true }),
     serviceThrough: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
     activatedAt: z.string().datetime({ offset: true }).optional(),
@@ -20,6 +20,8 @@ export type WinterSaleSnapshot = z.infer<typeof WinterSaleSnapshotSchema>;
 export const CampaignTermsSchema = z
   .object({
     audience: z.enum(["past_customers", "customers_and_leads"]).optional(),
+    deliveryMode: z.enum(["broadcast", "individual_drafts"]).optional(),
+    discountBasisPoints: z.union([z.literal(3000), z.literal(4000)]).optional(),
     name: z.string().trim().min(1).max(100),
     expiresAt: z.string().datetime({ offset: true }).nullable(),
     serviceThrough: z
@@ -128,21 +130,22 @@ export type CampaignWorkspace = {
 };
 
 /** The discount is applied to the real normal price, never a fabricated comparison price. */
-export function winterSalePrice(normalCents: number) {
+export function winterSalePrice(
+  normalCents: number,
+  basisPoints: 3000 | 4000 = WINTER_DISCOUNT_BPS,
+) {
   if (
     !Number.isSafeInteger(normalCents) ||
     normalCents < 0 ||
     normalCents > 100_000_000
   )
     throw new Error("Invalid normal price");
-  const discountCents = Math.round(
-    (normalCents * WINTER_DISCOUNT_BPS) / 10_000,
-  );
+  const discountCents = Math.round((normalCents * basisPoints) / 10_000);
   return {
     normalCents,
     discountCents,
     finalCents: normalCents - discountCents,
-    basisPoints: WINTER_DISCOUNT_BPS,
+    basisPoints,
   };
 }
 
@@ -184,5 +187,5 @@ export function renderWinterCampaign(
       }).format(new Date(terms.expiresAt))
     : "[sale deadline needed]";
   const service = terms.serviceThrough ?? "[last pickup date needed]";
-  return `${greeting} it's Stonegate Junk Removal. ${terms.introduction} Get 40% off all services. Book by ${deadline} for service by ${service}. Reply with photos for a quote. Reply STOP to opt out.`;
+  return `${greeting} it's Stonegate Junk Removal. ${terms.introduction} Get ${(terms.discountBasisPoints ?? WINTER_DISCOUNT_BPS) / 100}% off all services. Book by ${deadline} for service by ${service}. Reply with photos for a quote. Reply STOP to opt out.`;
 }

@@ -139,6 +139,8 @@ export async function queueSystemOutboundMessage(input: {
   dedupeKey?: string | null;
   nextAttemptAt?: Date | null;
   generalThreadOnly?: boolean;
+  /** A reviewed promotional thread must not be replaced by a later thread. */
+  threadId?: string;
 }): Promise<string | null> {
   if (!input.db) {
     const db = getDb();
@@ -185,11 +187,33 @@ export async function queueSystemOutboundMessage(input: {
     if (existing?.id) return existing.id;
   }
 
-  const threadId = await ensureThreadForContactChannel(db, {
-    contactId: input.contactId,
-    channel: input.channel,
-    generalThreadOnly: input.generalThreadOnly,
-  });
+  if (input.threadId) {
+    const [pinned] = await db
+      .select({ id: conversationThreads.id })
+      .from(conversationThreads)
+      .where(
+        and(
+          eq(conversationThreads.id, input.threadId),
+          eq(conversationThreads.contactId, input.contactId),
+          eq(conversationThreads.channel, input.channel),
+          input.generalThreadOnly
+            ? eq(conversationThreads.staffScope, "general")
+            : undefined,
+        ),
+      );
+    if (!pinned)
+      throw new TeamMutationFailure(
+        "conflict",
+        "The reviewed conversation no longer belongs to this contact.",
+      );
+  }
+  const threadId =
+    input.threadId ??
+    (await ensureThreadForContactChannel(db, {
+      contactId: input.contactId,
+      channel: input.channel,
+      generalThreadOnly: input.generalThreadOnly,
+    }));
   if (!threadId) return null;
 
   const participantId = await ensureSystemParticipant(db, threadId, now);

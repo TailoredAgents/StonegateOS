@@ -51,6 +51,8 @@ For Facebook review checkpoints, `node scripts/facebook-outreach-manifest.mjs <f
 
 ## Campaign workflow
 
+For the new **30% exact saved-draft, one-contact workflow**, see [Individual promotional SMS](individual-promotional-sms.md). Existing grants receive its four tools through an explicit owner capability refresh after deployment. The original 40% broadcast workflow below is unchanged.
+
 Use `campaigns_read` to inspect readiness and `campaigns_command` to create/save/review a draft. The `terms.audience` option is `past_customers` (the backward-compatible default) or `customers_and_leads`. Both require verified marketing consent, and exclude DNC, opted-out, deleted, staff/test and duplicate destinations. The established 40% offer, real launch dates, sender readiness, owner test, capacity, maximum 25-recipient batches and final dispatch checks still apply. See [winter-sale runbook](winter-sale-campaign.md).
 
 `message_send` is the existing individual inbox action with exact owner review, not a promotional campaign bypass. Promotional SMS uses campaign eligibility and release. Other channels retain their existing provider restrictions. Deployment leaves all sale/sending flags at their existing values and sends no test or customer message on its own.

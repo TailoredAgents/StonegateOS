@@ -17,6 +17,7 @@ import {
   latestCampaignConsent,
 } from "./sms-campaigns";
 import { readCampaignCapacity } from "./sms-campaign-capacity";
+import { previewIndividualSms } from "./individual-promotional-sms";
 
 /** Called inside the existing durable dispatch claim, after its contact lock. */
 export async function guardCampaignDispatch(
@@ -169,6 +170,54 @@ export async function guardCampaignDispatch(
       })
       .where(eq(smsCampaigns.id, campaign.id));
     return defer(new Date(input.now.getTime() + 60_000));
+  }
+  if (
+    campaign.terms.deliveryMode === "individual_drafts" &&
+    !recipient.isTest
+  ) {
+    if (!recipient.draftId) return suppress("individual_draft_missing");
+    const [draft] = await tx.execute<{
+      version: number;
+      body: string;
+      body_hash: string;
+    }>(
+      sql`select version,body,body_hash from sms_campaign_drafts where id=${recipient.draftId}::uuid and contact_id=${recipient.contactId}::uuid`,
+    );
+    const [message] = await tx
+      .select({
+        body: conversationMessages.body,
+        from: conversationMessages.fromAddress,
+        to: conversationMessages.toAddress,
+        threadId: conversationMessages.threadId,
+      })
+      .from(conversationMessages)
+      .where(eq(conversationMessages.id, input.messageId));
+    if (
+      !draft ||
+      !message ||
+      draft.body !== recipient.body ||
+      message.body !== draft.body ||
+      message.to !== recipient.phone ||
+      message.from !== campaign.sender
+    )
+      return suppress("reviewed_message_changed");
+    const preview = await previewIndividualSms(
+      tx,
+      {
+        contactId: recipient.contactId,
+        draftId: recipient.draftId,
+        version: draft.version,
+      },
+      {
+        now: input.now,
+        ignoreMessageId: input.messageId,
+        ignoreRecipientId: recipient.id,
+      },
+    );
+    if (preview.blockers.length)
+      return suppress(preview.blockers.map((b) => b.code).join(","));
+    if (preview.review?.threadId !== message.threadId)
+      return suppress("reviewed_thread_changed");
   }
   const interval = Math.max(
     10,

@@ -27,6 +27,12 @@ const Command = z.discriminatedUnion("action", [
   z.object({ action: z.literal("revoke"), id: z.string().uuid() }).strict(),
   z
     .object({
+      action: z.literal("enable_individual_sms"),
+      id: z.string().uuid(),
+    })
+    .strict(),
+  z
+    .object({
       action: z.enum(["approve", "reject"]),
       id: z.string().uuid(),
       payloadHash: z.string().regex(/^[a-f0-9]{64}$/),
@@ -118,6 +124,18 @@ export async function POST(request: NextRequest) {
       );
       if (!rows.length)
         return NextResponse.json({ error: "Not found" }, { status: 404 });
+    } else if (command.action === "enable_individual_sms") {
+      const capabilities = AGENT_CATALOG.filter((t) =>
+        t.name.startsWith("promotional_sms_"),
+      ).map((t) => t.name);
+      const rows = await tx.execute(
+        sql`update agent_integrations set tools=(select jsonb_agg(distinct capability) from jsonb_array_elements(tools || ${JSON.stringify(capabilities)}::jsonb) capability) where id=${command.id}::uuid and owner_id=${ownerId}::uuid and revoked_at is null and expires_at>now() returning id`,
+      );
+      if (!rows.length)
+        return NextResponse.json(
+          { error: "Active connection not found" },
+          { status: 404 },
+        );
     } else {
       const rows =
         await tx.execute(sql`update agent_operations o set status=${command.action === "approve" ? "approved" : "rejected"},approved_by=${ownerId}::uuid,approved_at=now(),updated_at=now()
@@ -141,7 +159,10 @@ export async function POST(request: NextRequest) {
       authMethod: actor.authMethod,
       action: `agent.integration.${command.action}`,
       entityType:
-        command.action === "revoke" ? "agent_integration" : "agent_operation",
+        command.action === "revoke" ||
+        command.action === "enable_individual_sms"
+          ? "agent_integration"
+          : "agent_operation",
       entityId: command.id,
       outcome: "succeeded",
     });

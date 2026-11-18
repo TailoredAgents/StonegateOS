@@ -435,7 +435,7 @@ export async function createQuoteV2Draft(
     assumptions: [],
     pricing: {
       documentType: command.documentType,
-      winterSale: (await activeWinterSale(tx, now)) ?? undefined,
+      winterSale: (await activeWinterSale(tx, now, contact.id)) ?? undefined,
       currency: "USD" as const,
       lineItems: [],
       optionGroups: [],
@@ -603,6 +603,7 @@ export async function saveQuoteV2Draft(
     .select({
       id: quotes.id,
       createdAt: quotes.createdAt,
+      contactId: quotes.contactId,
       quoteNumber: quotes.quoteNumber,
       engineVersion: quotes.engineVersion,
       aggregateRevision: quotes.aggregateRevision,
@@ -663,7 +664,7 @@ export async function saveQuoteV2Draft(
 
   const nextDraftRevision = version.draftRevision + 1;
   const document = command.document;
-  const winterSale = await activeWinterSale(tx, now);
+  const winterSale = await activeWinterSale(tx, now, quote.contactId);
   if (
     winterSale &&
     (winterSale.retroactivePolicy === "include_unaccepted_quotes" ||
@@ -768,6 +769,7 @@ export async function finalizeQuoteV2Draft(
       engineVersion: quotes.engineVersion,
       aggregateState: quotes.aggregateState,
       createdAt: quotes.createdAt,
+      contactId: quotes.contactId,
       aggregateRevision: quotes.aggregateRevision,
       currentVersionId: quotes.currentVersionId,
     })
@@ -825,7 +827,7 @@ export async function finalizeQuoteV2Draft(
     );
   }
   let totals: QuoteTotals;
-  const currentSale = await activeWinterSale(tx, now);
+  const currentSale = await activeWinterSale(tx, now, quote.contactId);
   const expectedSale =
     currentSale &&
     (currentSale.retroactivePolicy === "include_unaccepted_quotes" ||

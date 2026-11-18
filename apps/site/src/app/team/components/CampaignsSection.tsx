@@ -16,6 +16,8 @@ import {
   teamButtonClass,
 } from "./team-ui";
 
+import { IndividualSmsPreparation } from "./IndividualSmsPreparation";
+
 const CAMPAIGN_INPUT = `${TEAM_INPUT} min-w-0 w-full max-w-full`;
 
 const errorText = (error: unknown) =>
@@ -79,6 +81,7 @@ export function CampaignsSection() {
   const [capacity, setCapacity] = useState(false);
   const [consentContact, setConsentContact] = useState("");
   const [consentEvidence, setConsentEvidence] = useState("");
+  const [consentReference, setConsentReference] = useState("");
   const [consentSource, setConsentSource] = useState("");
   const [consentDate, setConsentDate] = useState("");
   const [timeZone, setTimeZone] = useState("America/New_York");
@@ -111,6 +114,8 @@ export function CampaignsSection() {
     load().catch((e) => setError(errorText(e)));
   }, [load]);
   const campaign = workspace?.campaign;
+  const individual = terms.deliveryMode === "individual_drafts";
+  const discountPercent = (terms.discountBasisPoints ?? 4000) / 100;
   const changed =
     !!campaign && JSON.stringify(terms) !== JSON.stringify(campaign.terms);
   const execute = async (command: Record<string, unknown>, success: string) => {
@@ -161,7 +166,10 @@ export function CampaignsSection() {
   const price = Number(normalPrice);
   const discount =
     Number.isFinite(price) && price >= 0 && price <= 1_000_000
-      ? winterSalePrice(Math.round(price * 100))
+      ? winterSalePrice(
+          Math.round(price * 100),
+          terms.discountBasisPoints ?? 4000,
+        )
       : null;
   const select = (id: string) => {
     setSelected((list) =>
@@ -192,7 +200,7 @@ export function CampaignsSection() {
             </p>
           </div>
           <span className="rounded-full bg-emerald-100 px-4 py-2 text-sm font-semibold text-emerald-900">
-            40% off all services
+            {discountPercent}% off all services
           </span>
         </div>
         <div className="mt-5 flex flex-wrap items-end gap-3">
@@ -229,6 +237,27 @@ export function CampaignsSection() {
             }
           >
             New winter campaign
+          </button>
+          <button
+            className={teamButtonClass()}
+            disabled={busy || !workspace}
+            onClick={() =>
+              void execute(
+                {
+                  action: "create",
+                  terms: {
+                    ...initialTerms,
+                    name: "Individual 30% outreach",
+                    audience: "customers_and_leads",
+                    deliveryMode: "individual_drafts",
+                    discountBasisPoints: 3000,
+                  },
+                },
+                "Individual campaign created. Choose offer dates and save before importing reviewed drafts.",
+              )
+            }
+          >
+            New individual 30% campaign
           </button>
         </div>
       </header>
@@ -477,15 +506,19 @@ export function CampaignsSection() {
                 The message your customer sees
               </h2>
               <div className="rounded-2xl bg-[color:var(--team-surface-muted)] p-5 text-sm leading-7 whitespace-pre-wrap break-words">
-                {renderWinterCampaign(terms, "Alex")}
+                {individual
+                  ? "Every recipient receives their exact imported draft. Preview the saved wording, number and holds through your outreach assistant before approving a release."
+                  : renderWinterCampaign(terms, "Alex")}
               </div>
               <p className="text-xs text-[color:var(--team-text-muted)]">
-                Each preview uses the customer’s name when available. The
-                business name, offer, deadlines, and opt-out text stay
-                consistent.
+                {individual
+                  ? "Saved drafts are never rewritten and no footer is appended. Replies stay in the normal contact inbox."
+                  : "Each preview uses the customer’s name when available. The business name, offer, deadlines, and opt-out text stay consistent."}
               </p>
               <div className="border-t border-[color:var(--team-border)] pt-4">
-                <h3 className="font-semibold">Check the 40% price</h3>
+                <h3 className="font-semibold">
+                  Check the {discountPercent}% price
+                </h3>
                 <label className="mt-3 grid gap-1 text-sm">
                   Normal total, including service fees ($)
                   <input
@@ -534,15 +567,24 @@ export function CampaignsSection() {
               </Link>
             </div>
           )}
+          {individual && (
+            <IndividualSmsPreparation
+              campaignId={campaign.id}
+              onImported={() => load(campaign.id, query, true).then(() => {})}
+            />
+          )}
           <div className={TEAM_CARD_PADDED}>
             <div className="flex flex-wrap items-center justify-between gap-3">
               <div>
                 <h2 className={TEAM_SECTION_TITLE}>
-                  2. Choose up to 25 customers
+                  {individual
+                    ? "Saved individual drafts"
+                    : "2. Choose up to 25 customers"}
                 </h2>
                 <p className={TEAM_SECTION_SUBTITLE}>
-                  Completed jobs with verified promotional consent. Excluded
-                  contacts stay visible with a reason.
+                  {individual
+                    ? "Release one exact draft at a time through the outreach assistant. The send preview checks inquiries, quotes, consent and every hold."
+                    : "Completed jobs with verified promotional consent. Excluded contacts stay visible with a reason."}
                 </p>
               </div>
               <span className="text-sm font-semibold">
@@ -614,7 +656,7 @@ export function CampaignsSection() {
             </div>
             <button
               className={`${teamButtonClass("primary")} mt-4`}
-              disabled={busy || !selected.length || changed}
+              disabled={individual || busy || !selected.length || changed}
               onClick={() =>
                 void execute(
                   { action: "review", ...base, contactIds: selected },
@@ -650,6 +692,7 @@ export function CampaignsSection() {
                     status: "granted",
                     source: consentSource,
                     evidence: consentEvidence,
+                    evidenceReference: consentReference || undefined,
                     capturedAt: new Date(consentDate).toISOString(),
                     timeZone,
                   },
@@ -703,7 +746,16 @@ export function CampaignsSection() {
                 />
               </label>
               <label className="grid gap-1 text-sm sm:col-span-2">
-                Evidence reference and permission wording
+                Secure external evidence reference (optional)
+                <input
+                  className={CAMPAIGN_INPUT}
+                  value={consentReference}
+                  onChange={(e) => setConsentReference(e.target.value)}
+                  placeholder="Private evidence record ID or secure document reference"
+                />
+              </label>
+              <label className="grid gap-1 text-sm sm:col-span-2">
+                Permission summary
                 <textarea
                   minLength={10}
                   required
@@ -734,6 +786,7 @@ export function CampaignsSection() {
                       status: "revoked",
                       source: consentSource,
                       evidence: consentEvidence,
+                      evidenceReference: consentReference || undefined,
                       capturedAt: new Date(consentDate).toISOString(),
                       timeZone,
                     },
