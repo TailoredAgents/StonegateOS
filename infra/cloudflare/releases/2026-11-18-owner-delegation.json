@@ -1,0 +1,23 @@
+{
+  "verifiedAt": "2026-11-18T19:56:19.460261+00:00",
+  "revision": "3741b31a4ea3d64bc92e8dbb9ae0b043644ba551",
+  "apiDeploy": "dep-dbv028l6e07s73aa763g",
+  "approvalMode": "owner_delegated",
+  "discoveredTools": 44,
+  "newTools": [
+    "promotional_sms_import",
+    "outreach_qualification_read",
+    "outreach_qualification_record"
+  ],
+  "liveDryRun": {
+    "rows": 5,
+    "valid": true,
+    "issues": 0,
+    "sent": 0,
+    "draftsImported": 0
+  },
+  "fictionalFive": 5,
+  "realSmsSent": 0,
+  "tokenAndExpiryUnchanged": true,
+  "numberAndRegistrationUnchanged": true
+}

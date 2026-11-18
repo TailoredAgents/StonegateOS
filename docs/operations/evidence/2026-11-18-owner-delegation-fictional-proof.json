@@ -1,0 +1,156 @@
+{
+  "fictionalOnly": true,
+  "delegatedFive": [
+    {
+      "released": 1,
+      "replay": false,
+      "contactId": "f4679730-3a4e-4d4b-818d-00962dc9cf60",
+      "draftId": "ad0655ef-3c28-4306-be86-f34bbe3e960e",
+      "threadId": "0de00ae9-827b-4cba-b327-7186334b381c",
+      "messageId": "f7ed1eee-7fe6-4348-8bc8-02d2f44577aa",
+      "deliveryState": "queued",
+      "providerState": null,
+      "blocker": null,
+      "deliveryHolds": [
+        {
+          "code": "campaign_pacing",
+          "detail": "Delivery waits until 2026-11-18T19:47:17.272Z."
+        }
+      ]
+    },
+    {
+      "released": 1,
+      "replay": false,
+      "contactId": "62bd888e-596e-4789-819f-7cb3dbda73c8",
+      "draftId": "c6bd928c-12dc-4073-a494-204f35dc0646",
+      "threadId": "9f3d8d28-f623-4be4-aa47-9acb3892b28f",
+      "messageId": "947aec1f-8e4b-4fc4-adad-4817535ff55f",
+      "deliveryState": "queued",
+      "providerState": null,
+      "blocker": null,
+      "deliveryHolds": [
+        {
+          "code": "campaign_pacing",
+          "detail": "Delivery waits until 2026-11-18T19:47:19.089Z."
+        }
+      ]
+    },
+    {
+      "released": 1,
+      "replay": false,
+      "contactId": "b6afc71b-5924-4fd8-8642-468c74e043bc",
+      "draftId": "d4218b00-2a99-4b8f-bb79-0e0bcf888a50",
+      "threadId": "71cd9833-cf3d-4fa3-8fd8-cf7bdc88626e",
+      "messageId": "a0f66e55-5621-4870-85f7-ac60df0af7c2",
+      "deliveryState": "queued",
+      "providerState": null,
+      "blocker": null,
+      "deliveryHolds": [
+        {
+          "code": "campaign_pacing",
+          "detail": "Delivery waits until 2026-11-18T19:47:21.470Z."
+        }
+      ]
+    },
+    {
+      "released": 1,
+      "replay": false,
+      "contactId": "21705615-7c13-4d71-a9ac-d2538724dfd5",
+      "draftId": "50f07747-fbc7-4652-86ed-74e4a297e3f0",
+      "threadId": "c571bc5c-e53b-4085-94c4-8cb18101f205",
+      "messageId": "9a74ffa4-229c-4a10-b812-a0a30047d19b",
+      "deliveryState": "queued",
+      "providerState": null,
+      "blocker": null,
+      "deliveryHolds": [
+        {
+          "code": "campaign_pacing",
+          "detail": "Delivery waits until 2026-11-18T19:47:23.715Z."
+        }
+      ]
+    },
+    {
+      "released": 1,
+      "replay": false,
+      "contactId": "c1e4cbf9-61e5-4774-be48-28daf73c7487",
+      "draftId": "7a13239b-4306-4d54-a515-1437c6595b74",
+      "threadId": "dafcae9f-1320-4443-9647-95da1fb7e293",
+      "messageId": "4542f47b-ca25-4bdd-89de-acbe392d536a",
+      "deliveryState": "queued",
+      "providerState": null,
+      "blocker": null,
+      "deliveryHolds": [
+        {
+          "code": "campaign_pacing",
+          "detail": "Delivery waits until 2026-11-18T19:47:25.918Z."
+        }
+      ]
+    }
+  ],
+  "realSmsSent": 0,
+  "draftsImported": 1318,
+  "tool": "promotional_sms_release",
+  "inputs": {
+    "body": {
+      "contactId": "3c5c78d0-1af5-41f7-bfea-0bb938b93b08",
+      "draftId": "797748d5-930f-4857-9bb0-f402dfc0734c",
+      "version": 1,
+      "review": {
+        "contactId": "3c5c78d0-1af5-41f7-bfea-0bb938b93b08",
+        "draftId": "797748d5-930f-4857-9bb0-f402dfc0734c",
+        "version": 1,
+        "campaignId": "9a3a5804-3bca-4b0c-b534-954f26a99ca5",
+        "campaignVersion": 1,
+        "qualificationVersion": 1,
+        "destination": "+12025550101",
+        "sender": "+12025550100",
+        "text": "Hi Fictional 1, Jeffrey at Stonegate here. We have 30% off winter cleanups if you still need help with your project.",
+        "bodyHash": "54f89df21f191829b1de95b79c7174c764356e478e68383eb2466756b3014ac3",
+        "threadId": null,
+        "consentId": "ccf95dbd-238f-4318-a2bf-dac44bef19b3",
+        "discountBasisPoints": 3000,
+        "expiresAt": "2026-12-02T19:46:27.375Z",
+        "serviceThrough": "2026-12-09"
+      },
+      "reviewExpiresAt": "2026-11-18T19:56:47.938Z"
+    },
+    "requestKey": "fictional-send-33221f15-2744-4345-bf75-1b61b358ee9b"
+  },
+  "releaseResult": {
+    "released": 1,
+    "replay": false,
+    "contactId": "3c5c78d0-1af5-41f7-bfea-0bb938b93b08",
+    "draftId": "797748d5-930f-4857-9bb0-f402dfc0734c",
+    "threadId": "9abe663f-ff9c-4b6b-87dd-f2eba92bb3e4",
+    "messageId": "0bba5f3c-bb2e-45d4-bfd8-8991d46fbdad",
+    "deliveryState": "queued",
+    "providerState": null,
+    "blocker": null,
+    "deliveryHolds": []
+  },
+  "conversation": {
+    "contactId": "3c5c78d0-1af5-41f7-bfea-0bb938b93b08",
+    "outgoingMessageId": "0bba5f3c-bb2e-45d4-bfd8-8991d46fbdad",
+    "outgoingThreadId": "9abe663f-ff9c-4b6b-87dd-f2eba92bb3e4",
+    "incomingMessageId": "c21e223a-d921-45b9-a1d1-d87107b6b388",
+    "incomingThreadId": "9abe663f-ff9c-4b6b-87dd-f2eba92bb3e4",
+    "jeffreyReplyMessageId": "5749b81b-1940-4f4e-9b84-c5481eecb8ae",
+    "jeffreyReplyThreadId": "9abe663f-ff9c-4b6b-87dd-f2eba92bb3e4"
+  },
+  "duplicateReleaseProviderCalls": 0,
+  "lateOptOut": "e031010a-e92f-4662-98a8-a7edf0e311d3",
+  "uncertainProviderResult": "6d2c5a9c-a624-43c7-ab79-782700b49397",
+  "checks": [
+    "1,318 fictional drafts: zero-write dry run, atomic reviewed import, exact wording, idempotent retry",
+    "Dry-run rejects duplicate/missing CRM IDs and conflicting offer wording without partial import",
+    "Owner-delegated MCP created campaign, dry-ran/imported 1,318 exact drafts, recorded qualification and consent evidence without owner screens",
+    "Phone/thread ambiguity, email/call/external 21-day activity, Facebook overlap, named exclusions, active jobs and service holds block preview",
+    "Changing the destination after owner approval blocks release",
+    "ONE MCP release sends ONLY the selected saved text; outbound, signed inbound webhook and Jeffrey's normal composer reply share one thread",
+    "Repeated release and lost MCP completion return the original message/current state without another provider send",
+    "A new STOP blocks release after approval and also blocks an already queued message at actual dispatch",
+    "Provider accepted/connection lost stays in reconciliation; neither a retry nor another recipient bypasses it",
+    "Recipient offer and suggested-reply context are 30%; public/global 40% behavior remains unchanged",
+    "MCP-only owner test plus five sequential exact-text sends; each inbound reply shares its outbound thread; retries add zero sends; no per-action dashboard approvals"
+  ]
+}
