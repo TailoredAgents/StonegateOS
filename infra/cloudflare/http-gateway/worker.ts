@@ -28,6 +28,7 @@ interface GatewayEnv {
   SOURCE_API_ENV_2?: string;
   GATEWAY_HOST: string;
   AUTO_RECOVER?: string;
+  CONTAINER_DISK_MB?: string;
   OPERATION_MODE?: "rehearsal" | "production";
 }
 type State = {
@@ -415,7 +416,11 @@ export class HttpGateway extends DurableObject<GatewayEnv> {
     this.ctx.container!.start({
       image: this.ctx.container!.images.base,
       ...this.runtime(),
-      instance: { vcpu: 1, memoryMib: 2048, diskMb: 4000 },
+      instance: {
+        vcpu: 1,
+        memoryMib: 2048,
+        diskMb: Number(this.env.CONTAINER_DISK_MB ?? "4000"),
+      },
       labels: { generation: this.state.generation },
     });
     await this.ctx.container!.setInactivityTimeout(idleMs);
@@ -514,7 +519,11 @@ export class HttpGateway extends DurableObject<GatewayEnv> {
               this.ctx.container!.start({
                 image: this.ctx.container!.images.base,
                 ...this.runtime(),
-                instance: { vcpu: 1, memoryMib: 2048, diskMb: 4000 },
+                instance: {
+                  vcpu: 1,
+                  memoryMib: 2048,
+                  diskMb: Number(this.env.CONTAINER_DISK_MB ?? "4000"),
+                },
                 labels: { generation: this.state.generation },
               });
               await this.ctx.container!.setInactivityTimeout(idleMs);
