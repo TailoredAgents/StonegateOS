@@ -1,6 +1,6 @@
 # Outbox Event Index
 
-Generated from production TypeScript sources. Fingerprint: `44b874499326a582`.
+Generated from production TypeScript sources. Fingerprint: `7cb78c0686601b20`.
 
 Literal event types discovered: 80
 
@@ -11,7 +11,7 @@ Outbox events are durable asynchronous jobs stored in `outbox_events`. This inde
 | `ads.openai.consent_revoked` | `apps/api/src/lib/openai-ads-consent.ts:48` | Not found by literal scan |
 | `ads.openai.conversion` | `apps/api/src/lib/openai-ads-capture.ts:142` | `apps/api/src/lib/outbox-processor.ts:3763` |
 | `appointment_media.attach_appointment` | `apps/api/src/lib/outbox-processor.ts:4862` | `apps/api/src/lib/outbox-processor.ts:4674` |
-| `appointment_media.import_message` | `apps/api/src/lib/inbox.ts:1136` | `apps/api/src/lib/outbox-processor.ts:4647` |
+| `appointment_media.import_message` | `apps/api/src/lib/inbox.ts:1151` | `apps/api/src/lib/outbox-processor.ts:4647` |
 | `appointment.calendar_sync_requested` | `apps/api/app/api/appointments/[id]/convert/route.ts:1095`<br>`apps/api/app/api/appointments/[id]/status/route.ts:1710`<br>`apps/api/app/api/portal/v2/jobs/[jobId]/cancel/route.ts:769` | `apps/api/src/lib/outbox-processor.ts:4644` |
 | `call.recording.delete` | `apps/api/src/lib/call-recording-persistence.ts:371` | `apps/api/src/lib/outbox-processor.ts:7315` |
 | `call.recording.process` | `apps/api/app/api/webhooks/twilio/call-status/route.ts:760`<br>`apps/api/src/lib/manual-call-callbacks.ts:121`<br>`apps/api/src/lib/sales-escalation-call-operations.ts:1316` | `apps/api/src/lib/outbox-processor.ts:7001` |
@@ -36,7 +36,7 @@ Outbox events are durable asynchronous jobs stored in `outbox_events`. This inde
 | `google.ads_insights.sync` | `apps/api/app/api/admin/google/ads/sync/route.ts:60`<br>`apps/api/src/lib/google-ads-scheduler.ts:43` | `apps/api/src/lib/outbox-processor.ts:6635` |
 | `lead.alert` | `apps/api/app/api/brush-quote/route.ts:793`<br>`apps/api/app/api/demo-quote/route.ts:649`<br>`apps/api/app/api/junk-quote/book/route.ts:582` | `apps/api/src/lib/outbox-processor.ts:5589` |
 | `lead.created` | `apps/api/src/lib/facebook-webhooks.ts:809` | `apps/api/src/lib/outbox-processor.ts:5187` |
-| `message.received` | `apps/api/src/lib/inbox.ts:1121` | `apps/api/src/lib/outbox-processor.ts:7390` |
+| `message.received` | `apps/api/src/lib/inbox.ts:1136` | `apps/api/src/lib/outbox-processor.ts:7390` |
 | `message.send` | `apps/api/app/api/admin/inbox/messages/[messageId]/retry/route.ts:249`<br>`apps/api/app/api/admin/inbox/messages/[messageId]/retry/route.ts:288`<br>`apps/api/app/api/admin/inbox/threads/[threadId]/messages/route.ts:577` | `apps/api/src/lib/outbox-processor.ts:7501` |
 | `meta.ads_insights.sync` | `apps/api/app/api/admin/meta/ads/sync/route.ts:60` | `apps/api/src/lib/outbox-processor.ts:6569` |
 | `meta.lead_event` | `apps/api/src/lib/facebook-webhooks.ts:820` | `apps/api/src/lib/outbox-processor.ts:6412` |

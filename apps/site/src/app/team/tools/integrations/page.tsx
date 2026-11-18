@@ -111,6 +111,21 @@ export default async function IntegrationPage() {
               {!i.revoked_at && (
                 <IntegrationControl action="revoke" id={i.id} />
               )}
+              {!i.revoked_at &&
+                new Date(i.expires_at) > new Date() &&
+                !i.tools.includes("promotional_sms_release") && (
+                  <div className="mt-4">
+                    <p className="mb-3 text-sm text-slate-600">
+                      Add saved-draft preview, single-recipient release and
+                      delivery receipts. Every release still needs your exact
+                      approval.
+                    </p>
+                    <IntegrationControl
+                      action="enable_individual_sms"
+                      id={i.id}
+                    />
+                  </div>
+                )}
             </article>
           ))}
         </section>

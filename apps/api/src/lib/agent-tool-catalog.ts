@@ -36,6 +36,48 @@ const tool = (
 // Every target is static and reviewed. There is no user-supplied URL or method.
 export const AGENT_CATALOG: CatalogTool[] = [
   tool(
+    "promotional_sms_drafts",
+    "Read saved individual promotional drafts. query: campaignId, optional contactId, limit and offset. Copy is immutable and versioned.",
+    "/api/admin/sms-campaigns/drafts",
+    "GET",
+    ["marketing.read", "contacts.read"],
+    false,
+    () => import("../../app/api/admin/sms-campaigns/drafts/route"),
+  ),
+  tool(
+    "promotional_sms_preview",
+    "Preview ONE saved draft with exact destination, Stonegate sender, wording, 30% offer and all eligibility holds. query: contactId,draftId,version. No send.",
+    "/api/admin/sms-campaigns/single",
+    "GET",
+    ["marketing.read", "contacts.read", "messages.read"],
+    false,
+    () => import("../../app/api/admin/sms-campaigns/single/route"),
+  ),
+  tool(
+    "promotional_sms_release",
+    "Release ONLY ONE existing contact's exact saved promotional draft after owner approval. body: contactId,draftId,version,review and reviewExpiresAt copied verbatim from promotional_sms_preview. Stable requestKey required. Returns real thread/message IDs and queued status; never claims delivery before provider confirmation. All campaign and activity controls apply.",
+    "/api/admin/sms-campaigns/single",
+    "POST",
+    [
+      "marketing.write",
+      "contacts.read",
+      "messages.read",
+      "messages.send",
+      "policy.write",
+    ],
+    true,
+    () => import("../../app/api/admin/sms-campaigns/single/route"),
+  ),
+  tool(
+    "promotional_sms_status",
+    "Read the original single-recipient release and CURRENT delivery/reconciliation state. query: contactId,draftId,version. Never sends or retries the provider.",
+    "/api/admin/sms-campaigns/single/status",
+    "GET",
+    ["marketing.read", "contacts.read", "messages.read"],
+    false,
+    () => import("../../app/api/admin/sms-campaigns/single/status/route"),
+  ),
+  tool(
     "booking_availability",
     "Suggest available booking slots; body durationMinutes,windowDays,addressLine1,city,state,postalCode as needed. This only checks availability.",
     "/api/admin/booking/assist",

@@ -604,10 +604,10 @@ export async function POST(request: NextRequest): Promise<Response> {
     const selectedServices = body.selectedServices;
 
     let breakdown: ReturnType<typeof calculateQuoteBreakdown>;
-    if (await activeWinterSale(db))
+    if (await activeWinterSale(db, new Date(), body.contactId))
       throw new TeamMutationFailure(
         "invalid",
-        "Create this winter sale offer in the current Quotes workspace so the full 40% discount, deposit and service cutoff are included.",
+        "Create this sale offer in the current Quotes workspace so the customer's exact discount, deposit and service cutoff are included.",
       );
     try {
       breakdown = calculateQuoteBreakdown({

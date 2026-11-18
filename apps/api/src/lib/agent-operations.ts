@@ -143,12 +143,30 @@ export async function runCatalogTool(
     );
   if (operation["status"] === "approved")
     return executeAgentOperation(integration, String(operation["id"]));
+  let delivery: unknown;
+  if (
+    name === "promotional_sms_release" &&
+    ["succeeded", "executing", "uncertain"].includes(
+      String(operation["status"]),
+    )
+  ) {
+    const { DraftSelectionSchema, individualSmsStatus } = await import(
+      "./individual-promotional-sms"
+    );
+    const selected = DraftSelectionSchema.parse({
+      contactId: input.body["contactId"],
+      draftId: input.body["draftId"],
+      version: input.body["version"],
+    });
+    delivery = await individualSmsStatus(getDb(), selected);
+  }
   return {
     operationId: operation["id"],
     status: operation["status"],
     result: operation["result"],
     expiresAt: operation["expires_at"],
     approvalUrl: "https://stonegatejunkremoval.com/team/tools/integrations",
+    ...(delivery ? { delivery } : {}),
   };
 }
 export async function executeAgentOperation(

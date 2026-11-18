@@ -597,18 +597,20 @@ export function calculateQuoteV2LivePricing(
       if (adjustments[i]?.kind === "discount") adjustments.splice(i, 1);
     discountMinCents = winterSalePrice(
       subtotalMinCents + feeMinCents,
+      pricing.winterSale.basisPoints,
     ).discountCents;
     discountMaxCents = winterSalePrice(
       subtotalMaxCents + feeMaxCents,
+      pricing.winterSale.basisPoints,
     ).discountCents;
     adjustments.push({
       id: "winter-sale",
       kind: "discount",
-      label: "Winter sale — 40% off all services and fees",
+      label: `Winter sale — ${pricing.winterSale.basisPoints / 100}% off all services and fees`,
       calculation: "percentage",
       basis: "subtotal",
       eligibleLineItemIds: [],
-      basisPoints: 4000,
+      basisPoints: pricing.winterSale.basisPoints,
       displayOrder: 10000,
       amountMinCents: discountMinCents,
       amountMaxCents: discountMaxCents,

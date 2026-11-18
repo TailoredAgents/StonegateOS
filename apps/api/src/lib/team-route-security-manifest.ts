@@ -84,6 +84,8 @@ const DESTRUCTIVE_ROUTE_PATTERN =
   /\/(?:merge|merge-suggestions|purge|sales\/reset|stripe\/backfill)(?:\/|$)/u;
 
 const HUMAN_ONLY_ROUTE_KEYS = new Set([
+  "app/api/admin/sms-campaigns/drafts/route.ts#POST",
+  "app/api/admin/sms-campaigns/qualification/route.ts#POST",
   "app/api/admin/agent-integrations/route.ts#GET",
   "app/api/admin/agent-integrations/route.ts#POST",
   "app/api/admin/partner-management/v1/accounts/[accountId]/service-rates/route.ts#PATCH",

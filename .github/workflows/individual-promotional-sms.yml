@@ -1,0 +1,83 @@
+name: Individual promotional SMS
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  fictional-sms-proof:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    env:
+      DATABASE_URL: postgres://stonegate_test:stonegate_test@127.0.0.1:5432/stonegate_individual_sms_test
+      DOTENV_CONFIG_PATH: /dev/null
+      ADMIN_API_KEY: stonegate-individual-sms-fictional-local-only
+      E2E_RUN_ID: individual-sms-ci
+      TEAM_CRM_AUDIT_MODE: "1"
+      TEAM_KILL_EXTERNAL_SENDS: "false"
+      TWILIO_ACCOUNT_SID: AC00000000000000000000000000000000
+      TWILIO_AUTH_TOKEN: fictional-local-provider-token
+      TWILIO_FROM: "+12025550100"
+      TWILIO_API_BASE_URL: http://127.0.0.1:4155
+      TWILIO_WEBHOOK_PUBLIC_BASE_URL: http://localhost:3002
+      API_BASE_URL: http://localhost:3002
+      NEXT_PUBLIC_API_BASE_URL: http://localhost:3002
+      NEXT_PUBLIC_SITE_URL: http://localhost:3002
+      SITE_URL: http://localhost:3002
+      SMS_CAMPAIGNS_ENABLED: "true"
+      SMS_CAMPAIGN_SENDS_ENABLED: "true"
+      WINTER_SALE_ENABLED: "true"
+      SMS_CAMPAIGN_MARKETING_VERIFIED: "true"
+      SMS_CAMPAIGN_PRICING_VERIFIED: "true"
+      SMS_CAMPAIGN_INTERVAL_SECONDS: "10"
+      SMS_CAMPAIGN_SEGMENT_PRICE_USD: "0.02"
+      SMS_CAMPAIGN_TEST_NUMBERS: "+12025550199"
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: stonegate_test
+          POSTGRES_PASSWORD: stonegate_test
+          POSTGRES_DB: stonegate_individual_sms_test
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U stonegate_test -d stonegate_individual_sms_test"
+          --health-interval 5s --health-timeout 5s --health-retries 12
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9.15.9
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24.21.0"
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm db:migrate:release-latest
+      - run: pnpm --filter api typecheck
+      - run: pnpm --filter site typecheck
+      - run: node apps/api/scripts/run-jest-partitions.cjs --runInBand --testPathPattern='individual-promotional-pricing|agent-integration|team-route-security-manifest|system-outbound-idempotency'
+      - name: Prove real MCP and inbox with fictional recipients and loopback provider
+        run: |
+          set -euo pipefail
+          pnpm --filter api exec next dev --turbopack -p 3002 > /tmp/individual-sms-api.log 2>&1 &
+          api_pid=$!
+          trap 'kill "$api_pid" 2>/dev/null || true' EXIT
+          ready=false
+          for attempt in $(seq 1 60); do
+            if curl --silent --max-time 10 --output /dev/null http://localhost:3002/api/mcp; then ready=true; break; fi
+            sleep 2
+          done
+          test "$ready" = true
+          pnpm --filter api exec tsx --tsconfig tsconfig.json scripts/test-individual-promotional-sms.mts
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: fictional-individual-sms-proof
+          path: |
+            artifacts/individual-promotional-sms-proof.json
+            /tmp/individual-sms-api.log
+          retention-days: 7

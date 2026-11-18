@@ -18,7 +18,7 @@ export async function integrationAction(
   const command =
     action === "create"
       ? { action, name: field("name"), days: 30 }
-      : action === "revoke"
+      : action === "revoke" || action === "enable_individual_sms"
         ? { action, id: field("id") }
         : {
             action,

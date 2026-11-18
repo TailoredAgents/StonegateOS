@@ -395,10 +395,10 @@ export async function POST(request: NextRequest): Promise<Response> {
 
   try {
     const result = await db.transaction(async (tx) => {
-      if (!instantQuoteId && (await activeWinterSale(tx)))
+      if (!instantQuoteId && (await activeWinterSale(tx, now, contactId)))
         throw new InstantQuoteHandoffFailure(
           "instant_quote_relationship_missing",
-          "Book from a winter sale quote or an instant quote so the 40% discount is reviewed and saved with the job.",
+          "Book from a reviewed sale quote or an instant quote so the customer's exact offer is saved with the job.",
           409,
         );
       await acquireScheduleConflictLock(tx);

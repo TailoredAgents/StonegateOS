@@ -7,7 +7,7 @@ export function IntegrationControl({
   id,
   payloadHash,
 }: {
-  action: "create" | "approve" | "reject" | "revoke";
+  action: "create" | "approve" | "reject" | "revoke" | "enable_individual_sms";
   id?: string;
   payloadHash?: string;
 }) {
@@ -42,9 +42,11 @@ export function IntegrationControl({
             ? "Create full-access connection"
             : action === "approve"
               ? "Approve this exact action"
-              : action === "reject"
-                ? "Reject"
-                : "Revoke access"}
+              : action === "enable_individual_sms"
+                ? "Enable individual promotional SMS"
+                : action === "reject"
+                  ? "Reject"
+                  : "Revoke access"}
       </button>
       {state.message && (
         <p role="status" className="text-sm text-slate-700">
